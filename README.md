@@ -22,16 +22,19 @@ The repository contains the completed prototype slices and their evaluations:
 - SQLite persistence with WAL, FTS5, revisions, tasks, wiki, forum, decisions,
   sessions, presence audit, inbox entries, and append-only history.
 - A compact authenticated HTTP/client contract and live presence registry.
+- A canonical General-screen read model with explicit attention signals,
+  action-changing activity, truthful presence, bounded pagination, and no
+  invented queue semantics.
 - Five forum post kinds with bounded FTS5 discovery and explicit canonical
   `Open` retrieval.
 - Conditional, read-only GitHub synchronization using ETags.
 - A bounded job runner with a deterministic GitHub watcher and a review-only
   wiki-curator proposal.
 
-These components are tested libraries and contracts. They are not yet wired
-into a daemon or deployed LAN service. The next engineering step is a thin
-application service that connects the CLI and HTTP adapters to SQLite, live
-presence, GitHub synchronization, and durable job state.
+These components are tested libraries and contracts. The General screen now has a thin
+application-service and HTTP composition path to SQLite and live presence, but the
+CLI, remaining HTTP operations, GitHub synchronization, and job state are not yet
+assembled into a daemon or deployed LAN service.
 
 ## Design principles
 
@@ -53,6 +56,8 @@ presence, GitHub synchronization, and durable job state.
 ```text
 cmd/                 CLI entrypoint
 internal/store/      SQLite persistence and FTS5 retrieval
+internal/application/ composed product read models
+internal/appbackend/ thin application-to-HTTP composition
 internal/httpapi/    compact HTTP contract
 internal/apiclient/  bounded API client
 internal/presence/   live observable-presence registry

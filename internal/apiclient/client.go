@@ -77,6 +77,80 @@ func (c *Client) Health(ctx context.Context) (httpapi.HealthResult, error) {
 	err := c.get(ctx, "/v1/health", nil, "", &out)
 	return out, err
 }
+func (c *Client) GeneralHome(ctx context.Context, q httpapi.GeneralHomeQuery) (httpapi.GeneralHomeResult, error) {
+	v := url.Values{}
+	if q.PresenceLimit > 0 {
+		v.Set("presence_limit", strconv.Itoa(q.PresenceLimit))
+	}
+	if q.AttentionLimit > 0 {
+		v.Set("attention_limit", strconv.Itoa(q.AttentionLimit))
+	}
+	if q.AttentionPage > 0 {
+		v.Set("attention_page", strconv.Itoa(q.AttentionPage))
+	}
+	if q.ActivityLimit > 0 {
+		v.Set("activity_limit", strconv.Itoa(q.ActivityLimit))
+	}
+	if q.ActivityPage > 0 {
+		v.Set("activity_page", strconv.Itoa(q.ActivityPage))
+	}
+	var out httpapi.GeneralHomeResult
+	err := c.get(ctx, "/v1/home/general", v, "", &out)
+	return out, err
+}
+func (c *Client) BrowseAttention(ctx context.Context, q httpapi.AttentionBrowseQuery) (httpapi.AttentionBrowseResult, error) {
+	v := url.Values{}
+	setBrowsePage(v, q.Cursor, q.Limit)
+	setIfPresent(v, "q", q.Search)
+	setIfPresent(v, "source", q.Source)
+	setIfPresent(v, "owner", q.Owner)
+	setIfPresent(v, "severity", q.Severity)
+	setIfPresent(v, "project", q.Project)
+	if q.UpdatedFrom != nil {
+		v.Set("updated_from", q.UpdatedFrom.UTC().Format(time.RFC3339Nano))
+	}
+	if q.UpdatedTo != nil {
+		v.Set("updated_to", q.UpdatedTo.UTC().Format(time.RFC3339Nano))
+	}
+	var out httpapi.AttentionBrowseResult
+	err := c.get(ctx, "/v1/attention", v, "", &out)
+	return out, err
+}
+func (c *Client) BrowseProjects(ctx context.Context, q httpapi.ProjectsBrowseQuery) (httpapi.ProjectsBrowseResult, error) {
+	v := url.Values{}
+	setBrowsePage(v, q.Cursor, q.Limit)
+	setIfPresent(v, "q", q.Search)
+	var out httpapi.ProjectsBrowseResult
+	err := c.get(ctx, "/v1/projects", v, "", &out)
+	return out, err
+}
+func (c *Client) BrowsePeople(ctx context.Context, q httpapi.PeopleBrowseQuery) (httpapi.PeopleBrowseResult, error) {
+	v := url.Values{}
+	setBrowsePage(v, q.Cursor, q.Limit)
+	setIfPresent(v, "q", q.Search)
+	setIfPresent(v, "project", q.Project)
+	setIfPresent(v, "execution", q.Execution)
+	setIfPresent(v, "host", q.Host)
+	if q.HostConnected != nil {
+		v.Set("host_connected", strconv.FormatBool(*q.HostConnected))
+	}
+	var out httpapi.PeopleBrowseResult
+	err := c.get(ctx, "/v1/people", v, "", &out)
+	return out, err
+}
+
+func setBrowsePage(values url.Values, cursor string, limit int) {
+	setIfPresent(values, "cursor", cursor)
+	if limit > 0 {
+		values.Set("limit", strconv.Itoa(limit))
+	}
+}
+
+func setIfPresent(values url.Values, key, value string) {
+	if value != "" {
+		values.Set(key, value)
+	}
+}
 func (c *Client) Context(ctx context.Context, q httpapi.ContextQuery) (httpapi.ContextResult, error) {
 	v := url.Values{}
 	if q.Budget > 0 {
@@ -183,7 +257,13 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		defer cancel()
 	}
 	u := *c.base
-	u.Path = strings.TrimRight(c.base.Path, "/") + path
+	rawPath := strings.TrimRight(c.base.EscapedPath(), "/") + path
+	decodedPath, err := url.PathUnescape(rawPath)
+	if err != nil {
+		return errors.New("invalid commons API path")
+	}
+	u.Path = decodedPath
+	u.RawPath = rawPath
 	u.RawQuery = query.Encode()
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), body)
 	if err != nil {

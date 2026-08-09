@@ -121,3 +121,76 @@ var PostKinds = map[string]bool{
 	"finding": true, "question": true, "notice": true,
 	"decision": true, "topic_request": true,
 }
+
+const (
+	AttentionOpen     = "open"
+	AttentionResolved = "resolved"
+)
+
+var AttentionSeverities = map[string]bool{"high": true, "medium": true, "low": true}
+
+var AttentionSourceKinds = map[string]bool{
+	"task": true, "github_issue": true, "github_pull_request": true,
+	"github_check": true, "host_connectivity": true, "forum_question": true,
+}
+
+// AttentionEvent is an explicit producer assertion. Severity and NextAction
+// are never inferred from task priority, forum prose, or presence.
+type AttentionEvent struct {
+	EventID, AttentionID, State, Severity, Title, ProjectID, SourceRef string
+	AccountableSessionID, NextAction, SourceKind                       string
+	Untrusted                                                          bool
+}
+
+var ActivityKinds = map[string]bool{
+	"project_updated": true, "task_claimed": true, "task_status_changed": true,
+	"decision_recorded": true, "wiki_revised": true, "post_published": true,
+	"comment_added": true, "github_issue_changed": true,
+	"github_pull_request_changed": true, "github_check_changed": true,
+	"github_commit_referenced": true, "host_connected": true,
+	"host_disconnected": true, "wiki_proposal_created": true,
+	"wiki_proposal_reviewed": true,
+}
+
+// ActivityEvent is deliberately restricted to action-changing kinds. Routine
+// heartbeats and ordinary chatter have no valid kind and cannot enter the feed.
+type ActivityEvent struct {
+	ID, Kind, ProjectID, ActorID, ObjectRef, ObjectTitle, Outcome string
+	Untrusted                                                     bool
+	OccurredAt                                                    time.Time
+}
+
+type HomePageRequest struct{ Offset, Limit int }
+
+type HomeReadQuery struct {
+	Attention, Activity HomePageRequest
+	SessionIDs          []string
+}
+
+type HomeAttention struct {
+	ID, Severity, Title, ProjectID, ProjectName, SourceRef string
+	AccountableSessionID, NextAction, SourceKind           string
+	Untrusted                                              bool
+	UpdatedAt                                              time.Time
+	Destination                                            *BrowseDestination
+}
+
+type HomeActivity struct {
+	ID, Kind, ProjectID, ProjectName, ActorID string
+	ObjectRef, ObjectTitle, Outcome           string
+	Untrusted                                 bool
+	OccurredAt                                time.Time
+}
+
+type SessionFact struct {
+	ID, Host, ProjectID, ProjectName, Purpose string
+}
+
+// HomeDurableSnapshot is read in one SQLite snapshot. Live process presence
+// is captured separately by the application service, then joined by session ID.
+type HomeDurableSnapshot struct {
+	ProjectsTotal, AttentionTotal, ActivityTotal int
+	Attention                                    []HomeAttention
+	Activity                                     []HomeActivity
+	Sessions                                     map[string]SessionFact
+}

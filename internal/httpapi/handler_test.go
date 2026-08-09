@@ -29,6 +29,27 @@ func (f *fakeBackend) Health(_ context.Context, meta RequestMeta) (HealthResult,
 	f.seen("health", meta)
 	return HealthResult{Status: "ok", Version: "slice-2-test"}, nil
 }
+func (f *fakeBackend) GeneralHome(_ context.Context, q GeneralHomeQuery, meta RequestMeta) (GeneralHomeResult, error) {
+	f.seen("general_home", meta)
+	out := GeneralHomeResult{}
+	out.Navigation.Projects, out.Navigation.People = 2, 1
+	out.Presence.Total = 1
+	out.NeedsAttention.Total, out.NeedsAttention.Page, out.NeedsAttention.Limit = 1, q.AttentionPage, q.AttentionLimit
+	out.RecentActivity.Total, out.RecentActivity.Page, out.RecentActivity.Limit = 1, q.ActivityPage, q.ActivityLimit
+	return out, nil
+}
+func (f *fakeBackend) BrowseAttention(_ context.Context, q AttentionBrowseQuery, meta RequestMeta) (AttentionBrowseResult, error) {
+	f.seen("attention", meta)
+	return AttentionBrowseResult{Total: 1, Limit: q.Limit}, nil
+}
+func (f *fakeBackend) BrowseProjects(_ context.Context, q ProjectsBrowseQuery, meta RequestMeta) (ProjectsBrowseResult, error) {
+	f.seen("projects", meta)
+	return ProjectsBrowseResult{Total: 1, Limit: q.Limit}, nil
+}
+func (f *fakeBackend) BrowsePeople(_ context.Context, q PeopleBrowseQuery, meta RequestMeta) (PeopleBrowseResult, error) {
+	f.seen("people", meta)
+	return PeopleBrowseResult{Total: 1, Limit: q.Limit}, nil
+}
 func (f *fakeBackend) Context(_ context.Context, q ContextQuery, meta RequestMeta) (ContextResult, error) {
 	f.seen("context", meta)
 	unchanged := q.Since != nil && *q.Since == 42
@@ -36,7 +57,7 @@ func (f *fakeBackend) Context(_ context.Context, q ContextQuery, meta RequestMet
 }
 func (f *fakeBackend) Who(_ context.Context, q WhoQuery, meta RequestMeta) (WhoResult, error) {
 	f.seen("who", meta)
-	return WhoResult{Sessions: []PresenceItem{{Session: "S-1", Host: "plumbob", HostConnected: true, Execution: "idle", LastActivity: "2026-08-09T12:00:00Z", Project: q.Project}}}, nil
+	return WhoResult{Sessions: []PresenceItem{{Session: "S-1", Host: "plumbob", HostConnected: true, Execution: "not_running", LastActivity: "2026-08-09T12:00:00Z", Project: q.Project}}}, nil
 }
 func (f *fakeBackend) Inbox(_ context.Context, q InboxQuery, meta RequestMeta) (InboxResult, error) {
 	f.seen("inbox", meta)
@@ -131,6 +152,7 @@ func TestCriticalReadAndWriteRoutes(t *testing.T) {
 	backend := &fakeBackend{}
 	h := testHandler(backend, 0)
 	tests := []struct{ method, path, body, marker string }{
+		{http.MethodGet, "/v1/home/general?presence_limit=5&attention_limit=5&activity_limit=10", "", `"projects":2`},
 		{http.MethodGet, "/v1/context/commons-lab?budget=300", "", `"project":"commons-lab"`},
 		{http.MethodGet, "/v1/who?project=commons-lab", "", `"session":"S-1"`},
 		{http.MethodGet, "/v1/inbox/commons-lab", "", `"id":"M-3"`},
@@ -147,6 +169,47 @@ func TestCriticalReadAndWriteRoutes(t *testing.T) {
 		rec := request(h, tc.method, tc.path, tc.body, "bearer-secret")
 		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), tc.marker) {
 			t.Errorf("%s %s code=%d body=%s", tc.method, tc.path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestGeneralHomeIsAuthenticatedBoundedAndIdentityAttested(t *testing.T) {
+	backend := &fakeBackend{}
+	h := NewHandler(backend, Config{Credentials: []Credential{
+		{BearerToken: "one", Actor: "agent-1", Session: "S-1", Host: "plumbob"},
+		{BearerToken: "two", Actor: "agent-2", Session: "S-2", Host: "studio"},
+	}})
+	if rec := request(h, http.MethodGet, "/v1/home/general", "", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated code=%d", rec.Code)
+	}
+	for token, actor := range map[string]string{"one": "agent-1", "two": "agent-2"} {
+		rec := request(h, http.MethodGet, "/v1/home/general?presence_limit=3&attention_limit=4&attention_page=2&activity_limit=7&activity_page=1", "", token)
+		body := rec.Body.String()
+		if rec.Code != http.StatusOK || !strings.Contains(body, `"untrusted":true`) ||
+			strings.Contains(strings.ToLower(body), "review queue") ||
+			strings.Contains(strings.ToLower(body), "background work") {
+			t.Fatalf("token=%s code=%d body=%s", token, rec.Code, body)
+		}
+		if backend.last.Actor != actor || backend.last.Session != "S-"+strings.TrimPrefix(actor, "agent-") {
+			t.Fatalf("identity not attested: %+v", backend.last)
+		}
+	}
+	if backend.calls[len(backend.calls)-1] != "general_home" {
+		t.Fatalf("calls=%v", backend.calls)
+	}
+}
+
+func TestGeneralHomeRejectsUnboundedPagination(t *testing.T) {
+	backend := &fakeBackend{}
+	h := testHandler(backend, 0)
+	for _, target := range []string{
+		"/v1/home/general?presence_limit=21",
+		"/v1/home/general?attention_page=-1",
+		"/v1/home/general?activity_limit=0",
+	} {
+		rec := request(h, http.MethodGet, target, "", "bearer-secret")
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("target=%s code=%d body=%s", target, rec.Code, rec.Body.String())
 		}
 	}
 }
