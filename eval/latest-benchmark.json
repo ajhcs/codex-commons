@@ -1,0 +1,139 @@
+{
+  "command": [
+    "/home/plumbob/codex-commons/bin/commons"
+  ],
+  "compiled_latency_enforced": true,
+  "ok": true,
+  "results": [
+    {
+      "bytes": 900,
+      "cold_ms": 1.513,
+      "failures": [],
+      "lines": 12,
+      "name": "orientation",
+      "pass": true,
+      "surface": "context",
+      "tokens_est": 300,
+      "warm_p50_ms": 1.075,
+      "warm_p95_ms": 2.017
+    },
+    {
+      "bytes": 37,
+      "cold_ms": 0.962,
+      "failures": [],
+      "lines": 1,
+      "name": "unchanged",
+      "pass": true,
+      "surface": "delta",
+      "tokens_est": 13,
+      "warm_p50_ms": 1.067,
+      "warm_p95_ms": 1.616
+    },
+    {
+      "bytes": 253,
+      "cold_ms": 0.993,
+      "failures": [],
+      "lines": 3,
+      "name": "presence",
+      "pass": true,
+      "surface": "presence",
+      "tokens_est": 85,
+      "warm_p50_ms": 1.103,
+      "warm_p95_ms": 1.612
+    },
+    {
+      "bytes": 139,
+      "cold_ms": 0.996,
+      "failures": [],
+      "lines": 2,
+      "name": "inbox",
+      "pass": true,
+      "surface": "inbox",
+      "tokens_est": 47,
+      "warm_p50_ms": 1.067,
+      "warm_p95_ms": 1.384
+    },
+    {
+      "bytes": 419,
+      "cold_ms": 1.117,
+      "failures": [],
+      "lines": 3,
+      "name": "search",
+      "pass": true,
+      "surface": "search",
+      "tokens_est": 140,
+      "warm_p50_ms": 1.151,
+      "warm_p95_ms": 1.57
+    },
+    {
+      "bytes": 225,
+      "cold_ms": 1.048,
+      "failures": [],
+      "lines": 3,
+      "name": "open_decision",
+      "pass": true,
+      "surface": "object",
+      "tokens_est": 75,
+      "warm_p50_ms": 1.035,
+      "warm_p95_ms": 1.32
+    },
+    {
+      "bytes": 171,
+      "cold_ms": 1.121,
+      "failures": [],
+      "lines": 3,
+      "name": "next",
+      "pass": true,
+      "surface": "task",
+      "tokens_est": 57,
+      "warm_p50_ms": 1.009,
+      "warm_p95_ms": 1.292
+    },
+    {
+      "bytes": 74,
+      "cold_ms": 1.097,
+      "failures": [],
+      "lines": 1,
+      "name": "claim",
+      "pass": true,
+      "surface": "write",
+      "tokens_est": 25,
+      "warm_p50_ms": 1.081,
+      "warm_p95_ms": 1.805
+    },
+    {
+      "bytes": 84,
+      "cold_ms": 1.001,
+      "failures": [],
+      "lines": 1,
+      "name": "post",
+      "pass": true,
+      "surface": "write",
+      "tokens_est": 28,
+      "warm_p50_ms": 1.079,
+      "warm_p95_ms": 1.332
+    },
+    {
+      "bytes": 86,
+      "cold_ms": 1.432,
+      "failures": [],
+      "lines": 1,
+      "name": "general_topic_request",
+      "pass": true,
+      "surface": "write",
+      "tokens_est": 29,
+      "warm_p50_ms": 1.099,
+      "warm_p95_ms": 1.588
+    }
+  ],
+  "runs_per_scenario": 100,
+  "summary": {
+    "cold_p95_ms": 1.513,
+    "latency_failures": [],
+    "passed": 10,
+    "scenarios": 10,
+    "total_visible_tokens_est": 799,
+    "warm_p95_ms": 1.588
+  },
+  "token_estimator": "ceil_utf8_bytes_div_3"
+}

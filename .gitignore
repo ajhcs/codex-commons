@@ -1,0 +1,11 @@
+/bin/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.out
+coverage.*
+.DS_Store
+*.orig
+*.rej

@@ -1,0 +1,14 @@
+{
+  "token_estimator": "ceil_utf8_bytes_div_3",
+  "latency_ms": {"cold_p95": 50, "warm_p95": 20},
+  "surfaces": {
+    "context": {"bytes": 3000, "lines": 50, "tokens": 700},
+    "delta": {"bytes": 600, "lines": 10, "tokens": 140},
+    "presence": {"bytes": 1200, "lines": 20, "tokens": 300},
+    "inbox": {"bytes": 1200, "lines": 20, "tokens": 300},
+    "search": {"bytes": 1800, "lines": 24, "tokens": 420},
+    "object": {"bytes": 1800, "lines": 30, "tokens": 420},
+    "task": {"bytes": 1800, "lines": 30, "tokens": 420},
+    "write": {"bytes": 240, "lines": 4, "tokens": 40}
+  }
+}

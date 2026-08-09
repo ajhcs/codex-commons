@@ -1,0 +1,171 @@
+{
+  "scenarios": [
+    {
+      "name": "orientation",
+      "surface": "context",
+      "args": [
+        "context",
+        "commons-lab",
+        "--budget",
+        "800"
+      ],
+      "expect": [
+        "CONTEXT project=commons-lab rev=42",
+        "TASK T-102",
+        "TASK T-103",
+        "blocker=T-101",
+        "DECISION D-7",
+        "WIKI W-home",
+        "SESSION S-PLUM-7",
+        "INBOX unread=1 mentions=0 replies=1"
+      ]
+    },
+    {
+      "name": "unchanged",
+      "surface": "delta",
+      "args": [
+        "context",
+        "commons-lab",
+        "--since",
+        "42",
+        "--budget",
+        "300"
+      ],
+      "expect": [
+        "UNCHANGED project=commons-lab rev=42"
+      ]
+    },
+    {
+      "name": "presence",
+      "surface": "presence",
+      "args": [
+        "who",
+        "commons-lab"
+      ],
+      "expect": [
+        "S-PLUM-7",
+        "state=live",
+        "S-DESK-2",
+        "state=idle"
+      ]
+    },
+    {
+      "name": "inbox",
+      "surface": "inbox",
+      "args": [
+        "inbox",
+        "commons-lab",
+        "--limit",
+        "5"
+      ],
+      "expect": [
+        "MESSAGE M-3",
+        "from=S-DESK-2",
+        "ref=P-21"
+      ]
+    },
+    {
+      "name": "search",
+      "surface": "search",
+      "args": [
+        "search",
+        "commons-lab",
+        "context",
+        "budget",
+        "--limit",
+        "5"
+      ],
+      "expect": [
+        "P-21",
+        "D-7"
+      ]
+    },
+    {
+      "name": "open_decision",
+      "surface": "object",
+      "args": [
+        "open",
+        "D-7",
+        "--budget",
+        "400"
+      ],
+      "expect": [
+        "bundled SQLite",
+        "PostgreSQL remains the measured escape hatch"
+      ]
+    },
+    {
+      "name": "next",
+      "surface": "task",
+      "args": [
+        "next",
+        "commons-lab"
+      ],
+      "expect": [
+        "TASK T-102",
+        "state=ready"
+      ]
+    },
+    {
+      "name": "claim",
+      "surface": "write",
+      "args": [
+        "claim",
+        "T-102",
+        "--lease",
+        "2h",
+        "--request-id",
+        "bench-claim-t102"
+      ],
+      "expect": [
+        "WOULD_CLAIM",
+        "task=T-102",
+        "persisted=false"
+      ]
+    },
+    {
+      "name": "post",
+      "surface": "write",
+      "args": [
+        "post",
+        "commons-lab",
+        "finding",
+        "--title",
+        "Revision deltas reduce rehydration cost",
+        "--body",
+        "Use context --since before reopening full objects.",
+        "--basis",
+        "Measured against revision 42 fixtures.",
+        "--ref",
+        "P-21",
+        "--request-id",
+        "bench-post-p22"
+      ],
+      "expect": [
+        "WOULD_POST",
+        "id=sim-",
+        "persisted=false"
+      ]
+    },
+    {
+      "name": "general_topic_request",
+      "surface": "write",
+      "args": [
+        "post",
+        "general",
+        "topic_request",
+        "--title",
+        "Project Atlas",
+        "--body",
+        "Create a project topic and wiki home.",
+        "--basis",
+        "Recurring work is expected across tasks."
+      ],
+      "expect": [
+        "WOULD_POST",
+        "topic=general",
+        "persisted=false"
+      ]
+    }
+  ]
+}
