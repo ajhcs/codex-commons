@@ -27,7 +27,7 @@ func TestLeaseExpiryIsDeterministicAndSeparateFromConnectivity(t *testing.T) {
 
 	clock.now = clock.now.Add(2 * time.Minute)
 	got, _ = r.Get("S-1")
-	if got.Execution != "idle" || got.LeaseExpires != nil {
+	if got.Execution != "not_running" || got.LeaseExpires != nil {
 		t.Fatalf("lease did not expire at boundary: %#v", got)
 	}
 }

@@ -1,10 +1,23 @@
 package httpapi
 
-import "context"
+import (
+	"context"
+
+	"codex-commons/internal/application"
+)
 
 // Backend is the complete storage boundary for the Slice 2 transport. It is
-// intentionally expressed only in transport-owned types.
+// keeps the established transport types while GeneralHome aliases the application-owned read model.
 type Backend interface {
+	LegacyBackend
+	GeneralHome(context.Context, GeneralHomeQuery, RequestMeta) (GeneralHomeResult, error)
+	BrowseAttention(context.Context, AttentionBrowseQuery, RequestMeta) (AttentionBrowseResult, error)
+	BrowseProjects(context.Context, ProjectsBrowseQuery, RequestMeta) (ProjectsBrowseResult, error)
+	BrowsePeople(context.Context, PeopleBrowseQuery, RequestMeta) (PeopleBrowseResult, error)
+	ProjectOverview(context.Context, ProjectOverviewQuery, RequestMeta) (ProjectOverviewResult, error)
+}
+
+type LegacyBackend interface {
 	Health(context.Context, RequestMeta) (HealthResult, error)
 	Context(context.Context, ContextQuery, RequestMeta) (ContextResult, error)
 	Who(context.Context, WhoQuery, RequestMeta) (WhoResult, error)
@@ -26,6 +39,17 @@ type RequestMeta struct {
 	RequestID      string
 	IdempotencyKey string
 }
+
+type GeneralHomeQuery = application.HomeQuery
+type GeneralHomeResult = application.GeneralHome
+type AttentionBrowseQuery = application.AttentionBrowseRequest
+type AttentionBrowseResult = application.AttentionBrowseResult
+type ProjectsBrowseQuery = application.ProjectsBrowseRequest
+type ProjectsBrowseResult = application.ProjectsBrowseResult
+type PeopleBrowseQuery = application.PeopleBrowseRequest
+type PeopleBrowseResult = application.PeopleBrowseResult
+type ProjectOverviewQuery = application.ProjectOverviewQuery
+type ProjectOverviewResult = application.ProjectOverview
 
 type HealthResult struct {
 	Status  string `json:"status"`

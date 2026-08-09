@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 )
 
 const (
@@ -96,8 +97,60 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *handler) route(w http.ResponseWriter, r *http.Request, meta RequestMeta) {
 	path := r.URL.Path
 	switch {
+	case r.Method == http.MethodGet && path == "/v1/home/general":
+		query, err := parseHomeQuery(r.URL.Query())
+		if err != nil {
+			h.badQuery(w, meta, err)
+			return
+		}
+		out, err := h.backend.GeneralHome(r.Context(), query, meta)
+		h.finish(w, meta, out, err, true)
+	case r.Method == http.MethodGet && path == "/v1/attention":
+		query, err := parseAttentionBrowseQuery(r.URL.Query())
+		if err != nil {
+			h.badQuery(w, meta, err)
+			return
+		}
+		out, err := h.backend.BrowseAttention(r.Context(), query, meta)
+		h.finish(w, meta, out, err, true)
+	case r.Method == http.MethodGet && path == "/v1/projects":
+		query, err := parseProjectsBrowseQuery(r.URL.Query())
+		if err != nil {
+			h.badQuery(w, meta, err)
+			return
+		}
+		out, err := h.backend.BrowseProjects(r.Context(), query, meta)
+		h.finish(w, meta, out, err, false)
+	case r.Method == http.MethodGet && path == "/v1/people":
+		query, err := parsePeopleBrowseQuery(r.URL.Query())
+		if err != nil {
+			h.badQuery(w, meta, err)
+			return
+		}
+		out, err := h.backend.BrowsePeople(r.Context(), query, meta)
+		h.finish(w, meta, out, err, false)
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/v1/projects/"):
+		project, ok := projectOverviewPath(r.URL)
+		if !ok {
+			h.notFound(w, meta)
+			return
+		}
+		attentionLimit, err := intParam(r.URL.Query().Get("attention_limit"), 5, 1, 20)
+		if err != nil {
+			h.badQuery(w, meta, err)
+			return
+		}
+		workLimit, err := intParam(r.URL.Query().Get("work_limit"), 5, 1, 20)
+		if err != nil {
+			h.badQuery(w, meta, err)
+			return
+		}
+		out, err := h.backend.ProjectOverview(r.Context(), ProjectOverviewQuery{
+			Project: project, AttentionLimit: attentionLimit, WorkLimit: workLimit,
+		}, meta)
+		h.finish(w, meta, out, err, true)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/v1/context/"):
-		project, ok := pathPart(path, "/v1/context/")
+		project, ok := pathPart(r.URL, "/v1/context/")
 		if !ok {
 			h.notFound(w, meta)
 			return
@@ -131,7 +184,7 @@ func (h *handler) route(w http.ResponseWriter, r *http.Request, meta RequestMeta
 		out, err := h.backend.Who(r.Context(), WhoQuery{Project: r.URL.Query().Get("project"), State: state, Limit: limit}, meta)
 		h.finish(w, meta, out, err, true)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/v1/inbox/"):
-		project, ok := pathPart(path, "/v1/inbox/")
+		project, ok := pathPart(r.URL, "/v1/inbox/")
 		if !ok {
 			h.notFound(w, meta)
 			return
@@ -144,7 +197,7 @@ func (h *handler) route(w http.ResponseWriter, r *http.Request, meta RequestMeta
 		out, err := h.backend.Inbox(r.Context(), InboxQuery{Project: project, Limit: limit}, meta)
 		h.finish(w, meta, out, err, true)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/v1/search/"):
-		project, ok := pathPart(path, "/v1/search/")
+		project, ok := pathPart(r.URL, "/v1/search/")
 		if !ok {
 			h.notFound(w, meta)
 			return
@@ -175,7 +228,7 @@ func (h *handler) route(w http.ResponseWriter, r *http.Request, meta RequestMeta
 		out, err := h.backend.Open(r.Context(), OpenQuery{Ref: ref, Budget: budget}, meta)
 		h.finish(w, meta, out, err, true)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/v1/next/"):
-		project, ok := pathPart(path, "/v1/next/")
+		project, ok := pathPart(r.URL, "/v1/next/")
 		if !ok {
 			h.notFound(w, meta)
 			return
@@ -400,9 +453,13 @@ func (h *handler) requestID(value string) (string, error) {
 	return value, nil
 }
 
-func pathPart(path, prefix string) (string, bool) {
-	raw := strings.TrimPrefix(path, prefix)
-	if raw == path || raw == "" || strings.Contains(raw, "/") {
+func pathPart(requestURL *url.URL, prefix string) (string, bool) {
+	if requestURL == nil {
+		return "", false
+	}
+	escaped := requestURL.EscapedPath()
+	raw := strings.TrimPrefix(escaped, prefix)
+	if raw == escaped || raw == "" || strings.Contains(raw, "/") {
 		return "", false
 	}
 	value, err := url.PathUnescape(raw)
@@ -429,6 +486,112 @@ func intParam(raw string, fallback, min, max int) (int, error) {
 		return 0, fmt.Errorf("integer must be in %d..%d", min, max)
 	}
 	return v, nil
+}
+
+func parseHomeQuery(values url.Values) (GeneralHomeQuery, error) {
+	presenceLimit, err := intParam(values.Get("presence_limit"), 5, 1, 20)
+	if err != nil {
+		return GeneralHomeQuery{}, err
+	}
+	attentionLimit, err := intParam(values.Get("attention_limit"), 5, 1, 20)
+	if err != nil {
+		return GeneralHomeQuery{}, err
+	}
+	attentionPage, err := intParam(values.Get("attention_page"), 0, 0, 500)
+	if err != nil {
+		return GeneralHomeQuery{}, err
+	}
+	activityLimit, err := intParam(values.Get("activity_limit"), 10, 1, 20)
+	if err != nil {
+		return GeneralHomeQuery{}, err
+	}
+	activityPage, err := intParam(values.Get("activity_page"), 0, 0, 500)
+	if err != nil {
+		return GeneralHomeQuery{}, err
+	}
+	return GeneralHomeQuery{PresenceLimit: presenceLimit, AttentionLimit: attentionLimit,
+		AttentionPage: attentionPage, ActivityLimit: activityLimit, ActivityPage: activityPage}, nil
+}
+
+func optionalTimeParam(raw string) (*time.Time, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	value, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return nil, errors.New("timestamp must be RFC3339")
+	}
+	value = value.UTC()
+	return &value, nil
+}
+
+func parseAttentionBrowseQuery(values url.Values) (AttentionBrowseQuery, error) {
+	limit, err := intParam(values.Get("limit"), 25, 1, 100)
+	if err != nil {
+		return AttentionBrowseQuery{}, err
+	}
+	from, err := optionalTimeParam(values.Get("updated_from"))
+	if err != nil {
+		return AttentionBrowseQuery{}, err
+	}
+	to, err := optionalTimeParam(values.Get("updated_to"))
+	if err != nil {
+		return AttentionBrowseQuery{}, err
+	}
+	if from != nil && to != nil && from.After(*to) {
+		return AttentionBrowseQuery{}, errors.New("updated_from must not be after updated_to")
+	}
+	search := strings.TrimSpace(values.Get("q"))
+	if len(search) > 200 {
+		return AttentionBrowseQuery{}, errors.New("q maximum length is 200")
+	}
+	return AttentionBrowseQuery{Cursor: values.Get("cursor"), Search: search, Limit: limit,
+		Source: values.Get("source"), Owner: values.Get("owner"),
+		Severity: values.Get("severity"), Project: values.Get("project"),
+		UpdatedFrom: from, UpdatedTo: to}, nil
+}
+
+func parseProjectsBrowseQuery(values url.Values) (ProjectsBrowseQuery, error) {
+	limit, err := intParam(values.Get("limit"), 25, 1, 100)
+	if err != nil {
+		return ProjectsBrowseQuery{}, err
+	}
+	return ProjectsBrowseQuery{Cursor: values.Get("cursor"), Search: strings.TrimSpace(values.Get("q")), Limit: limit}, nil
+}
+
+func parsePeopleBrowseQuery(values url.Values) (PeopleBrowseQuery, error) {
+	limit, err := intParam(values.Get("limit"), 25, 1, 100)
+	if err != nil {
+		return PeopleBrowseQuery{}, err
+	}
+	var connected *bool
+	if raw := values.Get("host_connected"); raw != "" {
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			return PeopleBrowseQuery{}, errors.New("host_connected must be true or false")
+		}
+		connected = &value
+	}
+	return PeopleBrowseQuery{Cursor: values.Get("cursor"), Search: strings.TrimSpace(values.Get("q")),
+		Project: values.Get("project"), Execution: values.Get("execution"), Host: values.Get("host"),
+		HostConnected: connected, Limit: limit}, nil
+}
+
+func projectOverviewPath(requestURL *url.URL) (string, bool) {
+	const prefix, suffix = "/v1/projects/", "/overview"
+	if requestURL == nil {
+		return "", false
+	}
+	escaped := requestURL.EscapedPath()
+	if !strings.HasPrefix(escaped, prefix) || !strings.HasSuffix(escaped, suffix) {
+		return "", false
+	}
+	raw := strings.TrimSuffix(strings.TrimPrefix(escaped, prefix), suffix)
+	if raw == "" || strings.Contains(raw, "/") {
+		return "", false
+	}
+	value, err := url.PathUnescape(raw)
+	return value, err == nil && value != ""
 }
 
 func (h *handler) badQuery(w http.ResponseWriter, meta RequestMeta, err error) {

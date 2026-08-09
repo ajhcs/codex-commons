@@ -144,7 +144,7 @@ func (r *Registry) List(project string) []Snapshot {
 }
 
 func snapshot(rec record, now time.Time) Snapshot {
-	execution := "idle"
+	execution := "not_running"
 	var expires *time.Time
 	if !rec.LeaseExpires.IsZero() && now.Before(rec.LeaseExpires) {
 		execution = "executing"
