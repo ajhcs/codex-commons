@@ -914,6 +914,32 @@ textarea:focus-visible, select:focus-visible, summary:focus-visible { outline: 2
 .auth-dialog input:focus, .state-dialog input:focus { border-color: rgba(11, 103, 216, .55); outline: 0; box-shadow: 0 0 0 3px rgba(11, 103, 216,.1); }
 .auth-privacy, .immutability-note { margin: 8px 0 0; color: var(--text-tertiary); font-size: 9px; line-height: 14px; }
 .auth-dialog footer, .state-dialog footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; }
+.auth-dialog--codex { width: min(520px, calc(100vw - 32px)); }
+.auth-dialog--codex form { gap: 0; }
+.auth-primary-card, .auth-error-card, .pairing-code-card { display: grid; gap: 7px; margin-top: 22px; padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-subtle); }
+.auth-primary-card strong, .auth-error-card strong { font-size: 13px; }
+.auth-primary-card span, .auth-error-card span { color: var(--text-secondary); font-size: 11px; line-height: 16px; }
+.auth-primary-card .primary-button { width: fit-content; margin-top: 7px; }
+.auth-error-card { border-color: color-mix(in srgb, var(--red) 35%, var(--border)); background: var(--red-soft); }
+.pairing-code-card { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.pairing-code-card > span { grid-column: 1 / -1; color: var(--text-tertiary); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
+.pairing-code-card strong { min-width: 0; color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 22px; letter-spacing: .12em; }
+.pairing-code-card .secondary-button { grid-column: 2; grid-row: 2; min-height: 32px; font-size: 10px; }
+.pairing-code-card small { grid-column: 1 / -1; color: var(--green); font-size: 10px; }
+.pairing-link { display: inline-flex; align-items: center; gap: 6px; margin-top: 16px; color: var(--blue); font-size: 12px; font-weight: 600; text-decoration: none; }
+.pairing-link:hover { text-decoration: underline; }
+.pairing-status { margin: 9px 0 0; color: var(--text-tertiary); font-size: 10px; line-height: 15px; }
+.auth-recovery-link { justify-self: start; margin-top: 14px; padding: 0; border: 0; background: transparent; color: var(--text-tertiary); font-size: 10px; text-decoration: underline; text-underline-offset: 2px; }
+.auth-recovery-link:hover { color: var(--text); }
+.auth-profile-fields { display: grid; gap: 14px; margin-top: 20px; }
+.auth-profile-fields label { display: grid; gap: 6px; color: var(--text); font-size: 11px; font-weight: 600; }
+.auth-profile-fields label > small { color: var(--text-tertiary); font-size: 9px; font-weight: 400; }
+.auth-handle-input { display: flex; align-items: center; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg); }
+.auth-handle-input > span { padding-left: 11px; color: var(--text-tertiary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.auth-handle-input input { min-width: 0; border: 0; background: transparent; }
+.auth-handle-input input:focus { box-shadow: none; }
+.profile-dialog { width: min(500px, calc(100vw - 32px)); }
+.profile-dialog form { gap: 0; }
 .state-dialog { width: min(480px, calc(100vw - 32px)); }
 .state-dialog header { padding-bottom: 2px; }
 .composer-details summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; }

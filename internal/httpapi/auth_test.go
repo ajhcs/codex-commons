@@ -18,6 +18,7 @@ func humanTestHandler(backend Backend) http.Handler {
 		HumanAuth: &HumanAuthConfig{
 			AdminSecret: testAdminSecret, DisplayName: "Test Admin", Actor: "local-admin",
 			Session: "human-local-admin", Host: "browser", SessionTTL: time.Hour,
+			RecoveryEnabled: true,
 		},
 	})
 }
@@ -162,7 +163,7 @@ func TestHumanLoginRateLimitAndSecureTLSCookie(t *testing.T) {
 }
 
 func TestHumanSessionsAreBoundedWithoutSingleDeviceLogout(t *testing.T) {
-	auth := newHumanAuth(&HumanAuthConfig{AdminSecret: testAdminSecret, DisplayName: "Test Admin", Actor: "admin", Session: "human", Host: "browser", SessionTTL: time.Hour})
+	auth := newHumanAuth(&HumanAuthConfig{AdminSecret: testAdminSecret, DisplayName: "Test Admin", Actor: "admin", Session: "human", Host: "browser", SessionTTL: time.Hour, RecoveryEnabled: true})
 	now := time.Date(2026, 8, 10, 1, 0, 0, 0, time.UTC)
 	auth.now = func() time.Time { return now }
 	first, _, ok := auth.create()

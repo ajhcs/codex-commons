@@ -105,6 +105,15 @@ function responseError(response, envelope) {
   if (response.status === 409) message = "This request conflicts with newer Commons activity.";
   if (response.status === 429) message = "Too many write attempts. Wait a moment and try again.";
   if (response.status === 503) message = "Commons is temporarily unavailable.";
+  if (code === "codex_unavailable") message = "Codex sign-in is unavailable on this Commons installation.";
+  if (code === "account_mismatch") message = "This Commons installation is already linked to another Codex account.";
+  if (code === "codex_identity_unavailable") message = "Codex did not provide an account identity that Commons can use.";
+  if (code === "first_bind_lan_forbidden") message = "The first Codex link must begin on this machine or with explicit LAN acknowledgement.";
+  if (code === "profile_conflict") message = "This Commons installation is already linked to another account or handle.";
+  if (code === "profile_unavailable") message = "This Codex setup step is no longer available. Start again.";
+  if (code === "authorization_cancelled") message = "Codex sign-in was cancelled.";
+  if (code === "authorization_failed") message = "Codex sign-in was not completed.";
+  if (code === "pairing_not_found") message = "That Codex sign-in attempt is no longer available.";
   return new CommonsAPIError(message, { code, status: response.status, requestID });
 }
 
@@ -180,11 +189,29 @@ export function createHTTPTransport({
     readSession(signal) {
       return read("/v1/auth/session", {}, signal);
     },
+    readCodexStatus(signal) {
+      return read("/v1/auth/codex/status", {}, signal);
+    },
+    startCodexPairing(signal) {
+      return write("/v1/auth/codex/start", {}, {}, signal);
+    },
+    pollCodexPairing(attemptID, signal) {
+      return write("/v1/auth/codex/poll", { attempt_id: attemptID }, {}, signal);
+    },
+    completeCodexProfile(input, signal) {
+      return write("/v1/auth/codex/profile", input, {}, signal);
+    },
+    cancelCodexPairing(attemptID, signal) {
+      return write("/v1/auth/codex/cancel", { attempt_id: attemptID }, {}, signal);
+    },
     login(secret, idempotencyKey, signal) {
       return write("/v1/auth/login", { secret }, { idempotencyKey }, signal);
     },
     logout(csrfToken, idempotencyKey, signal) {
       return write("/v1/auth/logout", {}, { csrfToken, idempotencyKey }, signal);
+    },
+    updateProfile(input, csrfToken, idempotencyKey, signal) {
+      return replace("/v1/auth/profile", input, { csrfToken, idempotencyKey }, signal);
     },
     readPosts(query, signal) {
       return read("/v1/posts", {

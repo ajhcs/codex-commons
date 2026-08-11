@@ -3,44 +3,17 @@ package httpapi
 import (
 	"crypto/sha256"
 	"crypto/subtle"
+	"errors"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
+
+	"codex-commons/internal/domain"
 )
 
-func (h *handler) authRoute(w http.ResponseWriter, r *http.Request, rid string) bool {
-	switch {
-	case r.Method == http.MethodGet && r.URL.Path == "/v1/auth/session":
-		if h.humanAuth == nil {
-			h.write(w, http.StatusOK, envelope{OK: true, Data: authSessionResult{Authenticated: false}, Meta: responseMeta{RequestID: rid}})
-			return true
-		}
-		principal, ok := h.authenticateHuman(r)
-		if !ok {
-			h.write(w, http.StatusOK, envelope{OK: true, Data: authSessionResult{Authenticated: false}, Meta: responseMeta{RequestID: rid}})
-			return true
-		}
-		session := humanSession{csrf: principal.csrfToken}
-		h.write(w, http.StatusOK, envelope{OK: true, Data: h.humanAuth.result(&session), Meta: responseMeta{RequestID: rid}})
-		return true
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/auth/login":
-		h.login(w, r, rid)
-		return true
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/auth/logout":
-		h.logout(w, r, rid)
-		return true
-	case strings.HasPrefix(r.URL.Path, "/v1/auth/"):
-		h.writeError(w, rid, http.StatusNotFound, "not_found", "route not found")
-		return true
-	default:
-		return false
-	}
-}
-
 func (h *handler) login(w http.ResponseWriter, r *http.Request, rid string) {
-	if h.humanAuth == nil {
-		h.writeError(w, rid, http.StatusServiceUnavailable, "auth_unavailable", "human authentication is not configured")
+	if h.humanAuth == nil || !h.humanAuth.recoveryEnabled || h.humanAuth.secretDigest == [sha256.Size]byte{} {
+		h.writeError(w, rid, http.StatusNotFound, "recovery_disabled", "Recovery login is not enabled")
 		return
 	}
 	if !sameOrigin(r) {
@@ -63,7 +36,25 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request, rid string) {
 		h.writeError(w, rid, http.StatusUnauthorized, "unauthorized", "invalid credentials")
 		return
 	}
-	token, session, ok := h.humanAuth.create()
+	bindingRevision := int64(0)
+	if binding, err := h.binding(r.Context()); err == nil {
+		bindingRevision = binding.Revision
+	} else if !errors.Is(err, domain.ErrNotFound) {
+		h.writeError(w, rid, http.StatusServiceUnavailable, "unavailable", "Commons authentication is temporarily unavailable")
+		return
+	}
+	auditKey, ok := randomAuthToken()
+	if !ok {
+		h.writeError(w, rid, http.StatusServiceUnavailable, "unavailable", "Commons authentication is temporarily unavailable")
+		return
+	}
+	if events, ok := h.config.HumanAuthEvents.(HumanAuthEventStore); ok {
+		if err := events.RecordHumanAuthEvent(r.Context(), domain.HumanAuthEventRequest{Principal: domain.HumanLocalPrincipal, EventType: "recovery_login", BindingRevision: bindingRevision, IdempotencyKey: "recovery:" + auditKey}); err != nil {
+			h.writeError(w, rid, http.StatusServiceUnavailable, "unavailable", "Commons authentication is temporarily unavailable")
+			return
+		}
+	}
+	token, session, ok := h.humanAuth.create("recovery", bindingRevision)
 	if !ok {
 		h.writeError(w, rid, http.StatusServiceUnavailable, "unavailable", "could not create session")
 		return

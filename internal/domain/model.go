@@ -44,6 +44,42 @@ type Session struct {
 	LastActivity                                  time.Time
 }
 
+// HumanAccountBinding is the durable, private link between the one local
+// Commons human principal and the managed ChatGPT account that authenticated
+// it. ProviderSubjectDigest is intentionally a digest, never the provider's
+// raw account identifier.
+type HumanAccountBinding struct {
+	Principal             string
+	Provider              string
+	ProviderSubjectDigest []byte
+	DisplayName           string
+	Handle                string
+	Revision              int64
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+}
+
+type BindHumanAccountRequest struct {
+	ProviderSubjectDigest []byte
+	DisplayName           string
+	Handle                string
+}
+
+type UpdateHumanProfileRequest struct {
+	Principal      string
+	DisplayName    string
+	Handle         string
+	BaseRevision   int64
+	IdempotencyKey string
+}
+
+type HumanAuthEventRequest struct {
+	Principal       string
+	EventType       string
+	BindingRevision int64
+	IdempotencyKey  string
+}
+
 type Contributor struct {
 	SessionID, Handle, Host, ProjectID, ProjectName, Purpose string
 }

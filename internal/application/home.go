@@ -5,6 +5,7 @@ package application
 import (
 	"context"
 	"sort"
+	"sync"
 	"time"
 
 	"codex-commons/internal/domain"
@@ -38,6 +39,7 @@ type Service struct {
 	clock            Clock
 	humanDisplayName string
 	humanHandle      string
+	identityMu       sync.RWMutex
 }
 
 func New(repository HomeRepository, live PresenceRegistry, clock Clock) *Service {
@@ -49,9 +51,20 @@ func New(repository HomeRepository, live PresenceRegistry, clock Clock) *Service
 
 func (s *Service) ConfigureHumanIdentity(displayName, handle string) {
 	if s != nil && displayName != "" && handle != "" {
+		s.identityMu.Lock()
 		s.humanDisplayName = displayName
 		s.humanHandle = handle
+		s.identityMu.Unlock()
 	}
+}
+
+func (s *Service) humanIdentity() (displayName, handle string) {
+	if s == nil {
+		return "Local admin", "local-admin"
+	}
+	s.identityMu.RLock()
+	defer s.identityMu.RUnlock()
+	return s.humanDisplayName, s.humanHandle
 }
 
 type HomeQuery struct {

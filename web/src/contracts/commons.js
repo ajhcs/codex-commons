@@ -75,3 +75,39 @@ export const MAX_TASK_DEPENDENCIES = 20;
 export const MAX_TASK_EVENTS = 50;
 export const MAX_WIKI_REVISIONS = 100;
 export const MAX_API_RESPONSE_BYTES = 1 << 20;
+
+/**
+ * Slice 14 keeps the browser auth machine explicit. These values are UI state,
+ * not claims about the Codex account or the Commons session.
+ */
+export const AUTH_STATES = /** @type {const} */ ([
+  "loading",
+  "unauthenticated",
+  "pairing",
+  "needs_profile",
+  "authenticated",
+  "error",
+]);
+export const AUTH_PAIRING_STATES = /** @type {const} */ ([
+  "waiting_for_user",
+  "needs_profile",
+  "failed",
+  "expired",
+  "cancelled",
+]);
+export const HUMAN_HANDLE_PATTERN = /^[a-z0-9](?:[a-z0-9-]{1,62}[a-z0-9])?$/;
+export const MAX_HUMAN_DISPLAY_NAME_LENGTH = 200;
+export const MAX_HUMAN_HANDLE_LENGTH = 64;
+
+export function isValidHumanDisplayName(value) {
+  return typeof value === "string"
+    && value.trim().length > 0
+    && value.trim().length <= MAX_HUMAN_DISPLAY_NAME_LENGTH;
+}
+
+export function isValidHumanHandle(value) {
+  return typeof value === "string"
+    && value.length >= 3
+    && value.length <= MAX_HUMAN_HANDLE_LENGTH
+    && HUMAN_HANDLE_PATTERN.test(value);
+}

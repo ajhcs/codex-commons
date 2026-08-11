@@ -16,49 +16,59 @@ const HumanSessionCookieName = "commons_session"
 const humanSessionCookie = HumanSessionCookieName
 
 type HumanAuthConfig struct {
-	AdminSecret string
-	DisplayName string
-	Handle      string
-	Actor       string
-	Principal   string
-	Session     string
-	Host        string
-	SessionTTL  time.Duration
+	AdminSecret     string
+	DisplayName     string
+	Handle          string
+	Actor           string
+	Principal       string
+	Session         string
+	Host            string
+	SessionTTL      time.Duration
+	RecoveryEnabled bool
+	CodexEnabled    bool
 }
 
 type humanSession struct {
-	csrf      string
-	createdAt time.Time
-	expiresAt time.Time
+	csrf            string
+	createdAt       time.Time
+	expiresAt       time.Time
+	authMethod      string
+	bindingRevision int64
 }
 
 type humanAuth struct {
-	mu           sync.Mutex
-	secretDigest [sha256.Size]byte
-	displayName  string
-	principalID  string
-	handle       string
-	actor        string
-	session      string
-	host         string
-	ttl          time.Duration
-	sessions     map[string]humanSession
-	failures     []time.Time
-	now          func() time.Time
+	mu              sync.Mutex
+	secretDigest    [sha256.Size]byte
+	displayName     string
+	principalID     string
+	handle          string
+	actor           string
+	session         string
+	host            string
+	ttl             time.Duration
+	recoveryEnabled bool
+	codexEnabled    bool
+	sessions        map[string]humanSession
+	failures        []time.Time
+	now             func() time.Time
 }
 
 type authPrincipal struct {
 	Credential
-	Kind      string
-	Principal string
-	csrfToken string
-	cookie    string
+	Kind            string
+	Principal       string
+	csrfToken       string
+	cookie          string
+	authMethod      string
+	bindingRevision int64
 }
 
 type authSessionResult struct {
-	Authenticated bool               `json:"authenticated"`
-	Principal     *authPrincipalView `json:"principal,omitempty"`
-	CSRFToken     string             `json:"csrf_token,omitempty"`
+	Authenticated   bool               `json:"authenticated"`
+	Principal       *authPrincipalView `json:"principal,omitempty"`
+	CSRFToken       string             `json:"csrf_token,omitempty"`
+	AuthMethod      string             `json:"auth_method,omitempty"`
+	ProfileRevision int64              `json:"profile_revision,omitempty"`
 }
 
 type authPrincipalView struct {
@@ -73,7 +83,7 @@ type loginRequest struct {
 }
 
 func newHumanAuth(config *HumanAuthConfig) *humanAuth {
-	if config == nil || config.AdminSecret == "" {
+	if config == nil || !config.RecoveryEnabled && !config.CodexEnabled {
 		return nil
 	}
 	principal, handle := config.Principal, config.Handle
@@ -88,21 +98,23 @@ func newHumanAuth(config *HumanAuthConfig) *humanAuth {
 		ttl = 12 * time.Hour
 	}
 	return &humanAuth{
-		secretDigest: sha256.Sum256([]byte(config.AdminSecret)),
-		displayName:  config.DisplayName,
-		actor:        config.Actor,
-		principalID:  principal,
-		handle:       handle,
-		session:      config.Session,
-		host:         config.Host,
-		ttl:          ttl,
-		sessions:     make(map[string]humanSession),
-		now:          time.Now,
+		secretDigest:    sha256.Sum256([]byte(config.AdminSecret)),
+		displayName:     config.DisplayName,
+		actor:           config.Actor,
+		principalID:     principal,
+		handle:          handle,
+		session:         config.Session,
+		host:            config.Host,
+		ttl:             ttl,
+		recoveryEnabled: config.RecoveryEnabled,
+		codexEnabled:    config.CodexEnabled,
+		sessions:        make(map[string]humanSession),
+		now:             time.Now,
 	}
 }
 
 func (a *humanAuth) verifySecret(value string) bool {
-	if a == nil {
+	if a == nil || !a.recoveryEnabled || a.secretDigest == [sha256.Size]byte{} {
 		return false
 	}
 	digest := sha256.Sum256([]byte(value))
@@ -143,9 +155,21 @@ func (a *humanAuth) recordFailure() {
 	}
 }
 
-func (a *humanAuth) create() (string, humanSession, bool) {
+func (a *humanAuth) create(methodAndRevision ...any) (string, humanSession, bool) {
 	if a == nil {
 		return "", humanSession{}, false
+	}
+	method := "recovery"
+	revision := int64(0)
+	if len(methodAndRevision) > 0 {
+		if value, ok := methodAndRevision[0].(string); ok && value != "" {
+			method = value
+		}
+	}
+	if len(methodAndRevision) > 1 {
+		if value, ok := methodAndRevision[1].(int64); ok && value >= 0 {
+			revision = value
+		}
 	}
 	token, ok := randomAuthToken()
 	if !ok {
@@ -156,7 +180,7 @@ func (a *humanAuth) create() (string, humanSession, bool) {
 		return "", humanSession{}, false
 	}
 	now := a.now().UTC()
-	session := humanSession{csrf: csrf, createdAt: now, expiresAt: now.Add(a.ttl)}
+	session := humanSession{csrf: csrf, createdAt: now, expiresAt: now.Add(a.ttl), authMethod: method, bindingRevision: revision}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.failures = nil
@@ -205,6 +229,35 @@ func (a *humanAuth) remove(token string) {
 	a.mu.Unlock()
 }
 
+func (a *humanAuth) revokeCodexSessions() {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for token, session := range a.sessions {
+		if session.authMethod == "codex" {
+			delete(a.sessions, token)
+		}
+	}
+}
+
+func (a *humanAuth) updateIdentity(displayName, handle string, revision int64) {
+	if a == nil || strings.TrimSpace(displayName) == "" || handle == "" {
+		return
+	}
+	a.mu.Lock()
+	a.displayName = displayName
+	a.handle = handle
+	for token, session := range a.sessions {
+		if revision > 0 && (session.authMethod == "codex" || session.authMethod == "recovery") {
+			session.bindingRevision = revision
+			a.sessions[token] = session
+		}
+	}
+	a.mu.Unlock()
+}
+
 func randomAuthToken() (string, bool) {
 	var raw [32]byte
 	if _, err := rand.Read(raw[:]); err != nil {
@@ -214,6 +267,11 @@ func randomAuthToken() (string, bool) {
 }
 
 func (a *humanAuth) principal() authPrincipal {
+	if a == nil {
+		return authPrincipal{}
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	return authPrincipal{Kind: "human", Principal: a.principalID, Credential: Credential{
 		Actor: a.actor, Session: a.session, Host: a.host,
 	}}
@@ -223,10 +281,21 @@ func (a *humanAuth) result(session *humanSession) authSessionResult {
 	if a == nil || session == nil {
 		return authSessionResult{Authenticated: false}
 	}
+	method := session.authMethod
+	if method == "" {
+		method = "recovery"
+	}
+	a.mu.Lock()
+	principal := a.principalID
+	handle := a.handle
+	displayName := a.displayName
+	a.mu.Unlock()
 	return authSessionResult{
-		Authenticated: true,
-		Principal:     &authPrincipalView{Kind: "human", Principal: a.principalID, Handle: a.handle, DisplayName: a.displayName},
-		CSRFToken:     session.csrf,
+		Authenticated:   true,
+		Principal:       &authPrincipalView{Kind: "human", Principal: principal, Handle: handle, DisplayName: displayName},
+		CSRFToken:       session.csrf,
+		AuthMethod:      method,
+		ProfileRevision: session.bindingRevision,
 	}
 }
 

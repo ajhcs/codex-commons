@@ -1,5 +1,5 @@
-import { ATTACHMENT_KINDS, ATTENTION_SEVERITIES, COMMENT_INTENTS, EXECUTION_STATES, PERSPECTIVE_SCOPES, MAX_BROWSE_LIMIT, MAX_NOTIFICATIONS, MAX_OVERVIEW_LIMIT, POST_KINDS, POST_STATES } from "../contracts/commons.js";
-import { contractFixtures } from "./fixtures.js";
+import { ATTACHMENT_KINDS, ATTENTION_SEVERITIES, AUTH_PAIRING_STATES, COMMENT_INTENTS, EXECUTION_STATES, HUMAN_HANDLE_PATTERN, isValidHumanDisplayName, isValidHumanHandle, PERSPECTIVE_SCOPES, MAX_BROWSE_LIMIT, MAX_NOTIFICATIONS, MAX_OVERVIEW_LIMIT, POST_KINDS, POST_STATES } from "../contracts/commons.js";
+import { contractFixtures, codexAuthFixtures } from "./fixtures.js";
 import { postFixtures, slice13FixtureTimes } from "./postFixtures.js";
 import { createProjectCoreHTTPMethods, projectCoreFixtureMethods } from "./projectCoreAdapter.js";
 import { normalizeProvenance } from "./provenance.js";
@@ -328,20 +328,91 @@ function normalizeSession(value) {
   value = requireRecord(value);
   if (typeof value.authenticated !== "boolean") throw invalidPayload();
   if (!value.authenticated) {
-    return { authenticated: false, principal: null, csrfToken: "" };
+    return { authenticated: false, principal: null, csrfToken: "", authMethod: "", profileRevision: 0 };
   }
   const principal = requireRecord(value.principal);
   if (principal.kind !== "human") throw invalidPayload();
+  const authMethod = value.auth_method == null ? "recovery" : value.auth_method;
+  if (!['codex', 'recovery'].includes(authMethod)) throw invalidPayload();
+  const profileRevision = value.profile_revision == null ? 0 : value.profile_revision;
+  if (!Number.isInteger(profileRevision) || profileRevision < 0) throw invalidPayload();
+  const handle = typeof principal.handle === "string" ? principal.handle : "";
+  if (handle && !isValidHumanHandle(handle)) throw invalidPayload();
+  if (!isValidHumanDisplayName(principal.display_name)) throw invalidPayload();
   return {
     authenticated: true,
     principal: {
       kind: "human",
       principal: requireString(principal.principal),
-      handle: typeof principal.handle === "string" ? principal.handle : "",
+      handle,
       displayName: requireString(principal.display_name),
     },
     csrfToken: requireString(value.csrf_token),
+    authMethod,
+    profileRevision,
   };
+}
+
+function normalizeCodexStatus(value) {
+  value = requireRecord(value);
+  if (typeof value.available !== "boolean"
+    || !['unbound', 'bound'].includes(value.binding_state)
+    || !['signed_in', 'signed_out', 'unknown', 'unavailable'].includes(value.account_state)
+    || typeof value.first_bind_allowed !== "boolean") throw invalidPayload();
+  return {
+    available: value.available,
+    bindingState: value.binding_state,
+    accountState: value.account_state,
+    firstBindAllowed: value.first_bind_allowed,
+  };
+}
+
+function normalizeVerificationURL(value) {
+  if (typeof value !== "string" || value.length < 1 || value.length > 2048 || /[\r\n]/.test(value)) throw invalidPayload();
+  let parsed;
+  try { parsed = new URL(value); } catch { throw invalidPayload(); }
+  if (parsed.protocol !== "https:" || parsed.hostname !== "auth.openai.com" || parsed.port || parsed.username || parsed.password || parsed.hash || !parsed.pathname) throw invalidPayload();
+  return value;
+}
+
+function normalizeCodexStart(value) {
+  value = requireRecord(value);
+  const attemptID = requireString(value.attempt_id);
+  const userCode = requireString(value.user_code);
+  if (attemptID.length > 200 || userCode.length > 64 || userCode.trim() !== userCode || [...userCode].some((character) => character < "!" || character > "~")) throw invalidPayload();
+  if (typeof value.expires_at !== "string") throw invalidPayload();
+  const expiresAt = new Date(value.expires_at);
+  if (!Number.isFinite(expiresAt.getTime())) throw invalidPayload();
+  if (!Number.isInteger(value.poll_after_ms) || value.poll_after_ms < 250 || value.poll_after_ms > 60000) throw invalidPayload();
+  return {
+    attemptID,
+    verificationURL: normalizeVerificationURL(value.verification_url),
+    userCode,
+    expiresAt: expiresAt.toISOString(),
+    pollAfterMS: value.poll_after_ms,
+  };
+}
+
+function normalizeCodexPoll(value) {
+  value = requireRecord(value);
+  if (value.authenticated === true) {
+    return { state: "authenticated", session: normalizeSession(value) };
+  }
+  const state = requireString(value.state);
+  if (!AUTH_PAIRING_STATES.includes(state)) throw invalidPayload();
+  const pollAfterMS = value.poll_after_ms == null ? 0 : value.poll_after_ms;
+  if (!Number.isInteger(pollAfterMS) || pollAfterMS < 0 || pollAfterMS > 60000) throw invalidPayload();
+  const code = value.code == null ? "" : requireString(value.code);
+  const message = value.message == null ? "" : requireString(value.message);
+  return { state, code, message, pollAfterMS };
+}
+
+function normalizeProfileInput(input) {
+  const value = requireRecord(input);
+  const displayName = typeof value.display_name === "string" ? value.display_name.trim() : "";
+  const handle = typeof value.handle === "string" ? value.handle.trim().toLowerCase() : "";
+  if (!isValidHumanDisplayName(displayName) || !HUMAN_HANDLE_PATTERN.test(handle) || !isValidHumanHandle(handle)) throw invalidPayload();
+  return { displayName, handle };
 }
 
 function normalizeMutation(value) {
@@ -488,11 +559,35 @@ export function createHTTPAdapter(options) {
     async readSession(signal) {
       return safelyNormalize(normalizeSession, await transport.readSession(signal));
     },
+    async readCodexStatus(signal) {
+      return safelyNormalize(normalizeCodexStatus, await transport.readCodexStatus(signal));
+    },
+    async startCodexPairing(signal) {
+      return safelyNormalize(normalizeCodexStart, await transport.startCodexPairing(signal));
+    },
+    async pollCodexPairing(attemptID, signal) {
+      if (typeof attemptID !== "string" || !attemptID) throw new CommonsAPIError("Codex sign-in attempt is required.", { code: "invalid_attempt" });
+      return safelyNormalize(normalizeCodexPoll, await transport.pollCodexPairing(attemptID, signal));
+    },
+    async completeCodexProfile(attemptID, profile, signal) {
+      if (typeof attemptID !== "string" || !attemptID) throw new CommonsAPIError("Codex sign-in attempt is required.", { code: "invalid_attempt" });
+      const normalized = normalizeProfileInput({ display_name: profile?.displayName, handle: profile?.handle });
+      return safelyNormalize(normalizeSession, await transport.completeCodexProfile({ attempt_id: attemptID, display_name: normalized.displayName, handle: normalized.handle }, signal));
+    },
+    async cancelCodexPairing(attemptID, signal) {
+      if (typeof attemptID !== "string" || !attemptID) throw new CommonsAPIError("Codex sign-in attempt is required.", { code: "invalid_attempt" });
+      return safelyNormalize(normalizeSession, await transport.cancelCodexPairing(attemptID, signal));
+    },
     async login(secret, idempotencyKey, signal) {
       return safelyNormalize(normalizeSession, await transport.login(secret, idempotencyKey, signal));
     },
     async logout(csrfToken, idempotencyKey, signal) {
       return safelyNormalize(normalizeSession, await transport.logout(csrfToken, idempotencyKey, signal));
+    },
+    async updateProfile(profile, profileRevision, csrfToken, idempotencyKey, signal) {
+      const normalized = normalizeProfileInput({ display_name: profile?.displayName, handle: profile?.handle });
+      if (!Number.isInteger(profileRevision) || profileRevision < 1) throw new CommonsAPIError("A current profile revision is required.", { code: "invalid_profile_revision" });
+      return safelyNormalize(normalizeSession, await transport.updateProfile({ display_name: normalized.displayName, handle: normalized.handle, base_revision: profileRevision }, csrfToken, idempotencyKey, signal));
     },
     async readPosts(query, signal) {
       return safelyNormalize(normalizePostsPage, await transport.readPosts(query, signal));
@@ -542,6 +637,8 @@ const fixtureHuman = Object.freeze({
   handle: "taylor",
   display_name: "Taylor Reed",
 });
+let fixtureHumanIdentity = { ...fixtureHuman };
+const fixtureCodexState = { attemptID: "", pollCount: 0, needsProfile: false, authMethod: "recovery", profileRevision: 0 };
 const fixtureNotificationReads = new Map();
 const fixtureNotificationRecords = Object.freeze([{
   id: "NOTIFICATION-2411-61",
@@ -557,22 +654,70 @@ const fixtureSlice13Contributors = Object.freeze([
 ]);
 
 export const fixtureAdapter = {
+  async readCodexStatus(signal) {
+    return wait({
+      ...codexAuthFixtures.status,
+      binding_state: fixtureHumanIdentity.principal === "human:local-admin" ? "bound" : codexAuthFixtures.status.binding_state,
+      account_state: fixtureHumanIdentity.principal === "human:local-admin" ? "signed_in" : codexAuthFixtures.status.account_state,
+    }, signal);
+  },
+  async startCodexPairing(signal) {
+    fixtureCodexState.attemptID = codexAuthFixtures.start.attempt_id;
+    fixtureCodexState.pollCount = 0;
+    fixtureCodexState.needsProfile = false;
+    return wait(codexAuthFixtures.start, signal);
+  },
+  async pollCodexPairing(attemptID, signal) {
+    if (attemptID !== fixtureCodexState.attemptID) throw new CommonsAPIError("That Codex sign-in attempt is no longer available.", { code: "pairing_not_found", status: 404 });
+    fixtureCodexState.pollCount += 1;
+    const result = fixtureCodexState.pollCount < 2 ? codexAuthFixtures.poll_waiting : codexAuthFixtures.poll_needs_profile;
+    fixtureCodexState.needsProfile = fixtureCodexState.pollCount >= 2;
+    return wait(result, signal);
+  },
+  async completeCodexProfile(attemptID, profile, signal) {
+    if (attemptID !== fixtureCodexState.attemptID || !fixtureCodexState.needsProfile) throw new CommonsAPIError("This Codex setup step is no longer available.", { code: "profile_unavailable", status: 409 });
+    fixtureHumanIdentity = { ...fixtureHumanIdentity, principal: "human:local-admin", handle: profile.handle, display_name: profile.displayName };
+    fixtureCodexState.authMethod = "codex";
+    fixtureCodexState.profileRevision = 1;
+    fixtureCodexState.attemptID = "";
+    fixtureCodexState.needsProfile = false;
+    return wait(normalizeSession({
+      authenticated: true,
+      principal: { kind: "human", principal: fixtureHumanIdentity.principal, handle: fixtureHumanIdentity.handle, display_name: fixtureHumanIdentity.display_name },
+      csrf_token: codexAuthFixtures.profile_session.csrf_token,
+      auth_method: "codex",
+      profile_revision: 1,
+    }), signal);
+  },
+  async cancelCodexPairing(_attemptID, signal) {
+    fixtureCodexState.attemptID = "";
+    fixtureCodexState.needsProfile = false;
+    return wait(normalizeSession({ authenticated: false, principal: null }), signal);
+  },
   async readContributors(query, signal) {
     let records = [...fixtureSlice13Contributors, ...contractFixtures.people.items.map((item, index) => ({ kind: "agent", principal: item.session, handle: "agent-" + String(index + 1).padStart(6, "0"), session: item.session, purpose: item.purpose || "", host: item.host, project: item.project ? { id: item.project, name: item.project_name || item.project } : null, project_relationship: query.project === item.project ? "same_project" : "project", addressable: true, reachable: Boolean(item.host_connected), interpretation: item.host_connected ? "Addressable and currently connected; delivery is not guaranteed." : "Addressable registry session; no current reachability evidence.", host_connected: Boolean(item.host_connected), execution: item.execution, last_activity: item.last_activity }))];
-    if (!query.project) records.push({ ...fixtureHuman, project_relationship: "none", addressable: true, reachable: false, interpretation: "Stable local human principal; browser session state is not recipient identity.", host_connected: false, execution: "not_applicable" });
+    if (!query.project) records.push({ ...fixtureHumanIdentity, project_relationship: "none", addressable: true, reachable: false, interpretation: "Stable local human principal; browser session state is not recipient identity.", host_connected: false, execution: "not_applicable" });
     if (query.q) { const term = query.q.toLowerCase(); records = records.filter((item) => (item.handle + " " + item.purpose).toLowerCase().includes(term)); }
     if (query.project) records = records.filter((item) => item.project?.id === query.project);
     const result = page(records, query.cursor, query.limit);
     return wait(normalizeContributors({ limit: query.limit, items: result.items, next_cursor: result.nextCursor }), signal);
   },
   async readSession(signal) {
-    return wait({ authenticated: true, principal: { kind: "human", principal: fixtureHuman.principal, handle: fixtureHuman.handle, displayName: fixtureHuman.display_name }, csrfToken: "fixture-csrf" }, signal);
+    return wait(normalizeSession({ authenticated: true, principal: { ...fixtureHumanIdentity }, csrf_token: "fixture-csrf", auth_method: fixtureCodexState.authMethod, profile_revision: fixtureCodexState.profileRevision }), signal);
   },
   async login(_secret, _idempotencyKey, signal) {
-    return wait({ authenticated: true, principal: { kind: "human", principal: fixtureHuman.principal, handle: fixtureHuman.handle, displayName: fixtureHuman.display_name }, csrfToken: "fixture-csrf" }, signal);
+    fixtureCodexState.authMethod = "recovery";
+    fixtureCodexState.profileRevision = fixtureHumanIdentity.principal === "human:local-admin" ? 1 : 0;
+    return wait(normalizeSession({ authenticated: true, principal: { ...fixtureHumanIdentity }, csrf_token: "fixture-csrf", auth_method: "recovery", profile_revision: fixtureCodexState.profileRevision }), signal);
   },
   async logout(_csrfToken, _idempotencyKey, signal) {
-    return wait({ authenticated: false, principal: null, csrfToken: "" }, signal);
+    return wait(normalizeSession({ authenticated: false, principal: null }), signal);
+  },
+  async updateProfile(profile, _profileRevision, _csrfToken, _idempotencyKey, signal) {
+    fixtureHumanIdentity = { ...fixtureHumanIdentity, handle: profile.handle, display_name: profile.displayName };
+    fixtureCodexState.authMethod = "codex";
+    fixtureCodexState.profileRevision = Math.max(1, fixtureCodexState.profileRevision);
+    return wait(normalizeSession({ authenticated: true, principal: { ...fixtureHumanIdentity }, csrf_token: "fixture-csrf", auth_method: "codex", profile_revision: fixtureCodexState.profileRevision }), signal);
   },
   async readNotifications(query, signal) {
     let records = fixtureNotificationRecords.map((item) => fixtureNotificationReads.has(item.id) ? { ...item, read_at: fixtureNotificationReads.get(item.id) } : item);

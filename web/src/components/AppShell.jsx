@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { commonsAdapter } from "../data/adapter.js";
 import { useAuthSession } from "../hooks/useAuthSession.js";
 import { useNotifications } from "../hooks/NotificationContext.jsx";
-import { createIdempotencyKey, LoginDialog, SessionControl } from "./AuthControls.jsx";
+import { LoginDialog, ProfileDialog, SessionControl } from "./AuthControls.jsx";
 import { SettingsDialog } from "./SettingsDialog.jsx";
 
 import BookOpen from "../icons/BookOpen.tsx";
@@ -22,6 +21,7 @@ export function AppShell({ route, onNavigate, railContent = null, children }) {
   const notificationButtonRef = useRef(null);
   const [collapsed, setCollapsed] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [accountMessage, setAccountMessage] = useState("");
   const primaryRoute = route === "project" ? "projects" : route === "post" ? "posts" : route;
@@ -76,12 +76,10 @@ export function AppShell({ route, onNavigate, railContent = null, children }) {
   async function signOut() {
     if (!auth.session?.authenticated) return;
     try {
-      const session = await commonsAdapter.logout(auth.session.csrfToken, createIdempotencyKey());
-      auth.accept(session);
+      await auth.logout();
       setAccountMessage("Signed out");
     } catch (error) {
       setAccountMessage(error.message);
-      if (error.status === 401 || error.code === "csrf_failed") auth.expire();
     }
   }
 
@@ -132,7 +130,7 @@ export function AppShell({ route, onNavigate, railContent = null, children }) {
             </button>
             <button className="rail-settings" type="button" onClick={() => setSettingsOpen(true)}><span aria-hidden="true">Aa</span><strong>Settings</strong></button>
           </div>
-          <SessionControl status={auth.status} session={auth.session} onSignIn={() => setLoginOpen(true)} onSignOut={signOut} />
+          <SessionControl status={auth.status} session={auth.session} onSignIn={() => setLoginOpen(true)} onSignOut={signOut} onEditProfile={() => setProfileOpen(true)} />
           {accountMessage ? <small role="status">{accountMessage}</small> : null}
         </div>
       </aside>
@@ -140,6 +138,7 @@ export function AppShell({ route, onNavigate, railContent = null, children }) {
       </div>
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <LoginDialog open={loginOpen} onClose={() => setLoginOpen(false)} onAuthenticated={authenticated} />
+      <ProfileDialog open={profileOpen} onClose={() => setProfileOpen(false)} />
     </>
   );
 }

@@ -117,7 +117,7 @@ func TestProjectCoreRealStoreHTTPAuthorityAndEncodedIDs(t *testing.T) {
 	}
 	handler := httpapi.NewHandler(backend, httpapi.Config{
 		Credentials: []httpapi.Credential{{BearerToken: "agent-secret", Actor: "agent-1", Session: "S-agent", Host: "plumbob"}},
-		HumanAuth:   &httpapi.HumanAuthConfig{AdminSecret: projectCoreAdminSecret, DisplayName: "Admin", Actor: "local-admin", Session: "human-local-admin", Host: "browser", SessionTTL: time.Hour},
+		HumanAuth:   &httpapi.HumanAuthConfig{AdminSecret: projectCoreAdminSecret, DisplayName: "Admin", Actor: "local-admin", Session: "human-local-admin", Host: "browser", SessionTTL: time.Hour, RecoveryEnabled: true},
 	})
 
 	for target, id := range map[string]string{

@@ -79,16 +79,17 @@ func (s *Service) Notifications(ctx context.Context, request NotificationListReq
 	if more {
 		page.Items = page.Items[:limit]
 	}
+	displayName, handle := s.humanIdentity()
 	out := NotificationListResult{Items: make([]NotificationItem, 0, len(page.Items)), UnreadCount: page.UnreadCount}
 	for _, item := range page.Items {
 		actor := NotificationPrincipal{Kind: item.ActorKind, Principal: item.ActorPrincipal, Handle: item.ActorHandle, Purpose: item.ActorPurpose}
 		if item.ActorKind == "human" {
-			actor.Handle, actor.DisplayName, actor.Purpose = s.humanHandle, s.humanDisplayName, ""
+			actor.Handle, actor.DisplayName, actor.Purpose = handle, displayName, ""
 		}
 		out.Items = append(out.Items, NotificationItem{
 			ID: item.ID,
 			Recipient: NotificationPrincipal{Kind: "human", Principal: domain.HumanLocalPrincipal,
-				Handle: s.humanHandle, DisplayName: s.humanDisplayName},
+				Handle: handle, DisplayName: displayName},
 			Source: NotificationSource{Kind: item.SourceKind, PostRef: item.PostID, CommentRef: item.CommentID},
 			Actor:  actor, Snippet: item.Snippet, CreatedAt: item.CreatedAt, ReadAt: item.ReadAt,
 		})

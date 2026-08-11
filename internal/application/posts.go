@@ -204,21 +204,23 @@ func appProject(item *domain.PostProject) *PostProject {
 }
 
 func (s *Service) appAuthor(item domain.PostAuthor) PostAuthor {
+	displayName, handle := s.humanIdentity()
 	out := PostAuthor{Kind: item.Kind, Principal: item.Principal, Handle: item.Handle, Session: item.SessionID, Purpose: item.Purpose,
 		Provenance: attestedProvenance("", item.SessionID, item.Purpose)}
 	if item.Kind == "human" {
-		out.Handle, out.DisplayName, out.Purpose = s.humanHandle, s.humanDisplayName, ""
+		out.Handle, out.DisplayName, out.Purpose = handle, displayName, ""
 	}
 	return out
 }
 
 func (s *Service) appMentions(items []domain.MentionTarget) []MentionTarget {
+	displayName, handle := s.humanIdentity()
 	out := make([]MentionTarget, 0, len(items))
 	for _, item := range items {
 		target := MentionTarget{Kind: item.Kind, Principal: item.Principal, Session: item.SessionID, Handle: item.Handle, Purpose: item.Purpose}
 		if item.Kind == "human" {
-			target.Handle = s.humanHandle
-			target.DisplayName = s.humanDisplayName
+			target.Handle = handle
+			target.DisplayName = displayName
 		} else {
 			target.Provenance = attestedProvenance("", item.SessionID, item.Purpose)
 		}
@@ -419,11 +421,12 @@ func (s *Service) LookupContributors(ctx context.Context, request ContributorLoo
 		}
 		out.Items = append(out.Items, item)
 	}
+	displayName, handle := s.humanIdentity()
 	search := strings.ToLower(request.Search)
-	humanMatches := search == "" || strings.Contains(strings.ToLower(s.humanHandle), search) || strings.Contains(strings.ToLower(s.humanDisplayName), search) || strings.Contains(domain.HumanLocalPrincipal, search)
-	humanAfter := after == nil || strings.ToLower(s.humanHandle) > strings.ToLower(after.Text) || strings.EqualFold(s.humanHandle, after.Text) && domain.HumanLocalPrincipal > after.ID
+	humanMatches := search == "" || strings.Contains(strings.ToLower(handle), search) || strings.Contains(strings.ToLower(displayName), search) || strings.Contains(domain.HumanLocalPrincipal, search)
+	humanAfter := after == nil || strings.ToLower(handle) > strings.ToLower(after.Text) || strings.EqualFold(handle, after.Text) && domain.HumanLocalPrincipal > after.ID
 	if request.Project == "" && humanMatches && humanAfter {
-		out.Items = append(out.Items, ContributorItem{Kind: "human", Principal: domain.HumanLocalPrincipal, Handle: s.humanHandle, DisplayName: s.humanDisplayName, Addressable: true, ProjectRelationship: "none", Execution: "not_applicable", Interpretation: "Stable local human principal; browser session state is not recipient identity."})
+		out.Items = append(out.Items, ContributorItem{Kind: "human", Principal: domain.HumanLocalPrincipal, Handle: handle, DisplayName: displayName, Addressable: true, ProjectRelationship: "none", Execution: "not_applicable", Interpretation: "Stable local human principal; browser session state is not recipient identity."})
 	}
 	sort.Slice(out.Items, func(i, j int) bool {
 		left, right := strings.ToLower(out.Items[i].Handle), strings.ToLower(out.Items[j].Handle)

@@ -19,6 +19,7 @@ import (
 
 	"codex-commons/internal/appbackend"
 	"codex-commons/internal/application"
+	"codex-commons/internal/codexauth"
 	"codex-commons/internal/domain"
 	"codex-commons/internal/httpapi"
 	"codex-commons/internal/presence"
@@ -35,9 +36,13 @@ type App struct {
 	handler  http.Handler
 	store    *commonsstore.Store
 	presence *presence.Registry
+	codex    codexauth.Client
 }
 
 func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
+	if config.CodexAuth && config.HumanAuth == nil {
+		config.HumanAuth = &httpapi.HumanAuthConfig{DisplayName: "Local admin", Handle: "local-admin", Principal: domain.HumanLocalPrincipal, Actor: "local-admin", Session: domain.HumanLegacySession, Host: "browser", SessionTTL: 12 * time.Hour, CodexEnabled: true}
+	}
 	if config.HumanAuth != nil {
 		if config.HumanAuth.Principal == "" {
 			config.HumanAuth.Principal = domain.HumanLocalPrincipal
@@ -57,8 +62,20 @@ func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 	failed := true
+	var codexClient codexauth.Client = config.CodexClient
+	if config.CodexAuth && codexClient == nil {
+		codexClient, err = codexauth.NewManagedProcess(ctx, codexauth.ProcessConfig{Executable: config.CodexBin, Env: codexauth.ApprovedEnvironment(os.Environ())})
+		if err != nil {
+			// Codex is an optional capability. Keep Commons available and let
+			// /v1/auth/codex/status report the unavailable state.
+			codexClient = codexauth.NewUnavailable()
+		}
+	}
 	defer func() {
 		if failed {
+			if codexClient != nil {
+				_ = codexClient.Close()
+			}
 			_ = store.Close()
 		}
 	}()
@@ -83,9 +100,16 @@ func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
 			return nil, fmt.Errorf("register configured agent session %q: %w", credential.Session, err)
 		}
 	}
+	humanDisplayName, humanHandle := "Local admin", "local-admin"
 	if config.HumanAuth != nil {
+		humanDisplayName, humanHandle = config.HumanAuth.DisplayName, config.HumanAuth.Handle
+		if binding, bindingErr := store.GetHumanAccountBinding(ctx); bindingErr == nil {
+			humanDisplayName, humanHandle = binding.DisplayName, binding.Handle
+		} else if !errors.Is(bindingErr, domain.ErrNotFound) {
+			return nil, fmt.Errorf("load human account binding: %w", bindingErr)
+		}
 		if err := store.UpsertSession(ctx, domain.Session{
-			ID: config.HumanAuth.Session, Host: config.HumanAuth.Host, Purpose: config.HumanAuth.DisplayName,
+			ID: config.HumanAuth.Session, Host: config.HumanAuth.Host, Purpose: humanDisplayName,
 		}); err != nil {
 			return nil, fmt.Errorf("register human admin session: %w", err)
 		}
@@ -101,7 +125,9 @@ func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
 	}
 	service := application.New(store, live, nil)
 	if config.HumanAuth != nil {
-		service.ConfigureHumanIdentity(config.HumanAuth.DisplayName, config.HumanAuth.Handle)
+		config.HumanAuth.DisplayName = humanDisplayName
+		config.HumanAuth.Handle = humanHandle
+		service.ConfigureHumanIdentity(humanDisplayName, humanHandle)
 	}
 	backend, err := appbackend.New(legacy, service)
 	if err != nil {
@@ -118,7 +144,13 @@ func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
 			BearerToken: anonymousToken, Actor: "human-browser", Session: "browser-lan", Host: "plumbob",
 		})
 	}
-	api := httpapi.NewHandler(backend, httpapi.Config{Credentials: credentials, HumanAuth: config.HumanAuth, Version: config.Version})
+	apiConfig := httpapi.Config{Credentials: credentials, ExpectedHost: config.Listen, HumanAuth: config.HumanAuth, HumanBindingStore: store, HumanAuthEvents: store, OnHumanIdentityUpdated: func(displayName, handle string, _ int64) {
+		service.ConfigureHumanIdentity(displayName, handle)
+	}, Version: config.Version}
+	if config.CodexAuth && codexClient != nil {
+		apiConfig.CodexAuth = &httpapi.CodexAuthConfig{Client: codexClient, BindingKey: config.CodexBindingKey, AllowFirstBindLAN: config.AllowFirstCodexBindLAN}
+	}
+	api := httpapi.NewHandler(backend, apiConfig)
 	web := os.DirFS(config.WebDir)
 	if _, err := fs.Stat(web, "index.html"); err != nil {
 		return nil, fmt.Errorf("web index: %w", err)
@@ -128,7 +160,7 @@ func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
 		return nil, fmt.Errorf("build web handler: %w", err)
 	}
 	failed = false
-	return &App{config: config, handler: handler, store: store, presence: live}, nil
+	return &App{config: config, handler: handler, store: store, presence: live, codex: codexClient}, nil
 }
 
 func (a *App) Handler() http.Handler { return a.handler }
@@ -136,6 +168,9 @@ func (a *App) Handler() http.Handler { return a.handler }
 func (a *App) Close() error {
 	if a == nil || a.store == nil {
 		return nil
+	}
+	if a.codex != nil {
+		_ = a.codex.Close()
 	}
 	return a.store.Close()
 }

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"codex-commons/internal/codexauth"
 )
 
 const (
@@ -30,16 +32,22 @@ type Credential struct {
 }
 
 type Config struct {
-	Credentials     []Credential
-	MaxRequestBytes int64
-	Version         string
-	HumanAuth       *HumanAuthConfig
+	Credentials            []Credential
+	MaxRequestBytes        int64
+	ExpectedHost           string
+	Version                string
+	HumanAuth              *HumanAuthConfig
+	HumanBindingStore      HumanAccountBindingStore
+	HumanAuthEvents        HumanAuthEventStore
+	OnHumanIdentityUpdated func(displayName, handle string, revision int64)
+	CodexAuth              *CodexAuthConfig
 }
 
 type handler struct {
 	backend   Backend
 	config    Config
 	humanAuth *humanAuth
+	pairings  *pairingManager
 	serial    atomic.Uint64
 }
 
@@ -67,7 +75,15 @@ func NewHandler(backend Backend, config Config) http.Handler {
 	if config.Version == "" {
 		config.Version = "dev"
 	}
-	return &handler{backend: backend, config: config, humanAuth: newHumanAuth(config.HumanAuth)}
+	h := &handler{backend: backend, config: config, humanAuth: newHumanAuth(config.HumanAuth), pairings: newPairingManager()}
+	if config.CodexAuth != nil && config.CodexAuth.Client != nil {
+		config.CodexAuth.Client.SetEventHandler(func(event codexauth.Event) {
+			if h.humanAuth != nil && event.Kind == "account_updated" {
+				h.humanAuth.revokeCodexSessions()
+			}
+		})
+	}
+	return h
 }
 
 type headResponseWriter struct {
@@ -92,6 +108,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rid, err := h.requestID(r.Header.Get("X-Request-ID"))
 	if err != nil {
 		h.writeError(w, rid, http.StatusBadRequest, "bad_request_id", err.Error())
+		return
+	}
+	if h.config.ExpectedHost != "" && !strings.EqualFold(r.Host, h.config.ExpectedHost) {
+		h.writeError(w, rid, http.StatusMisdirectedRequest, "misdirected_request", "request Host does not match this Commons listener")
 		return
 	}
 	if h.authRoute(w, r, rid) {
@@ -562,6 +582,8 @@ func (h *handler) authenticateHuman(r *http.Request) (authPrincipal, bool) {
 	principal := h.humanAuth.principal()
 	principal.csrfToken = session.csrf
 	principal.cookie = cookie.Value
+	principal.authMethod = session.authMethod
+	principal.bindingRevision = session.bindingRevision
 	return principal, true
 }
 
