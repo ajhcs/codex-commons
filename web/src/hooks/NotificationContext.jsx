@@ -34,7 +34,7 @@ export function NotificationProvider({ children }) {
   }, [principal]);
 
   useEffect(() => {
-    if (auth.status !== "ready") return undefined;
+    if (!auth.ready) return undefined;
     if (!principal) {
       controllerRef.current?.abort();
       readControllerRef.current?.abort();

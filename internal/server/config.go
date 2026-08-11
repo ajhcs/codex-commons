@@ -8,10 +8,12 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"codex-commons/internal/codexauth"
 	"codex-commons/internal/domain"
 	"codex-commons/internal/httpapi"
 )
@@ -23,21 +25,29 @@ const (
 )
 
 type Config struct {
-	Listen                string
-	DatabasePath          string
-	WebDir                string
-	Version               string
-	Credentials           []httpapi.Credential
-	HumanAuth             *httpapi.HumanAuthConfig
-	AnonymousRead         bool
-	AllowAnonymousLAN     bool
-	AllowInsecureHumanLAN bool
-	DemoSeed              bool
-	ReadTimeout           time.Duration
-	ReadHeaderTimeout     time.Duration
-	WriteTimeout          time.Duration
-	IdleTimeout           time.Duration
-	ShutdownTimeout       time.Duration
+	Listen                 string
+	DatabasePath           string
+	WebDir                 string
+	Version                string
+	Credentials            []httpapi.Credential
+	HumanAuth              *httpapi.HumanAuthConfig
+	CodexAuth              bool
+	CodexBin               string
+	CodexBindingKeyFile    string
+	CodexBindingKey        [32]byte
+	CodexBindingKeySet     bool
+	CodexClient            codexauth.Client
+	AllowFirstCodexBindLAN bool
+	EnableRecoveryLogin    bool
+	AnonymousRead          bool
+	AllowAnonymousLAN      bool
+	AllowInsecureHumanLAN  bool
+	DemoSeed               bool
+	ReadTimeout            time.Duration
+	ReadHeaderTimeout      time.Duration
+	WriteTimeout           time.Duration
+	IdleTimeout            time.Duration
+	ShutdownTimeout        time.Duration
 }
 
 func DefaultConfig() Config {
@@ -65,6 +75,11 @@ func ParseConfig(args []string, getenv func(string) string, stderr io.Writer) (C
 	config.AllowAnonymousLAN = envBool(getenv, "COMMONS_ALLOW_ANONYMOUS_LAN")
 	config.AllowInsecureHumanLAN = envBool(getenv, "COMMONS_ALLOW_INSECURE_HUMAN_LAN")
 	config.DemoSeed = envBool(getenv, "COMMONS_DEMO_SEED")
+	config.CodexAuth = envBool(getenv, "COMMONS_CODEX_AUTH")
+	config.CodexBin = strings.TrimSpace(getenv("COMMONS_CODEX_BIN"))
+	config.CodexBindingKeyFile = strings.TrimSpace(getenv("COMMONS_CODEX_BINDING_KEY_FILE"))
+	config.AllowFirstCodexBindLAN = envBool(getenv, "COMMONS_ALLOW_FIRST_CODEX_BIND_LAN")
+	config.EnableRecoveryLogin = envBool(getenv, "COMMONS_ENABLE_RECOVERY_LOGIN")
 
 	credentialsFile := strings.TrimSpace(getenv("COMMONS_CREDENTIALS_FILE"))
 	humanSecretFile := strings.TrimSpace(getenv("COMMONS_HUMAN_ADMIN_SECRET_FILE"))
@@ -82,6 +97,11 @@ func ParseConfig(args []string, getenv func(string) string, stderr io.Writer) (C
 	flags.BoolVar(&config.AllowAnonymousLAN, "allow-anonymous-lan", config.AllowAnonymousLAN, "acknowledge anonymous-read on a non-loopback literal address")
 	flags.BoolVar(&config.AllowInsecureHumanLAN, "allow-insecure-human-lan", config.AllowInsecureHumanLAN, "acknowledge plaintext human-session cookies on a non-loopback evaluation listener")
 	flags.BoolVar(&config.DemoSeed, "demo-seed", config.DemoSeed, "idempotently seed explicit prototype data before listening")
+	flags.BoolVar(&config.CodexAuth, "codex-auth", config.CodexAuth, "enable managed Codex account authentication")
+	flags.StringVar(&config.CodexBin, "codex-bin", config.CodexBin, "absolute Codex executable path")
+	flags.StringVar(&config.CodexBindingKeyFile, "codex-binding-key-file", config.CodexBindingKeyFile, "mode-0600 private binding-key file")
+	flags.BoolVar(&config.AllowFirstCodexBindLAN, "allow-first-codex-bind-lan", config.AllowFirstCodexBindLAN, "acknowledge first Codex account binding from LAN")
+	flags.BoolVar(&config.EnableRecoveryLogin, "enable-recovery-login", config.EnableRecoveryLogin, "enable the secondary recovery-key login")
 	if err := flags.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -104,11 +124,20 @@ func ParseConfig(args []string, getenv func(string) string, stderr io.Writer) (C
 	if err != nil {
 		return Config{}, err
 	}
-	if humanSecret != "" {
+	if config.CodexAuth && config.CodexBindingKeyFile != "" {
+		config.CodexBindingKey, err = readCodexBindingKey(config.CodexBindingKeyFile)
+		if err != nil {
+			return Config{}, err
+		}
+		config.CodexBindingKeySet = true
+	}
+	if humanSecret != "" || config.CodexAuth {
 		config.HumanAuth = &httpapi.HumanAuthConfig{
 			AdminSecret: humanSecret, DisplayName: humanName, Handle: humanHandle, Principal: domain.HumanLocalPrincipal,
 			Actor: "local-admin", Session: "human-local-admin", Host: "browser",
-			SessionTTL: 12 * time.Hour,
+			SessionTTL:      12 * time.Hour,
+			RecoveryEnabled: config.EnableRecoveryLogin && humanSecret != "",
+			CodexEnabled:    config.CodexAuth,
 		}
 	}
 	if err := config.Validate(); err != nil {
@@ -139,18 +168,34 @@ func (c Config) Validate() error {
 		if !isLoopbackHost(host) && !c.AllowInsecureHumanLAN {
 			return errors.New("human auth on a plaintext non-loopback listener requires --allow-insecure-human-lan")
 		}
-		minimumSecretBytes := 24
-		if c.AllowInsecureHumanLAN {
-			minimumSecretBytes = 8
-		}
-		if len(c.HumanAuth.AdminSecret) < minimumSecretBytes || len(c.HumanAuth.AdminSecret) > 1024 {
-			return fmt.Errorf("human admin secret must be %d..1024 bytes", minimumSecretBytes)
+		if c.HumanAuth.RecoveryEnabled {
+			minimumSecretBytes := 24
+			if c.AllowInsecureHumanLAN {
+				minimumSecretBytes = 8
+			}
+			if len(c.HumanAuth.AdminSecret) < minimumSecretBytes || len(c.HumanAuth.AdminSecret) > 1024 {
+				return fmt.Errorf("human admin secret must be %d..1024 bytes", minimumSecretBytes)
+			}
+		} else if c.HumanAuth.AdminSecret != "" {
+			return errors.New("human admin secret requires --enable-recovery-login")
 		}
 		if strings.TrimSpace(c.HumanAuth.DisplayName) == "" || len(c.HumanAuth.DisplayName) > 200 ||
 			(c.HumanAuth.Handle != "" && (strings.TrimSpace(c.HumanAuth.Handle) == "" || len(c.HumanAuth.Handle) > 64)) ||
 			(c.HumanAuth.Principal != "" && c.HumanAuth.Principal != domain.HumanLocalPrincipal) ||
-			c.HumanAuth.Actor == "" || c.HumanAuth.Session == "" || c.HumanAuth.Host == "" || c.HumanAuth.SessionTTL <= 0 {
+			c.HumanAuth.Actor == "" || c.HumanAuth.Session == "" || c.HumanAuth.Host == "" || c.HumanAuth.SessionTTL <= 0 ||
+			!c.HumanAuth.RecoveryEnabled && !c.HumanAuth.CodexEnabled {
 			return errors.New("valid human admin identity, display name, and session TTL required")
+		}
+	}
+	if c.CodexAuth {
+		if !filepath.IsAbs(strings.TrimSpace(c.CodexBin)) || strings.ContainsAny(c.CodexBin, "\r\n\x00") {
+			return errors.New("managed Codex auth requires an absolute Codex executable path")
+		}
+		if !c.CodexBindingKeySet || c.CodexBindingKey == [32]byte{} {
+			return errors.New("managed Codex auth requires a loaded, non-zero binding key")
+		}
+		if !c.AllowFirstCodexBindLAN && !isLoopbackHost(host) {
+			return errors.New("managed Codex auth on a plaintext LAN listener requires explicit first-bind acknowledgement")
 		}
 	}
 	for _, credential := range c.Credentials {

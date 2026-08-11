@@ -31,6 +31,7 @@ func testWeb(t *testing.T) string {
 func request(t *testing.T, handler http.Handler, method, target string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, target, nil)
+	req.Host = "127.0.0.1:8088"
 	req.Header.Set("Accept", "application/json")
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, req)

@@ -1,5 +1,37 @@
 const now = "2026-08-09T12:00:00Z";
 
+/**
+ * Deterministic Codex pairing records used by the fixture adapter and focused
+ * auth tests. They intentionally contain only the values Commons is allowed
+ * to show; the account email and any provider credential never enter a
+ * browser fixture.
+ */
+export const codexAuthFixtures = Object.freeze({
+  status: {
+    available: true,
+    binding_state: "unbound",
+    account_state: "signed_out",
+    first_bind_allowed: true,
+  },
+  start: {
+    attempt_id: "fixture-attempt-14",
+    verification_url: "https://auth.openai.com/codex/device",
+    user_code: "FIXTURE-14",
+    expires_at: "2026-08-11T13:00:00.000Z",
+    poll_after_ms: 1500,
+  },
+  poll_waiting: { state: "waiting_for_user", poll_after_ms: 1500 },
+  poll_needs_profile: { state: "needs_profile", poll_after_ms: 0 },
+  profile_session: {
+    authenticated: true,
+    principal: { kind: "human", principal: "human:local-admin", handle: "local-admin", display_name: "Commons Operator" },
+    csrf_token: "fixture-codex-csrf",
+    auth_method: "codex",
+    profile_revision: 1,
+  },
+  cancelled: { state: "cancelled", code: "authorization_cancelled", message: "Codex authorization was cancelled." },
+});
+
 /** These objects deliberately mirror the backend's snake_case JSON. */
 export const contractFixtures = Object.freeze({
   attention: {

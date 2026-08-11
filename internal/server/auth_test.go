@@ -27,6 +27,7 @@ func TestShortHumanSecretRequiresExplicitInsecureLANMode(t *testing.T) {
 	config.HumanAuth = &httpapi.HumanAuthConfig{
 		AdminSecret: "shortkey", DisplayName: "Local admin", Actor: "local-admin",
 		Session: "human-local-admin", Host: "browser", SessionTTL: time.Hour,
+		RecoveryEnabled: true,
 	}
 	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "24..1024") {
 		t.Fatalf("short secret accepted without explicit insecure mode: %v", err)
@@ -41,11 +42,35 @@ func TestShortHumanSecretRequiresExplicitInsecureLANMode(t *testing.T) {
 	}
 }
 
+func TestCodexFirstBindLANRequiresDedicatedAcknowledgementAndLoadedKey(t *testing.T) {
+	config := server.DefaultConfig()
+	config.DatabasePath = filepath.Join(t.TempDir(), "commons.sqlite")
+	config.Listen = "192.168.1.60:8088"
+	config.CodexAuth = true
+	config.CodexBin = "/usr/bin/codex"
+	config.CodexBindingKey[0] = 1
+	config.CodexBindingKeySet = true
+	config.AllowInsecureHumanLAN = true
+
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "first-bind acknowledgement") {
+		t.Fatalf("insecure-human-LAN acknowledgement bypassed first-bind policy: %v", err)
+	}
+	config.AllowFirstCodexBindLAN = true
+	if err := config.Validate(); err != nil {
+		t.Fatalf("dedicated first-bind acknowledgement rejected: %v", err)
+	}
+	config.CodexBindingKeySet = false
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "loaded, non-zero binding key") {
+		t.Fatalf("unset binding key accepted: %v", err)
+	}
+}
+
 func TestHumanConfigSecretSourcesAndLANAcknowledgement(t *testing.T) {
 	env := map[string]string{
-		"COMMONS_DB":                 filepath.Join(t.TempDir(), "commons.sqlite"),
-		"COMMONS_LISTEN":             "192.168.1.60:8088",
-		"COMMONS_HUMAN_ADMIN_SECRET": runtimeAdminSecret,
+		"COMMONS_DB":                    filepath.Join(t.TempDir(), "commons.sqlite"),
+		"COMMONS_LISTEN":                "192.168.1.60:8088",
+		"COMMONS_HUMAN_ADMIN_SECRET":    runtimeAdminSecret,
+		"COMMONS_ENABLE_RECOVERY_LOGIN": "true",
 	}
 	getenv := func(key string) string { return env[key] }
 	if _, err := server.ParseConfig(nil, getenv, io.Discard); err == nil || !strings.Contains(err.Error(), "allow-insecure-human-lan") {
@@ -70,7 +95,7 @@ func TestHumanConfigSecretSourcesAndLANAcknowledgement(t *testing.T) {
 	if err := os.Chmod(secretFile, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	fileEnv := map[string]string{"COMMONS_DB": filepath.Join(t.TempDir(), "file.sqlite"), "COMMONS_HUMAN_ADMIN_SECRET_FILE": secretFile}
+	fileEnv := map[string]string{"COMMONS_DB": filepath.Join(t.TempDir(), "file.sqlite"), "COMMONS_HUMAN_ADMIN_SECRET_FILE": secretFile, "COMMONS_ENABLE_RECOVERY_LOGIN": "true"}
 	if _, err := server.ParseConfig(nil, func(key string) string { return fileEnv[key] }, io.Discard); err == nil || !strings.Contains(err.Error(), "group or other") {
 		t.Fatalf("permissive secret file accepted: %v", err)
 	}
@@ -87,18 +112,64 @@ func TestHumanConfigSecretSourcesAndLANAcknowledgement(t *testing.T) {
 	}
 }
 
+func TestCodexUnavailableDoesNotPreventCommonsStartup(t *testing.T) {
+	config := server.DefaultConfig()
+	config.DatabasePath = filepath.Join(t.TempDir(), "commons.sqlite")
+	config.WebDir = testWeb(t)
+	config.CodexAuth = true
+	config.CodexBin = "/definitely/missing/codex"
+	config.CodexBindingKey[0] = 1
+	config.CodexBindingKeySet = true
+	app, err := server.New(context.Background(), config, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	status := runtimeRequest(app.Handler(), http.MethodGet, "http://commons.test/v1/auth/codex/status", "", nil, "", "")
+	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"available":false`) {
+		t.Fatalf("unavailable Codex status code=%d body=%s", status.Code, status.Body.String())
+	}
+}
+
 type authData struct {
 	Authenticated bool   `json:"authenticated"`
 	CSRFToken     string `json:"csrf_token"`
 }
 
+func TestServerRejectsUnexpectedHostBeforeAuthentication(t *testing.T) {
+	config := server.DefaultConfig()
+	config.DatabasePath = filepath.Join(t.TempDir(), "commons.sqlite")
+	config.WebDir = testWeb(t)
+	config.HumanAuth = &httpapi.HumanAuthConfig{
+		AdminSecret: runtimeAdminSecret, DisplayName: "Local admin", Actor: "local-admin",
+		Session: "human-local-admin", Host: "browser", SessionTTL: time.Hour,
+		RecoveryEnabled: true,
+	}
+	app, err := server.New(context.Background(), config, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+
+	request := httptest.NewRequest(http.MethodPost, "http://attacker.example/v1/auth/login", strings.NewReader(`{"secret":"`+runtimeAdminSecret+`"}`))
+	request.Host = "attacker.example"
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", "http://attacker.example")
+	recorder := httptest.NewRecorder()
+	app.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusMisdirectedRequest {
+		t.Fatalf("unexpected Host code=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func runtimeRequest(handler http.Handler, method, target, body string, cookie *http.Cookie, csrf, key string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	req.Host = "127.0.0.1:8088"
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if method == http.MethodPost {
-		req.Header.Set("Origin", "http://commons.test")
+		req.Header.Set("Origin", "http://127.0.0.1:8088")
 	}
 	if cookie != nil {
 		req.AddCookie(cookie)
@@ -142,6 +213,7 @@ func TestHumanPostCommentStateDurabilityAndSessionRestart(t *testing.T) {
 	config.HumanAuth = &httpapi.HumanAuthConfig{
 		AdminSecret: runtimeAdminSecret, DisplayName: "Test Admin", Actor: "local-admin",
 		Session: "human-local-admin", Host: "browser", SessionTTL: time.Hour,
+		RecoveryEnabled: true,
 	}
 	first, err := server.New(context.Background(), config, demodata.Seed)
 	if err != nil {
@@ -204,6 +276,7 @@ func TestAnonymousReadHonorsHumanSessionCookie(t *testing.T) {
 	config.HumanAuth = &httpapi.HumanAuthConfig{
 		AdminSecret: runtimeAdminSecret, DisplayName: "Test Admin", Actor: "local-admin",
 		Session: "human-local-admin", Host: "browser", SessionTTL: time.Hour,
+		RecoveryEnabled: true,
 	}
 	app, err := server.New(context.Background(), config, nil)
 	if err != nil {
@@ -230,6 +303,7 @@ func TestAnonymousReadHonorsHumanSessionCookie(t *testing.T) {
 func agentRequest(handler http.Handler, method, target, body, key string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer configured-agent-secret")
+	req.Host = "127.0.0.1:8088"
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
