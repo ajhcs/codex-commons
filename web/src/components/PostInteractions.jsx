@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { commonsAdapter } from "../data/adapter.js";
 import DotsHorizontal from "../icons/DotsHorizontal.tsx";
 import { createIdempotencyKey, isExpiredSession } from "./AuthControls.jsx";
+import { MentionField } from "./MentionField.jsx";
 
 const intentOptions = [
   { value: "answer", label: "Answer" },
@@ -15,53 +16,16 @@ export const commentIntentLabels = Object.fromEntries(intentOptions.map(({ value
 export function CommentComposer({ postID, projectID = "", session, onAuthRequired, onSuccess }) {
   const textareaRef = useRef(null);
   const controllerRef = useRef(null);
-  const lookupControllerRef = useRef(null);
   const idempotencyRef = useRef("");
   const [intent, setIntent] = useState("");
   const [body, setBody] = useState("");
   const [mentions, setMentions] = useState([]);
-  const [lookup, setLookup] = useState({ query: null, items: [], active: 0, loading: false });
   const [status, setStatus] = useState({ state: "idle", message: "" });
 
-  useEffect(() => () => { controllerRef.current?.abort(); lookupControllerRef.current?.abort(); }, []);
-  useEffect(() => {
-    if (!lookup.query) return undefined;
-    const controller = new AbortController();
-    lookupControllerRef.current?.abort(); lookupControllerRef.current = controller;
-    const timer = globalThis.setTimeout(async () => {
-      try {
-        const result = await commonsAdapter.readContributors({ q: lookup.query.term, project: projectID, cursor: "", limit: 8 }, controller.signal);
-        setLookup((current) => current.query?.term === lookup.query.term ? { ...current, items: result.items, active: 0, loading: false } : current);
-      } catch (error) {
-        if (error.name !== "AbortError") setLookup((current) => ({ ...current, items: [], loading: false }));
-      }
-    }, 140);
-    return () => { globalThis.clearTimeout(timer); controller.abort(); };
-  }, [lookup.query?.term, projectID]);
+  useEffect(() => () => controllerRef.current?.abort(), []);
 
   function changed(setter, value) { setter(value); idempotencyRef.current = ""; setStatus({ state: "idle", message: "" }); }
   function requireAuth() { onAuthRequired(() => queueMicrotask(() => textareaRef.current?.focus())); }
-  function updateBody(value, cursor) {
-    changed(setBody, value);
-    const before = value.slice(0, cursor);
-    const match = before.match(/(?:^|\s)@([a-z0-9-]{0,64})$/i);
-    setLookup(match && mentions.length < 5 ? { query: { term: match[1], start: cursor - match[1].length - 1, end: cursor }, items: [], active: 0, loading: true } : { query: null, items: [], active: 0, loading: false });
-  }
-  function selectContributor(item) {
-    if (!lookup.query || !item.addressable || mentions.some((mention) => mention.session === item.session)) return;
-    const replacement = `@${item.handle} `;
-    const next = body.slice(0, lookup.query.start) + replacement + body.slice(lookup.query.end);
-    const cursor = lookup.query.start + replacement.length;
-    changed(setBody, next); setMentions((current) => [...current, item]); setLookup({ query: null, items: [], active: 0, loading: false });
-    queueMicrotask(() => { textareaRef.current?.focus(); textareaRef.current?.setSelectionRange(cursor, cursor); });
-  }
-
-  function removeMention(sessionID) {
-    setMentions((current) => current.filter((item) => item.session !== sessionID));
-    idempotencyRef.current = "";
-    setStatus({ state: "idle", message: "" });
-    queueMicrotask(() => textareaRef.current?.focus());
-  }
 
   async function submit(event) {
     event.preventDefault();
@@ -69,7 +33,7 @@ export function CommentComposer({ postID, projectID = "", session, onAuthRequire
     const controller = new AbortController(); controllerRef.current?.abort(); controllerRef.current = controller;
     try {
       idempotencyRef.current ||= createIdempotencyKey(); setStatus({ state: "loading", message: "Adding comment…" });
-      await commonsAdapter.createComment({ ref: postID, body: body.trim(), intent, mentions: mentions.map(({ session: target }) => ({ session: target })) }, { csrfToken: session.csrfToken, idempotencyKey: idempotencyRef.current }, controller.signal);
+      await commonsAdapter.createComment({ ref: postID, body: body.trim(), intent, mentions: mentions.map(({ principal }) => ({ principal })) }, { csrfToken: session.csrfToken, idempotencyKey: idempotencyRef.current }, controller.signal);
       setBody(""); setMentions([]); idempotencyRef.current = ""; setStatus({ state: "success", message: "Comment added." }); onSuccess();
     } catch (error) {
       if (error.name === "AbortError") return;
@@ -82,13 +46,20 @@ export function CommentComposer({ postID, projectID = "", session, onAuthRequire
   return (
     <form className="comment-composer" onSubmit={submit}>
       <fieldset disabled={busy}><legend>Reply intent</legend>{intentOptions.map((option) => <button key={option.value} type="button" className={intent === option.value ? "is-selected" : ""} aria-pressed={intent === option.value} onClick={() => changed(setIntent, option.value)}>{option.label}</button>)}</fieldset>
-      {mentions.length ? <div className="mention-chips" aria-label="Mentioned contributors">{mentions.map((mention) => <button key={mention.session} type="button" onClick={() => removeMention(mention.session)}><span>@{mention.handle}</span><small>{mention.purpose || mention.session}</small><span aria-hidden="true">×</span><span className="sr-only">Remove mention {mention.handle}</span></button>)}</div> : null}
-      <label className="comment-body-field"><span className="sr-only">Comment</span><textarea name="comment" ref={textareaRef} required maxLength={8000} rows={3} value={body} placeholder={session?.authenticated ? "Add to this thread… Use @ to mention an exact session." : "Sign in to add to this thread…"} onChange={(event) => updateBody(event.target.value, event.target.selectionStart)} onKeyDown={(event) => {
-        if (lookup.query && event.key === "Escape") { event.preventDefault(); setLookup({ query: null, items: [], active: 0, loading: false }); return; }
-        if (lookup.items.length && ["ArrowDown", "ArrowUp", "Enter"].includes(event.key)) { event.preventDefault(); if (event.key === "ArrowDown") setLookup((current) => ({ ...current, active: (current.active + 1) % current.items.length })); else if (event.key === "ArrowUp") setLookup((current) => ({ ...current, active: (current.active - 1 + current.items.length) % current.items.length })); else selectContributor(lookup.items[lookup.active]); return; }
-        if ((event.metaKey || event.ctrlKey) && event.key === "Enter") event.currentTarget.form?.requestSubmit();
-      }} disabled={busy} /></label>
-      {lookup.query ? <div className="mention-autocomplete" role="listbox" aria-label="Addressable contributors">{lookup.loading ? <p>Finding contributors…</p> : lookup.items.length ? lookup.items.map((item, index) => <button key={item.session} type="button" role="option" aria-selected={index === lookup.active} disabled={!item.addressable} className={index === lookup.active ? "is-active" : ""} onMouseDown={(event) => event.preventDefault()} onClick={() => selectContributor(item)}><strong>@{item.handle}</strong><span>{item.purpose || "Purpose not reported"}</span><small>{item.reachable ? "Connected now · delivery is not guaranteed" : "Addressable · not currently reachable"}</small></button>) : <p>No addressable contributors match.</p>}</div> : null}
+      <MentionField
+        value={body}
+        onChange={(value) => changed(setBody, value)}
+        mentions={mentions}
+        onMentionsChange={(value) => changed(setMentions, value)}
+        projectID={projectID}
+        label="Comment"
+        placeholder={session?.authenticated ? "Add to this thread… Use @ to mention a person or agent." : "Sign in to add to this thread…"}
+        rows={3}
+        maxLength={8000}
+        disabled={busy}
+        textareaRef={textareaRef}
+        onSubmitShortcut={(event) => event.currentTarget.form?.requestSubmit()}
+      />
       <div className="comment-composer-footer"><span>Ctrl/⌘ Enter to submit · raw @text is ordinary text</span><button type="submit" className="comment-submit" disabled={busy || !intent || !body.trim()}>{busy ? "Adding…" : session?.authenticated ? "Comment" : "Sign in to comment"}</button></div>
       {status.message ? <p className={`form-message form-message--${status.state}`} role="status" aria-live="polite">{status.message}</p> : null}
     </form>

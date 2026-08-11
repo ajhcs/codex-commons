@@ -1474,3 +1474,102 @@ html[data-theme="dark"] :is(.comment-body-field textarea, .mention-autocomplete,
   .mention-autocomplete small { grid-column: 1; }
   .comment-composer-footer { align-items: flex-end; }
 }
+
+/* Slice 13 · metadata-only attention inside the canonical Posts plane. */
+.rail-notifications {
+  position: relative;
+  flex: 0 0 36px;
+  width: 36px;
+  min-height: 36px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+}
+.rail-notifications:hover, .rail-notifications.is-active { background: var(--surface-soft); color: var(--text); }
+.rail-notifications > svg { width: 15px; height: 15px; }
+.rail-footer-actions { display: flex; align-items: center; gap: 2px; }
+.rail-footer-actions .rail-settings { min-width: 0; flex: 1; }
+.notification-count {
+  position: absolute;
+  top: 1px;
+  right: 0;
+  min-width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  padding: 0 5px;
+  border: 2px solid var(--bg);
+  border-radius: 8px;
+  background: var(--blue);
+  color: #fff;
+  font-size: 8px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+.app-shell--collapsed .rail-footer-actions { display: grid; justify-content: stretch; }
+.app-shell--collapsed .rail-footer-actions :is(.rail-notifications, .rail-settings) { width: 100%; flex: none; }
+
+.notification-band {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: 7px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px clamp(24px, 2.5vw, 38px);
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--blue-soft) 32%, var(--bg));
+}
+.notification-unread-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--blue); }
+.notification-unread-dot.is-read { background: var(--border-strong); }
+.notification-band-copy { min-width: 0; }
+.notification-band-copy p { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px; margin: 0; color: var(--text-tertiary); font-size: 9px; }
+.notification-band-copy p strong { color: var(--text); font-size: 10px; font-weight: 600; }
+.notification-band-copy p span:first-of-type { color: var(--text-secondary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.notification-band-copy blockquote { margin: 2px 0 0; overflow: hidden; color: var(--text-secondary); font-size: 11px; line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
+.notification-band-copy small { display: block; margin-top: 3px; color: var(--red); font-size: 9px; }
+.notification-band .timestamp { color: var(--text-tertiary); font-size: 9px; white-space: nowrap; }
+.notification-band > button { min-height: 28px; padding: 0 7px; border: 0; border-radius: 6px; background: transparent; color: var(--text-tertiary); font-size: 9px; }
+.notification-band > button:hover { background: var(--surface-soft); color: var(--text); }
+.notification-band--error { background: color-mix(in srgb, var(--red-soft) 34%, var(--bg)); }
+
+.comments-section li.is-notification-source {
+  position: relative;
+  margin-left: -10px;
+  padding-left: 10px;
+  background: color-mix(in srgb, var(--blue-soft) 24%, transparent);
+}
+.comments-section li.is-notification-source::before { content: ""; position: absolute; top: 9px; bottom: 9px; left: 0; width: 2px; border-radius: 2px; background: var(--blue); }
+.notification-source-label { display: block; margin: 0 0 4px; color: var(--blue); font-size: 8px; font-weight: 600; letter-spacing: .01em; }
+
+.mention-field { position: relative; min-width: 0; }
+.comment-composer .mention-field textarea { width: 100%; min-height: 78px; padding: 10px 11px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; font-size: 11px; line-height: 17px; resize: vertical; }
+.comment-composer .mention-field textarea:focus { border-color: rgba(11, 103, 216, .55); outline: 0; box-shadow: 0 0 0 3px rgba(11, 103, 216,.1); }
+.composer-mention-field { display: grid; gap: 6px; }
+.composer-field-label { color: var(--text); font-size: 12px; font-weight: 600; }
+.composer-mention-field .mention-autocomplete { top: calc(100% + 1px); }
+.mention-chip-remove { margin-left: 2px; color: var(--text-tertiary); font-size: 8px; }
+
+html[data-theme="dark"] :is(.notification-band, .comments-section li.is-notification-source) { background: color-mix(in srgb, var(--blue-soft) 34%, var(--bg)); }
+html[data-theme="dark"] .notification-band--error { background: color-mix(in srgb, var(--red-soft) 38%, var(--bg)); }
+
+@media (max-width: 760px) {
+  .rail-footer-actions { display: flex; }
+  .app-shell--collapsed .rail-footer-actions { display: flex; }
+  .app-shell--collapsed .rail-footer-actions .rail-notifications { width: 36px; flex: 0 0 36px; }
+  .app-shell--collapsed .rail-footer-actions .rail-settings { width: auto; flex: 1; }
+  .posts-workspace.show-reader-mobile .reader-command-bar { display: flex; min-height: 48px; }
+  .posts-workspace.show-reader-mobile .reader-command-bar .reader-new-post { display: none; }
+  .notification-band { grid-template-columns: 7px minmax(0, 1fr) auto; padding: 9px 16px; }
+  .notification-band .timestamp { display: none; }
+  .notification-band-copy blockquote { white-space: normal; }
+  .comments-section li.is-notification-source { margin-left: -7px; padding-left: 9px; }
+}
+
+@media (max-width: 420px) {
+  .rail-footer-actions .rail-settings strong { display: none; }
+  .rail-footer-actions .rail-settings { width: 36px; flex: 0 0 36px; justify-content: center; padding-inline: 0; }
+}

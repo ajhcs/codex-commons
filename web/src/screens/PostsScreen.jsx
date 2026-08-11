@@ -1,12 +1,13 @@
 import { useRef, useState } from "react";
 import { AppShell, Notice } from "../components/AppShell.jsx";
 import { LoginDialog } from "../components/AuthControls.jsx";
-import { SearchField, Select } from "../components/Controls.jsx";
+import { SearchField, Select, Timestamp } from "../components/Controls.jsx";
 import { PostComposer } from "../components/PostComposer.jsx";
 import { PostFeedRow, PostReader, postKindOptions } from "../components/PostParts.jsx";
 import { ProjectPostsBar } from "../components/ProjectPostsBar.jsx";
 import { commonsAdapter } from "../data/adapter.js";
 import { useAuthSession } from "../hooks/useAuthSession.js";
+import { useNotifications } from "../hooks/NotificationContext.jsx";
 import { useCursorPager } from "../hooks/useCursorPager.js";
 import { useResource } from "../hooks/useResource.js";
 import FileDocument from "../icons/FileDocument.tsx";
@@ -48,8 +49,31 @@ function PostsRail({ topics, topicsTruncated, selectedTopic, onSelectTopic, onNe
   );
 }
 
+function NotificationBand({ active, onClose }) {
+  if (!active) return null;
+  const { notification } = active;
+  const actorName = notification.actor.displayName || notification.actor.purpose || notification.actor.handle || "Contributor";
+  return (
+    <section className={`notification-band${active.status === "error" ? " notification-band--error" : ""}`} aria-label="Opened mention" aria-live="polite">
+      <span className={`notification-unread-dot${notification.readAt ? " is-read" : ""}`} aria-hidden="true" />
+      <div className="notification-band-copy">
+        <p>
+          <strong>{actorName}</strong>
+          {notification.actor.handle ? <span>@{notification.actor.handle}</span> : null}
+          <span>wrote</span>
+        </p>
+        <blockquote>{notification.snippet}</blockquote>
+        {active.status === "error" ? <small>{active.message}</small> : null}
+      </div>
+      <Timestamp value={notification.created} compact />
+      <button type="button" onClick={onClose}>Close</button>
+    </section>
+  );
+}
+
 export function PostsScreen({ selectedPostID = "", onNavigate, projectID = "", projectInfo = null, onProjectNavigate = null }) {
   const auth = useAuthSession();
+  const notifications = useNotifications();
   const resumeAfterLoginRef = useRef(null);
   const [filters, setFilters] = useState({ q: "", topic: "", kind: "" });
   const [composerOpen, setComposerOpen] = useState(false);
@@ -79,7 +103,7 @@ export function PostsScreen({ selectedPostID = "", onNavigate, projectID = "", p
   const activePostID = selectedPostID || items[0]?.id || "";
   const availableTopics = topicsResource.data?.items || [{ id: "general", name: "General", projectID: "" }];
   const topics = (projectID ? availableTopics.filter((topic) => topic.projectID === projectID) : availableTopics)
-    .map((topic) => ({ value: topic.id, label: topic.name }));
+    .map((topic) => ({ value: topic.id, label: topic.name, projectID: topic.projectID || "" }));
 
   function navigatePosts(postID = "") {
     if (projectID) onProjectNavigate?.("posts", postID);
@@ -212,6 +236,10 @@ export function PostsScreen({ selectedPostID = "", onNavigate, projectID = "", p
               New post
             </button>
           </div>
+          <NotificationBand active={notifications.active} onClose={() => {
+            notifications.close();
+            queueMicrotask(() => document.querySelector(".rail-notifications")?.focus());
+          }} />
           {activePostID ? (
             <PostReader
               postID={activePostID}
@@ -220,6 +248,9 @@ export function PostsScreen({ selectedPostID = "", onNavigate, projectID = "", p
               onAuthRequired={(resume) => requestWriting(resume)}
               onChanged={postChanged}
               replacementCandidates={items.filter((item) => item.id !== activePostID)}
+              notificationTarget={notifications.active?.notification.source.postRef === activePostID ? notifications.active.notification : null}
+              onNotificationOpened={notifications.sourceOpened}
+              onNotificationFailed={notifications.sourceFailed}
             />
           ) : (
             <div className="reader-empty">

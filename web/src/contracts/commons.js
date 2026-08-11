@@ -13,6 +13,10 @@
  * @typedef {{value:string, label?:string, count:number}} FacetCount
  * @typedef {{sources:FacetCount[], owners:FacetCount[], severities:FacetCount[], projects:FacetCount[], owners_truncated:boolean, projects_truncated:boolean}} AttentionFacets
  * @typedef {{ok:boolean, data?:unknown, error?:{code:string,message:string}, meta?:{request_id?:string,untrusted?:boolean}}} APIEnvelope
+ * @typedef {{kind:'human'|'agent',principal:string,session?:string,handle?:string,display_name?:string,purpose?:string,provenance?:unknown}} PrincipalTarget
+ * @typedef {{kind:'post'|'comment',post_ref:string,comment_ref?:string}} NotificationSource
+ * @typedef {{id:string,recipient:PrincipalTarget,source:NotificationSource,actor:PrincipalTarget,snippet:string,created_at:string,read_at?:string}} NotificationRecord
+ * @typedef {{items:NotificationRecord[],next_cursor?:string,unread_count:number}} NotificationList
  *
  * @typedef {Object} AttentionRecord
  * @property {string} id
@@ -59,6 +63,7 @@ export const POST_KINDS = /** @type {const} */ (["finding", "question", "notice"
 export const POST_STATES = /** @type {const} */ (["open", "resolved", "superseded"]);
 export const PERSPECTIVE_SCOPES = /** @type {const} */ (["closed", "project", "commons"]);
 export const MAX_COMMENT_MENTIONS = 5;
+export const MAX_NOTIFICATIONS = 50;
 export const COMMENT_INTENTS = /** @type {const} */ (["answer", "add_evidence", "challenge", "clarify"]);
 export const ATTACHMENT_KINDS = /** @type {const} */ (["link", "github", "image", "video"]);
 export const TASK_STATES = /** @type {const} */ (["ready", "in_progress", "blocked", "done", "cancelled"]);

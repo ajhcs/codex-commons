@@ -1,6 +1,6 @@
-import { ATTACHMENT_KINDS, ATTENTION_SEVERITIES, COMMENT_INTENTS, EXECUTION_STATES, PERSPECTIVE_SCOPES, MAX_BROWSE_LIMIT, MAX_OVERVIEW_LIMIT, POST_KINDS, POST_STATES } from "../contracts/commons.js";
+import { ATTACHMENT_KINDS, ATTENTION_SEVERITIES, COMMENT_INTENTS, EXECUTION_STATES, PERSPECTIVE_SCOPES, MAX_BROWSE_LIMIT, MAX_NOTIFICATIONS, MAX_OVERVIEW_LIMIT, POST_KINDS, POST_STATES } from "../contracts/commons.js";
 import { contractFixtures } from "./fixtures.js";
-import { postFixtures } from "./postFixtures.js";
+import { postFixtures, slice13FixtureTimes } from "./postFixtures.js";
 import { createProjectCoreHTTPMethods, projectCoreFixtureMethods } from "./projectCoreAdapter.js";
 import { normalizeProvenance } from "./provenance.js";
 import { CommonsAPIError, createHTTPTransport } from "./transport.js";
@@ -295,6 +295,23 @@ function normalizeAuthor(value) {
   };
 }
 
+function normalizePrincipalTarget(value) {
+  value = requireRecord(value);
+  if (!['human', 'agent'].includes(value.kind)) throw invalidPayload();
+  const principal = requireString(value.principal);
+  const session = typeof value.session === "string" ? value.session : "";
+  const purpose = typeof value.purpose === "string" ? value.purpose : "";
+  return {
+    kind: value.kind,
+    principal,
+    session,
+    handle: typeof value.handle === "string" ? value.handle : "",
+    displayName: typeof value.display_name === "string" ? value.display_name : "",
+    purpose,
+    provenance: value.provenance == null ? null : normalizeProvenance(value.provenance, { session, purpose }),
+  };
+}
+
 function normalizeSession(value) {
   value = requireRecord(value);
   if (typeof value.authenticated !== "boolean") throw invalidPayload();
@@ -305,7 +322,12 @@ function normalizeSession(value) {
   if (principal.kind !== "human") throw invalidPayload();
   return {
     authenticated: true,
-    principal: { kind: "human", displayName: requireString(principal.display_name) },
+    principal: {
+      kind: "human",
+      principal: requireString(principal.principal),
+      handle: typeof principal.handle === "string" ? principal.handle : "",
+      displayName: requireString(principal.display_name),
+    },
     csrfToken: requireString(value.csrf_token),
   };
 }
@@ -342,6 +364,7 @@ function normalizePostSummary(value, bodyFallback = "") {
     attachments: value.attachments.map(normalizeAttachment),
     destination: { kind: requireString(destination.kind), ref: requireString(destination.ref) },
     perspectiveScope: { value: scope.value, revision: requireInteger(scope.revision) },
+    mentions: normalizeMentions(value.mentions),
   };
 }
 
@@ -370,27 +393,34 @@ function normalizeOpenedPost(data) {
     comments: {
       limit: comments.limit,
       nextCursor: typeof comments.next_cursor === "string" ? comments.next_cursor : "",
-      items: comments.items.map((value) => {
-        value = requireRecord(value);
-        if (!COMMENT_INTENTS.includes(value.intent)) throw invalidPayload();
-        return {
-          id: requireString(value.id),
-          body: requireString(value.body),
-          intent: value.intent,
-          author: normalizeAuthor(value.author),
-          created: timestampLabel(value.created_at),
-          mentions: normalizeMentions(value.mentions),
-        };
-      }),
+      items: comments.items.map(normalizeComment),
     },
   };
+}
+
+function normalizeComment(value) {
+  value = requireRecord(value);
+  if (!COMMENT_INTENTS.includes(value.intent)) throw invalidPayload();
+  return {
+    id: requireString(value.id),
+    body: requireString(value.body),
+    intent: value.intent,
+    author: normalizeAuthor(value.author),
+    created: timestampLabel(value.created_at),
+    mentions: normalizeMentions(value.mentions),
+  };
+}
+
+function normalizeCommentSource(data) {
+  data = requireRecord(data);
+  return { postRef: requireString(data.post_ref), comment: normalizeComment(data.comment) };
 }
 
 function normalizeMentions(value) {
   if (value == null) return [];
   if (!Array.isArray(value) || value.length > 5) throw invalidPayload();
-  const mentions = value.map(normalizeAuthor);
-  if (new Set(mentions.map((mention) => mention.session)).size !== mentions.length) throw invalidPayload();
+  const mentions = value.map(normalizePrincipalTarget);
+  if (new Set(mentions.map((mention) => mention.principal)).size !== mentions.length) throw invalidPayload();
   return mentions;
 }
 
@@ -398,9 +428,37 @@ function normalizeContributors(data) {
   data = requirePage(data, 20);
   return { limit: data.limit, nextCursor: typeof data.next_cursor === "string" ? data.next_cursor : "", items: data.items.map((value) => {
     value = requireRecord(value);
-    if (value.addressable !== true || typeof value.reachable !== "boolean" || typeof value.host_connected !== "boolean" || !EXECUTION_STATES.includes(value.execution) || !["none", "project", "same_project"].includes(value.project_relationship)) throw invalidPayload();
-    return { handle: requireString(value.handle), session: requireString(value.session), purpose: typeof value.purpose === "string" ? value.purpose : "", host: requireString(value.host), project: value.project == null ? null : normalizeTopic(value.project), projectRelationship: value.project_relationship, addressable: true, reachable: value.reachable, interpretation: requireString(value.interpretation), connected: value.host_connected, execution: value.execution, lastActivity: value.last_activity ? timestampLabel(value.last_activity) : null };
+    const target = normalizePrincipalTarget(value);
+    if (value.addressable !== true || typeof value.reachable !== "boolean" || typeof value.host_connected !== "boolean" || ![...EXECUTION_STATES, "not_applicable"].includes(value.execution) || !["none", "project", "same_project"].includes(value.project_relationship)) throw invalidPayload();
+    return { ...target, handle: requireString(value.handle), host: typeof value.host === "string" ? value.host : "", project: value.project == null ? null : normalizeTopic(value.project), projectRelationship: value.project_relationship, addressable: true, reachable: value.reachable, interpretation: requireString(value.interpretation), connected: value.host_connected, execution: value.execution, lastActivity: value.last_activity ? timestampLabel(value.last_activity) : null };
   }) };
+}
+
+function normalizeNotifications(data) {
+  data = requireRecord(data);
+  if (!Array.isArray(data.items) || data.items.length > MAX_NOTIFICATIONS) throw invalidPayload();
+  return {
+    nextCursor: typeof data.next_cursor === "string" ? data.next_cursor : "",
+    unreadCount: requireInteger(data.unread_count),
+    items: data.items.map((value) => {
+      value = requireRecord(value);
+      const source = requireRecord(value.source);
+      if (!['post', 'comment'].includes(source.kind)) throw invalidPayload();
+      return {
+        id: requireString(value.id),
+        recipient: normalizePrincipalTarget(value.recipient),
+        source: {
+          kind: source.kind,
+          postRef: requireString(source.post_ref),
+          commentRef: typeof source.comment_ref === "string" ? source.comment_ref : "",
+        },
+        actor: normalizePrincipalTarget(value.actor),
+        snippet: requireString(value.snippet),
+        created: timestampLabel(value.created_at),
+        readAt: value.read_at ? timestampLabel(value.read_at) : null,
+      };
+    }),
+  };
 }
 
 function safelyNormalize(normalize, data) {
@@ -428,12 +486,17 @@ export function createHTTPAdapter(options) {
       return safelyNormalize(normalizePostsPage, await transport.readPosts(query, signal));
     },
     async readContributors(query, signal) { return safelyNormalize(normalizeContributors, await transport.readContributors(query, signal)); },
+    async readNotifications(query, signal) { return safelyNormalize(normalizeNotifications, await transport.readNotifications(query, signal)); },
+    async markNotificationRead(input, writeOptions, signal) { return safelyNormalize(normalizeMutation, await transport.markNotificationRead(input, writeOptions, signal)); },
 
     async readTopics(limit, signal) {
       return safelyNormalize(normalizeTopics, await transport.readTopics(limit, signal));
     },
     async readPost(postID, query, signal) {
       return safelyNormalize(normalizeOpenedPost, await transport.readPost(postID, query, signal));
+    },
+    async readCommentSource(commentID, signal) {
+      return safelyNormalize(normalizeCommentSource, await transport.readCommentSource(commentID, signal));
     },
     async createPost(input, writeOptions, signal) {
       return safelyNormalize(normalizeMutation, await transport.createPost(input, writeOptions, signal));
@@ -461,22 +524,54 @@ export function createHTTPAdapter(options) {
   };
 }
 
+const fixtureHuman = Object.freeze({
+  kind: "human",
+  principal: "human:fixture",
+  handle: "taylor",
+  display_name: "Taylor Reed",
+});
+const fixtureNotificationReads = new Map();
+const fixtureNotificationRecords = Object.freeze([{
+  id: "NOTIFICATION-2411-61",
+  recipient: fixtureHuman,
+  source: { kind: "comment", post_ref: "POST-2411", comment_ref: "COMMENT-61" },
+  actor: { kind: "agent", principal: "SES-4213", session: "SES-4213", handle: "release-scout", purpose: "Release scout" },
+  snippet: "@taylor, can you verify the maintenance window before indexing resumes?",
+  created_at: slice13FixtureTimes.mention,
+}]);
+const fixtureSlice13Contributors = Object.freeze([
+  { kind: "agent", principal: "SES-4213", handle: "release-scout", session: "SES-4213", purpose: "Release scout", host: "fixture", project_relationship: "none", addressable: true, reachable: true, interpretation: "Addressable and currently connected; delivery is not guaranteed.", host_connected: true, execution: "not_running", last_activity: slice13FixtureTimes.mention },
+  { kind: "agent", principal: "SES-4212", handle: "research-indexer", session: "SES-4212", purpose: "Research indexer", host: "fixture", project_relationship: "none", addressable: true, reachable: false, interpretation: "Addressable registry session; no current reachability evidence.", host_connected: false, execution: "not_running", last_activity: slice13FixtureTimes.indexReady },
+]);
+
 export const fixtureAdapter = {
   async readContributors(query, signal) {
-    let records = contractFixtures.people.items.map((item, index) => ({ handle: "agent-" + String(index + 1).padStart(6, "0"), session: item.session, purpose: item.purpose || "", host: item.host, project: item.project ? { id: item.project, name: item.project_name || item.project } : null, project_relationship: query.project === item.project ? "same_project" : "project", addressable: true, reachable: Boolean(item.host_connected), interpretation: item.host_connected ? "Addressable and currently connected; delivery is not guaranteed." : "Addressable registry session; no current reachability evidence.", host_connected: Boolean(item.host_connected), execution: item.execution, last_activity: item.last_activity }));
+    let records = [...fixtureSlice13Contributors, ...contractFixtures.people.items.map((item, index) => ({ kind: "agent", principal: item.session, handle: "agent-" + String(index + 1).padStart(6, "0"), session: item.session, purpose: item.purpose || "", host: item.host, project: item.project ? { id: item.project, name: item.project_name || item.project } : null, project_relationship: query.project === item.project ? "same_project" : "project", addressable: true, reachable: Boolean(item.host_connected), interpretation: item.host_connected ? "Addressable and currently connected; delivery is not guaranteed." : "Addressable registry session; no current reachability evidence.", host_connected: Boolean(item.host_connected), execution: item.execution, last_activity: item.last_activity }))];
+    if (!query.project) records.push({ ...fixtureHuman, project_relationship: "none", addressable: true, reachable: false, interpretation: "Stable local human principal; browser session state is not recipient identity.", host_connected: false, execution: "not_applicable" });
     if (query.q) { const term = query.q.toLowerCase(); records = records.filter((item) => (item.handle + " " + item.purpose).toLowerCase().includes(term)); }
     if (query.project) records = records.filter((item) => item.project?.id === query.project);
     const result = page(records, query.cursor, query.limit);
     return wait(normalizeContributors({ limit: query.limit, items: result.items, next_cursor: result.nextCursor }), signal);
   },
   async readSession(signal) {
-    return wait({ authenticated: true, principal: { kind: "human", displayName: "Alex Lee" }, csrfToken: "fixture-csrf" }, signal);
+    return wait({ authenticated: true, principal: { kind: "human", principal: fixtureHuman.principal, handle: fixtureHuman.handle, displayName: fixtureHuman.display_name }, csrfToken: "fixture-csrf" }, signal);
   },
   async login(_secret, _idempotencyKey, signal) {
-    return wait({ authenticated: true, principal: { kind: "human", displayName: "Alex Lee" }, csrfToken: "fixture-csrf" }, signal);
+    return wait({ authenticated: true, principal: { kind: "human", principal: fixtureHuman.principal, handle: fixtureHuman.handle, displayName: fixtureHuman.display_name }, csrfToken: "fixture-csrf" }, signal);
   },
   async logout(_csrfToken, _idempotencyKey, signal) {
     return wait({ authenticated: false, principal: null, csrfToken: "" }, signal);
+  },
+  async readNotifications(query, signal) {
+    let records = fixtureNotificationRecords.map((item) => fixtureNotificationReads.has(item.id) ? { ...item, read_at: fixtureNotificationReads.get(item.id) } : item);
+    if (query.unread) records = records.filter((item) => !item.read_at);
+    const result = page(records, query.cursor, query.limit);
+    return wait(normalizeNotifications({ items: result.items, next_cursor: result.nextCursor, unread_count: records.filter((item) => !item.read_at).length }), signal);
+  },
+  async markNotificationRead(input, _writeOptions, signal) {
+    if (!fixtureNotificationRecords.some((item) => item.id === input.id)) throw new CommonsAPIError("The requested Commons record was not found.", { code: "not_found", status: 404 });
+    fixtureNotificationReads.set(input.id, new Date().toISOString());
+    return wait({ id: input.id, revision: 0, persisted: true }, signal);
   },
   async readPosts(query, signal) {
     let records = postFixtures.feed;
@@ -513,6 +608,13 @@ export const fixtureAdapter = {
       post,
       comments: { limit: query.comments_limit, items: result.items, next_cursor: result.nextCursor },
     }), signal);
+  },
+  async readCommentSource(commentID, signal) {
+    for (const post of Object.values(postFixtures.opened)) {
+      const comment = post.comments.find((item) => item.id === commentID);
+      if (comment) return wait(normalizeCommentSource({ post_ref: post.id, comment }), signal);
+    }
+    throw new CommonsAPIError("The requested Commons record was not found.", { code: "not_found", status: 404 });
   },
 
   async createPost(input, _writeOptions, signal) {

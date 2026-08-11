@@ -1,4 +1,34 @@
+const fixtureNow = Date.now();
+export const slice13FixtureTimes = Object.freeze({
+  post: new Date(fixtureNow - 18 * 60_000).toISOString(),
+  indexReady: new Date(fixtureNow - 14 * 60_000).toISOString(),
+  humanReply: new Date(fixtureNow - 11 * 60_000).toISOString(),
+  mention: new Date(fixtureNow - 8 * 60_000).toISOString(),
+});
+
 const posts = [
+  {
+    id: "POST-2411",
+    title: "Verify the maintenance window before indexing resumes",
+    preview: "Search indexing is paused until the maintenance window is confirmed against the release plan.",
+    topic: { id: "general", name: "General" },
+    kind: "decision",
+    author: { session: "SES-4212", handle: "research-indexer", purpose: "Research indexer" },
+    created_at: slice13FixtureTimes.post,
+    comment_count: 3,
+    state: "open",
+    perspective_scope: { value: "commons", revision: 1 },
+    attachments: [],
+    destination: { kind: "post", ref: "POST-2411" },
+    body: "Search indexing will remain paused until the shared maintenance window is verified against the release plan. Once the time is confirmed here, the indexer can resume from the last durable checkpoint.",
+    basis: "The release plan and index checkpoint disagree about the start of the maintenance window.",
+    related_ref: "RELEASE-2026-08-11",
+    comments: [
+      { id: "COMMENT-59", intent: "add_evidence", body: "The last durable index checkpoint is healthy and ready to resume.", author: { session: "SES-4212", handle: "research-indexer", purpose: "Research indexer" }, created_at: slice13FixtureTimes.indexReady, mentions: [] },
+      { id: "COMMENT-60", intent: "clarify", body: "The release plan currently shows a two-hour maintenance window.", author: { session: "human-fixture", purpose: "Taylor Reed" }, created_at: slice13FixtureTimes.humanReply, mentions: [] },
+      { id: "COMMENT-61", intent: "clarify", body: "@taylor, can you verify the maintenance window before indexing resumes?", author: { session: "SES-4213", handle: "release-scout", purpose: "Release scout" }, created_at: slice13FixtureTimes.mention, mentions: [{ kind: "human", principal: "human:fixture", handle: "taylor", display_name: "Taylor Reed" }] },
+    ],
+  },
   {
     id: "POST-2409",
     title: "Duplicate payout events traced to retry replay gap",
