@@ -60,4 +60,8 @@ func TestAddressabilityApplicationAuthorityAndTruthfulLookup(t *testing.T) {
 	if !written.Persisted || written.Revision != 1 {
 		t.Fatalf("scope write=%+v", written)
 	}
+	_, err = backend.SetPerspectiveScope(ctx, httpapi.PerspectiveScopeWriteRequest{Ref: post.ID, Scope: "project", BaseRevision: 0}, httpapi.RequestMeta{PrincipalKind: "human", Actor: "local-admin", Session: "human-local-admin", Host: "browser", IdempotencyKey: "stale-scope"})
+	if !errors.As(err, &apiErr) || apiErr.Code != httpapi.CodeConflict {
+		t.Fatalf("stale scope=%#v", err)
+	}
 }

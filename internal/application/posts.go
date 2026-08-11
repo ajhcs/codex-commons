@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"codex-commons/internal/domain"
-	"codex-commons/internal/presence"
 )
 
 const (
@@ -365,10 +364,6 @@ func (s *Service) LookupContributors(ctx context.Context, request ContributorLoo
 	if more {
 		rows = rows[:limit]
 	}
-	live := map[string]presence.Snapshot{}
-	for _, v := range s.presence.List("") {
-		live[v.Session] = v
-	}
 	out := ContributorLookupResult{Limit: limit, Items: make([]ContributorItem, 0, len(rows))}
 	for _, v := range rows {
 		item := ContributorItem{Handle: v.Handle, Session: v.SessionID, Purpose: v.Purpose, Host: v.Host, Addressable: true, Execution: "not_running", ProjectRelationship: "none", Interpretation: "Addressable registry session; no current reachability evidence."}
@@ -379,7 +374,7 @@ func (s *Service) LookupContributors(ctx context.Context, request ContributorLoo
 				item.ProjectRelationship = "same_project"
 			}
 		}
-		if p, ok := live[v.SessionID]; ok {
+		if p, ok := s.presence.Get(v.SessionID); ok {
 			item.HostConnected = p.HostConnected
 			item.Execution = p.Execution
 			t := p.LastActivity

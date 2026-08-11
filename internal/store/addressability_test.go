@@ -31,6 +31,11 @@ func TestAddressabilityHandlesScopesAndMentions(t *testing.T) {
 	if len(contributors) != 1 || contributors[0].Handle != "agent-000002" {
 		t.Fatalf("stable handle=%+v", contributors)
 	}
+	contributors, err = s.Contributors(ctx, domain.ContributorQuery{Search: "%", Limit: 20})
+	must(t, err)
+	if len(contributors) != 0 {
+		t.Fatalf("literal wildcard search returned contributors=%+v", contributors)
+	}
 	if _, err = s.DB().ExecContext(ctx, `INSERT INTO session_handles(session_id,handle,created_at) VALUES('S-B','AGENT-000001','x')`); err == nil {
 		t.Fatal("case-insensitive collision accepted")
 	}
@@ -62,6 +67,11 @@ func TestAddressabilityHandlesScopesAndMentions(t *testing.T) {
 	must(t, err)
 	if mention != again {
 		t.Fatalf("comment replay=%+v %+v", mention, again)
+	}
+	changedMention := explicit
+	changedMention.MentionSessionIDs = nil
+	if _, err = s.Comment(ctx, changedMention); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("changed mention replay=%v", err)
 	}
 	inbox, err := s.Inbox(ctx, "alpha", "S-B", 20)
 	must(t, err)

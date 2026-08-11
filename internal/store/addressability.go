@@ -10,11 +10,16 @@ import (
 
 const maxCommentMentions = 5
 
+func contributorSearchPattern(value string) string {
+	escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(strings.ToLower(value))
+	return "%" + escaped + "%"
+}
+
 func (s *Store) Contributors(ctx context.Context, q domain.ContributorQuery) ([]domain.Contributor, error) {
 	if q.Limit < 1 || q.Limit > 20 || len(q.Search) > 100 || strings.TrimSpace(q.Search) != q.Search || len(q.ProjectID) > 200 {
 		return nil, domain.ErrInvalid
 	}
-	pattern := "%" + strings.ToLower(q.Search) + "%"
+	pattern := contributorSearchPattern(q.Search)
 	rows, err := s.db.QueryContext(ctx, `SELECT s.id,h.handle,s.host,COALESCE(s.project_id,''),COALESCE(p.name,''),s.purpose
 FROM session_handles h JOIN sessions s ON s.id=h.session_id LEFT JOIN projects p ON p.id=s.project_id
 WHERE (?='' OR lower(h.handle) LIKE ? ESCAPE '\' OR lower(s.purpose) LIKE ? ESCAPE '\')

@@ -12,7 +12,7 @@ const intentOptions = [
 
 export const commentIntentLabels = Object.fromEntries(intentOptions.map(({ value, label }) => [value, label]));
 
-export function CommentComposer({ postID, session, onAuthRequired, onSuccess }) {
+export function CommentComposer({ postID, projectID = "", session, onAuthRequired, onSuccess }) {
   const textareaRef = useRef(null);
   const controllerRef = useRef(null);
   const lookupControllerRef = useRef(null);
@@ -30,14 +30,14 @@ export function CommentComposer({ postID, session, onAuthRequired, onSuccess }) 
     lookupControllerRef.current?.abort(); lookupControllerRef.current = controller;
     const timer = globalThis.setTimeout(async () => {
       try {
-        const result = await commonsAdapter.readContributors({ q: lookup.query.term, project: "", cursor: "", limit: 8 }, controller.signal);
+        const result = await commonsAdapter.readContributors({ q: lookup.query.term, project: projectID, cursor: "", limit: 8 }, controller.signal);
         setLookup((current) => current.query?.term === lookup.query.term ? { ...current, items: result.items, active: 0, loading: false } : current);
       } catch (error) {
         if (error.name !== "AbortError") setLookup((current) => ({ ...current, items: [], loading: false }));
       }
     }, 140);
     return () => { globalThis.clearTimeout(timer); controller.abort(); };
-  }, [lookup.query?.term]);
+  }, [lookup.query?.term, projectID]);
 
   function changed(setter, value) { setter(value); idempotencyRef.current = ""; setStatus({ state: "idle", message: "" }); }
   function requireAuth() { onAuthRequired(() => queueMicrotask(() => textareaRef.current?.focus())); }
@@ -54,6 +54,13 @@ export function CommentComposer({ postID, session, onAuthRequired, onSuccess }) 
     const cursor = lookup.query.start + replacement.length;
     changed(setBody, next); setMentions((current) => [...current, item]); setLookup({ query: null, items: [], active: 0, loading: false });
     queueMicrotask(() => { textareaRef.current?.focus(); textareaRef.current?.setSelectionRange(cursor, cursor); });
+  }
+
+  function removeMention(sessionID) {
+    setMentions((current) => current.filter((item) => item.session !== sessionID));
+    idempotencyRef.current = "";
+    setStatus({ state: "idle", message: "" });
+    queueMicrotask(() => textareaRef.current?.focus());
   }
 
   async function submit(event) {
@@ -75,9 +82,10 @@ export function CommentComposer({ postID, session, onAuthRequired, onSuccess }) 
   return (
     <form className="comment-composer" onSubmit={submit}>
       <fieldset disabled={busy}><legend>Reply intent</legend>{intentOptions.map((option) => <button key={option.value} type="button" className={intent === option.value ? "is-selected" : ""} aria-pressed={intent === option.value} onClick={() => changed(setIntent, option.value)}>{option.label}</button>)}</fieldset>
-      {mentions.length ? <div className="mention-chips" aria-label="Mentioned contributors">{mentions.map((mention) => <button key={mention.session} type="button" onClick={() => { setMentions((current) => current.filter((item) => item.session !== mention.session)); idempotencyRef.current = ""; }}><span>@{mention.handle}</span><small>{mention.purpose || mention.session}</small><span aria-hidden="true">×</span><span className="sr-only">Remove mention {mention.handle}</span></button>)}</div> : null}
+      {mentions.length ? <div className="mention-chips" aria-label="Mentioned contributors">{mentions.map((mention) => <button key={mention.session} type="button" onClick={() => removeMention(mention.session)}><span>@{mention.handle}</span><small>{mention.purpose || mention.session}</small><span aria-hidden="true">×</span><span className="sr-only">Remove mention {mention.handle}</span></button>)}</div> : null}
       <label className="comment-body-field"><span className="sr-only">Comment</span><textarea name="comment" ref={textareaRef} required maxLength={8000} rows={3} value={body} placeholder={session?.authenticated ? "Add to this thread… Use @ to mention an exact session." : "Sign in to add to this thread…"} onChange={(event) => updateBody(event.target.value, event.target.selectionStart)} onKeyDown={(event) => {
-        if (lookup.items.length && ["ArrowDown", "ArrowUp", "Enter", "Escape"].includes(event.key)) { event.preventDefault(); if (event.key === "ArrowDown") setLookup((current) => ({ ...current, active: (current.active + 1) % current.items.length })); else if (event.key === "ArrowUp") setLookup((current) => ({ ...current, active: (current.active - 1 + current.items.length) % current.items.length })); else if (event.key === "Enter") selectContributor(lookup.items[lookup.active]); else setLookup({ query: null, items: [], active: 0, loading: false }); return; }
+        if (lookup.query && event.key === "Escape") { event.preventDefault(); setLookup({ query: null, items: [], active: 0, loading: false }); return; }
+        if (lookup.items.length && ["ArrowDown", "ArrowUp", "Enter"].includes(event.key)) { event.preventDefault(); if (event.key === "ArrowDown") setLookup((current) => ({ ...current, active: (current.active + 1) % current.items.length })); else if (event.key === "ArrowUp") setLookup((current) => ({ ...current, active: (current.active - 1 + current.items.length) % current.items.length })); else selectContributor(lookup.items[lookup.active]); return; }
         if ((event.metaKey || event.ctrlKey) && event.key === "Enter") event.currentTarget.form?.requestSubmit();
       }} disabled={busy} /></label>
       {lookup.query ? <div className="mention-autocomplete" role="listbox" aria-label="Addressable contributors">{lookup.loading ? <p>Finding contributors…</p> : lookup.items.length ? lookup.items.map((item, index) => <button key={item.session} type="button" role="option" aria-selected={index === lookup.active} disabled={!item.addressable} className={index === lookup.active ? "is-active" : ""} onMouseDown={(event) => event.preventDefault()} onClick={() => selectContributor(item)}><strong>@{item.handle}</strong><span>{item.purpose || "Purpose not reported"}</span><small>{item.reachable ? "Connected now · delivery is not guaranteed" : "Addressable · not currently reachable"}</small></button>) : <p>No addressable contributors match.</p>}</div> : null}

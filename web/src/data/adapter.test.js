@@ -561,3 +561,23 @@ test("Slice 12 contributor lookup and structured writes preserve exact session t
   assert.deepEqual(JSON.parse(calls[1].options.body).mentions, [{ session: "SES-exact" }]);
   assert.deepEqual(JSON.parse(calls[2].options.body), { ref: "P-1", scope: "commons", base_revision: 2 });
 });
+
+test("Slice 12 rejects malformed contributor facts and structured mentions", async () => {
+  const malformedContributor = createHTTPAdapter({ fetchImpl: async () => apiResponse({ limit: 8, items: [{ handle: "agent-000042", session: "SES-exact", host: "plumbob", project_relationship: "same_project", addressable: true, reachable: "false", interpretation: "Addressable only.", host_connected: false, execution: "not_running" }] }) });
+  await assert.rejects(
+    malformedContributor.readContributors({ q: "agent", project: "alpha", cursor: "", limit: 8 }),
+    (error) => error.code === "invalid_payload",
+  );
+
+  const malformedMentions = createHTTPAdapter({ fetchImpl: async () => apiResponse({
+    post: {
+      id: "P-1", title: "Post", body: "Body", basis: "Basis", topic: { id: "general", name: "General" }, kind: "notice",
+      author: { session: "SES-author" }, created_at: "2026-08-11T00:00:00Z", comment_count: 1, state: "open", attachments: [], destination: { kind: "post", ref: "P-1" },
+    },
+    comments: { limit: 20, items: [{ id: "C-1", body: "Body", intent: "clarify", author: { session: "SES-author" }, created_at: "2026-08-11T00:00:00Z", mentions: "SES-spoofed" }] },
+  }) });
+  await assert.rejects(
+    malformedMentions.readPost("P-1", { comments_cursor: "", comments_limit: 20 }),
+    (error) => error.code === "invalid_payload",
+  );
+});

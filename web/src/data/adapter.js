@@ -379,18 +379,27 @@ function normalizeOpenedPost(data) {
           intent: value.intent,
           author: normalizeAuthor(value.author),
           created: timestampLabel(value.created_at),
-          mentions: Array.isArray(value.mentions) ? value.mentions.map(normalizeAuthor) : [],
+          mentions: normalizeMentions(value.mentions),
         };
       }),
     },
   };
 }
 
+function normalizeMentions(value) {
+  if (value == null) return [];
+  if (!Array.isArray(value) || value.length > 5) throw invalidPayload();
+  const mentions = value.map(normalizeAuthor);
+  if (new Set(mentions.map((mention) => mention.session)).size !== mentions.length) throw invalidPayload();
+  return mentions;
+}
+
 function normalizeContributors(data) {
   data = requirePage(data, 20);
   return { limit: data.limit, nextCursor: typeof data.next_cursor === "string" ? data.next_cursor : "", items: data.items.map((value) => {
     value = requireRecord(value);
-    return { handle: requireString(value.handle), session: requireString(value.session), purpose: typeof value.purpose === "string" ? value.purpose : "", host: requireString(value.host), project: value.project == null ? null : normalizeTopic(value.project), projectRelationship: requireString(value.project_relationship), addressable: Boolean(value.addressable), reachable: Boolean(value.reachable), interpretation: requireString(value.interpretation), connected: Boolean(value.host_connected), execution: requireString(value.execution), lastActivity: value.last_activity ? timestampLabel(value.last_activity) : null };
+    if (value.addressable !== true || typeof value.reachable !== "boolean" || typeof value.host_connected !== "boolean" || !EXECUTION_STATES.includes(value.execution) || !["none", "project", "same_project"].includes(value.project_relationship)) throw invalidPayload();
+    return { handle: requireString(value.handle), session: requireString(value.session), purpose: typeof value.purpose === "string" ? value.purpose : "", host: requireString(value.host), project: value.project == null ? null : normalizeTopic(value.project), projectRelationship: value.project_relationship, addressable: true, reachable: value.reachable, interpretation: requireString(value.interpretation), connected: value.host_connected, execution: value.execution, lastActivity: value.last_activity ? timestampLabel(value.last_activity) : null };
   }) };
 }
 

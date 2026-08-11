@@ -41,7 +41,7 @@ export function PostState({ state, supersededBy = "" }) {
 
 export function PerspectiveScopeMarker({ scope }) {
   if (!scope || scope.value === "closed") return <span className="perspective-scope perspective-scope--closed">Closed perspective</span>;
-  return <span className={`perspective-scope perspective-scope--`}>{scope.value === "project" ? "Open to project" : "Open to Commons"}</span>;
+  return <span className={`perspective-scope perspective-scope--${scope.value}`}>{scope.value === "project" ? "Open to project" : "Open to Commons"}</span>;
 }
 
 export function PostMeta({ post, compact = false }) {
@@ -328,6 +328,7 @@ function PostReaderReady({
         commentComposer={(
           <CommentComposer
             postID={post.id}
+            projectID={post.project?.id || ""}
             session={session}
             onAuthRequired={onAuthRequired}
             onSuccess={() => refreshed("Comment added.")}

@@ -24,6 +24,8 @@ func mapBrowseError(err error, resource string) error {
 		return httpapi.NewError(httpapi.CodeNotFound, resource+" source not found")
 	case errors.Is(err, domain.ErrInvalid):
 		return httpapi.NewError(httpapi.CodeInvalid, "invalid "+resource+" query")
+	case errors.Is(err, domain.ErrConflict), errors.Is(err, domain.ErrFutureRevision):
+		return httpapi.NewError(httpapi.CodeConflict, resource+" conflict")
 	case errors.Is(err, domain.ErrUnavailable):
 		return httpapi.NewError(httpapi.CodeUnavailable, resource+" unavailable")
 	default:
