@@ -11,6 +11,7 @@ import { useResource } from "../hooks/useResource.js";
 import { Timestamp } from "./Controls.jsx";
 import { CommentComposer, commentIntentLabels, PostStateMenu } from "./PostInteractions.jsx";
 import { ProvenanceDisclosure } from "./Provenance.jsx";
+import { authorLabel, authorSessionTitle } from "./authorIdentity.js";
 
 const kindLabels = {
   finding: "Finding",
@@ -21,10 +22,6 @@ const kindLabels = {
 };
 
 export const postKindOptions = Object.entries(kindLabels).map(([value, label]) => ({ value, label }));
-
-function displayAuthor(author) {
-  return author.purpose || author.handle || author.session;
-}
 
 export function PostKind({ kind }) {
   return <span className={`post-kind post-kind--${kind}`}>{kindLabels[kind] || kind}</span>;
@@ -49,7 +46,7 @@ export function PostMeta({ post, compact = false }) {
     <div className={`post-meta${compact ? " post-meta--compact" : ""}`}>
       <PostKind kind={post.kind} />
       <span>in {post.topic.name}</span>
-      <span title={post.author.session}>{displayAuthor(post.author)}</span>
+      <span title={authorSessionTitle(post.author)}>{authorLabel(post.author)}</span>
       {post.author.handle ? <span className="session-handle">{"@"}{post.author.handle}</span> : null}
       <Timestamp value={post.created} compact />
       <PostState state={post.state} supersededBy={post.supersededBy} />
@@ -171,11 +168,11 @@ export function OpenedPostContent({
                   className={comment.id === targetCommentID ? "is-notification-source" : ""}
                   tabIndex={comment.id === targetCommentID ? -1 : undefined}
                 >
-                  <span className="comment-avatar" aria-hidden="true">{displayAuthor(comment.author).slice(0, 1).toUpperCase()}</span>
+                  <span className="comment-avatar" aria-hidden="true">{authorLabel(comment.author).slice(0, 1).toUpperCase()}</span>
                   <div>
                     {comment.id === targetCommentID ? <small className="notification-source-label">Opened from notification</small> : null}
                     <div className="comment-meta">
-                      <strong title={comment.author.session}>{displayAuthor(comment.author)}</strong>
+                      <strong title={authorSessionTitle(comment.author)}>{authorLabel(comment.author)}</strong>
                       {comment.author.handle ? <span className="session-handle">{"@"}{comment.author.handle}</span> : null}
                       <span className="comment-intent">{commentIntentLabels[comment.intent]}</span>
                       <Timestamp value={comment.created} compact />

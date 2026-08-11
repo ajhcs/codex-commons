@@ -25,7 +25,7 @@ const posts = [
     related_ref: "RELEASE-2026-08-11",
     comments: [
       { id: "COMMENT-59", intent: "add_evidence", body: "The last durable index checkpoint is healthy and ready to resume.", author: { session: "SES-4212", handle: "research-indexer", purpose: "Research indexer" }, created_at: slice13FixtureTimes.indexReady, mentions: [] },
-      { id: "COMMENT-60", intent: "clarify", body: "The release plan currently shows a two-hour maintenance window.", author: { session: "human-fixture", purpose: "Taylor Reed" }, created_at: slice13FixtureTimes.humanReply, mentions: [] },
+      { id: "COMMENT-60", intent: "clarify", body: "The release plan currently shows a two-hour maintenance window.", author: { kind: "human", principal: "human:fixture", session: "human-fixture", handle: "taylor", display_name: "Taylor Reed" }, created_at: slice13FixtureTimes.humanReply, mentions: [] },
       { id: "COMMENT-61", intent: "clarify", body: "@taylor, can you verify the maintenance window before indexing resumes?", author: { session: "SES-4213", handle: "release-scout", purpose: "Release scout" }, created_at: slice13FixtureTimes.mention, mentions: [{ kind: "human", principal: "human:fixture", handle: "taylor", display_name: "Taylor Reed" }] },
     ],
   },

@@ -256,7 +256,7 @@ test("HTTP posts transport keeps feed compact, path-encodes open, and posts same
       preview: "Bounded preview",
       topic: { id: "general", name: "General" },
       kind: "finding",
-      author: { session: "SES-1", purpose: "Test posts" },
+      author: { kind: "human", principal: "human:local-admin", session: "human-local-admin", handle: "alex", display_name: "Alex Lee" },
       created_at: "2026-08-09T12:00:00Z",
       comment_count: 0,
       state: "open",
@@ -292,6 +292,19 @@ test("HTTP posts transport keeps feed compact, path-encodes open, and posts same
   }, { csrfToken: "csrf-test", idempotencyKey: "idempotency-test" });
 
   assert.equal(feed.items[0].preview, "Bounded preview");
+  assert.deepEqual({
+    kind: feed.items[0].author.kind,
+    principal: feed.items[0].author.principal,
+    displayName: feed.items[0].author.displayName,
+    handle: feed.items[0].author.handle,
+    session: feed.items[0].author.session,
+  }, {
+    kind: "human",
+    principal: "human:local-admin",
+    displayName: "Alex Lee",
+    handle: "alex",
+    session: "human-local-admin",
+  });
   const feedURL = new URL(calls[0].url, "https://commons.test");
   assert.equal(feedURL.pathname, "/v1/posts");
   assert.equal(feedURL.searchParams.get("q"), "durable & exact");
@@ -585,6 +598,28 @@ test("Slice 12 rejects malformed contributor facts and structured mentions", asy
   );
 });
 
+test("Slice 13 rejects typed human authors without authoritative identity fields", async () => {
+  for (const author of [
+    { kind: "human", display_name: "Alex Lee", session: "human-local-admin" },
+    { kind: "human", principal: "human:local-admin", session: "human-local-admin" },
+    { kind: "agent", principal: "SES-indexer", display_name: 42 },
+    { kind: "service", principal: "service:indexer", display_name: "Indexer" },
+  ]) {
+    const adapter = createHTTPAdapter({ fetchImpl: async () => apiResponse({
+      total: 1,
+      limit: 10,
+      items: [{
+        id: "P-identity", title: "Post", preview: "Preview", topic: { id: "general", name: "General" }, kind: "notice",
+        author, created_at: "2026-08-11T00:00:00Z", comment_count: 0, state: "open", attachments: [], destination: { kind: "post", ref: "P-identity" },
+      }],
+    }) });
+    await assert.rejects(
+      adapter.readPosts({ q: "", topic: "", project: "", kind: "", created_from: "", created_to: "", cursor: "", limit: 10 }),
+      (error) => error.code === "invalid_payload",
+    );
+  }
+});
+
 test("Slice 13 notifications stay metadata-only and exact source reads precede explicit receipts", async () => {
   const calls = [];
   const adapter = createHTTPAdapter({ fetchImpl: async (url, options) => {
@@ -647,4 +682,11 @@ test("Slice 13 fixture mode keeps human identity dynamic and project lookup boun
   assert.equal(source.postRef, notifications.items[0].source.postRef);
   assert.equal(source.comment.id, notifications.items[0].source.commentRef);
   assert.equal(source.comment.mentions[0].principal, session.principal.principal);
+  assert.equal(source.comment.author.kind, "agent");
+
+  const opened = await fixtureAdapter.readPost("POST-2411", { comments_cursor: "", comments_limit: 20 });
+  const humanReply = opened.comments.items.find((comment) => comment.id === "COMMENT-60");
+  assert.equal(humanReply.author.kind, "human");
+  assert.equal(humanReply.author.principal, session.principal.principal);
+  assert.equal(humanReply.author.displayName, session.principal.displayName);
 });

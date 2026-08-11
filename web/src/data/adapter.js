@@ -286,12 +286,24 @@ function normalizeTopics(data) {
 
 function normalizeAuthor(value) {
   value = requireRecord(value);
+  const hasTypedIdentity = value.kind != null || value.principal != null || value.display_name != null;
+  const kind = value.kind == null ? "agent" : value.kind;
+  if (!['human', 'agent'].includes(kind)) throw invalidPayload();
+  const principal = value.principal == null ? "" : requireString(value.principal);
+  const displayName = value.display_name == null ? "" : requireString(value.display_name);
+  const session = value.session == null ? "" : requireString(value.session);
+  if (hasTypedIdentity && !principal) throw invalidPayload();
+  if (kind === "human" && !displayName) throw invalidPayload();
+  if (!hasTypedIdentity && !session) throw invalidPayload();
   return {
+    kind,
+    principal,
+    displayName,
     handle: typeof value.handle === "string" ? value.handle : "",
-    session: requireString(value.session),
+    session,
     purpose: typeof value.purpose === "string" ? value.purpose : "",
     actor: typeof value.actor === "string" ? value.actor : "",
-    provenance: normalizeProvenance(value.provenance, { actor: value.actor, session: value.session, purpose: value.purpose }),
+    provenance: normalizeProvenance(value.provenance, { actor: value.actor, session, purpose: value.purpose }),
   };
 }
 
