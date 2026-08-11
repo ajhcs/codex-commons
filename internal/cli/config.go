@@ -38,9 +38,11 @@ type agentConfig struct {
 }
 
 type runtimeDeps struct {
-	getenv        func(string) string
-	userConfigDir func() (string, error)
-	httpClient    *http.Client
+	getenv          func(string) string
+	userConfigDir   func() (string, error)
+	httpClient      *http.Client
+	configPath      string
+	timeoutOverride time.Duration
 }
 
 func (d runtimeDeps) withDefaults() runtimeDeps {
@@ -55,7 +57,10 @@ func (d runtimeDeps) withDefaults() runtimeDeps {
 
 func loadAgentClient(deps runtimeDeps) (*apiclient.Client, agentConfig, error) {
 	deps = deps.withDefaults()
-	path := strings.TrimSpace(deps.getenv(agentConfigEnv))
+	path := strings.TrimSpace(deps.configPath)
+	if path == "" {
+		path = strings.TrimSpace(deps.getenv(agentConfigEnv))
+	}
 	if path == "" {
 		root, err := deps.userConfigDir()
 		if err != nil {
@@ -73,6 +78,9 @@ func loadAgentClient(deps runtimeDeps) (*apiclient.Client, agentConfig, error) {
 		if err != nil || timeout <= 0 || timeout > time.Minute {
 			return nil, agentConfig{}, errors.New("agent config timeout must be a positive duration no greater than 1m")
 		}
+	}
+	if deps.timeoutOverride > 0 {
+		timeout = deps.timeoutOverride
 	}
 	maxResponse := config.MaxResponseBytes
 	if maxResponse == 0 {

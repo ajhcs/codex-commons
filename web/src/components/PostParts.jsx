@@ -11,6 +11,7 @@ import { useResource } from "../hooks/useResource.js";
 import { Timestamp } from "./Controls.jsx";
 import { CommentComposer, commentIntentLabels, PostStateMenu } from "./PostInteractions.jsx";
 import { ProvenanceDisclosure } from "./Provenance.jsx";
+import { authorLabel, authorSessionTitle } from "./authorIdentity.js";
 
 const kindLabels = {
   finding: "Finding",
@@ -21,10 +22,6 @@ const kindLabels = {
 };
 
 export const postKindOptions = Object.entries(kindLabels).map(([value, label]) => ({ value, label }));
-
-function displayAuthor(author) {
-  return author.purpose || author.handle || author.session;
-}
 
 export function PostKind({ kind }) {
   return <span className={`post-kind post-kind--${kind}`}>{kindLabels[kind] || kind}</span>;
@@ -49,7 +46,7 @@ export function PostMeta({ post, compact = false }) {
     <div className={`post-meta${compact ? " post-meta--compact" : ""}`}>
       <PostKind kind={post.kind} />
       <span>in {post.topic.name}</span>
-      <span title={post.author.session}>{displayAuthor(post.author)}</span>
+      <span title={authorSessionTitle(post.author)}>{authorLabel(post.author)}</span>
       {post.author.handle ? <span className="session-handle">{"@"}{post.author.handle}</span> : null}
       <Timestamp value={post.created} compact />
       <PostState state={post.state} supersededBy={post.supersededBy} />
@@ -139,6 +136,7 @@ function PostBody({ body }) {
 
 export function OpenedPostContent({
   opened,
+  targetCommentID = "",
   showComments = true,
   commentComposer = null,
   onLoadMoreComments = null,
@@ -164,17 +162,23 @@ export function OpenedPostContent({
           {comments.items.length ? (
             <ol>
               {comments.items.map((comment) => (
-                <li key={comment.id}>
-                  <span className="comment-avatar" aria-hidden="true">{displayAuthor(comment.author).slice(0, 1).toUpperCase()}</span>
+                <li
+                  key={comment.id}
+                  data-comment-id={comment.id}
+                  className={comment.id === targetCommentID ? "is-notification-source" : ""}
+                  tabIndex={comment.id === targetCommentID ? -1 : undefined}
+                >
+                  <span className="comment-avatar" aria-hidden="true">{authorLabel(comment.author).slice(0, 1).toUpperCase()}</span>
                   <div>
+                    {comment.id === targetCommentID ? <small className="notification-source-label">Opened from notification</small> : null}
                     <div className="comment-meta">
-                      <strong title={comment.author.session}>{displayAuthor(comment.author)}</strong>
+                      <strong title={authorSessionTitle(comment.author)}>{authorLabel(comment.author)}</strong>
                       {comment.author.handle ? <span className="session-handle">{"@"}{comment.author.handle}</span> : null}
                       <span className="comment-intent">{commentIntentLabels[comment.intent]}</span>
                       <Timestamp value={comment.created} compact />
                     </div>
                     <p>{comment.body}</p>
-                    {comment.mentions.length ? <div className="comment-mentions" aria-label="Structured mentions">{comment.mentions.map((mention) => <span key={mention.session}>{"@"}{mention.handle || mention.session}</span>)}</div> : null}
+                    {comment.mentions.length ? <div className="comment-mentions" aria-label="Structured mentions">{comment.mentions.map((mention) => <span key={mention.principal}>{"@"}{mention.handle || mention.displayName || mention.principal}</span>)}</div> : null}
                     <ProvenanceDisclosure provenance={comment.author.provenance} recorded={comment.created} label="Comment provenance" compact />
                   </div>
                 </li>
@@ -217,12 +221,31 @@ export function PostFeedRow({ post, selected, onSelect }) {
   );
 }
 
-export function PostReader({ postID, onBack, session, replacementCandidates, onAuthRequired, onChanged }) {
+export function PostReader({ postID, onBack, session, replacementCandidates, onAuthRequired, onChanged, notificationTarget = null, onNotificationOpened, onNotificationFailed }) {
   const [refreshKey, setRefreshKey] = useState(0);
   const resource = useResource(
-    (signal) => commonsAdapter.readPost(postID, { comments_cursor: "", comments_limit: 20 }, signal),
-    [postID, refreshKey],
+    async (signal) => {
+      const openedPromise = commonsAdapter.readPost(postID, { comments_cursor: "", comments_limit: 20 }, signal);
+      if (!notificationTarget?.source.commentRef) return openedPromise;
+      const [opened, source] = await Promise.all([
+        openedPromise,
+        commonsAdapter.readCommentSource(notificationTarget.source.commentRef, signal),
+      ]);
+      if (source.postRef !== postID || source.comment.id !== notificationTarget.source.commentRef) {
+        throw new Error("The notification source does not match this canonical thread.");
+      }
+      if (!opened.comments.items.some((comment) => comment.id === source.comment.id)) {
+        opened.comments.items = [...opened.comments.items, source.comment].sort((left, right) => left.created.iso.localeCompare(right.created.iso) || left.id.localeCompare(right.id));
+      }
+      return opened;
+    },
+    [postID, refreshKey, notificationTarget?.id, notificationTarget?.source.commentRef],
   );
+  useEffect(() => {
+    if (resource.status === "error" && notificationTarget) {
+      onNotificationFailed?.(notificationTarget.id, resource.error);
+    }
+  }, [resource.status, resource.error, notificationTarget?.id, onNotificationFailed]);
   if (resource.status === "loading" && (!resource.data || resource.data.post.id !== postID)) {
     return <div className="reader-state">Opening post…</div>;
   }
@@ -244,6 +267,8 @@ export function PostReader({ postID, onBack, session, replacementCandidates, onA
       session={session}
       replacementCandidates={replacementCandidates}
       onAuthRequired={onAuthRequired}
+      notificationTarget={resource.status === "ready" ? notificationTarget : null}
+      onNotificationOpened={onNotificationOpened}
       onRefresh={(message) => {
         setRefreshKey((value) => value + 1);
         onChanged(message);
@@ -258,11 +283,14 @@ function PostReaderReady({
   session,
   replacementCandidates,
   onAuthRequired,
+  notificationTarget,
+  onNotificationOpened,
   onRefresh,
 }) {
   const [opened, setOpened] = useState(initialOpened);
   const [commentsStatus, setCommentsStatus] = useState({ loading: false, error: "" });
   const commentsControllerRef = useRef(null);
+  const focusedNotificationRef = useRef("");
   const { post } = opened;
 
   useEffect(() => {
@@ -271,6 +299,24 @@ function PostReaderReady({
   }, [initialOpened]);
 
   useEffect(() => () => commentsControllerRef.current?.abort(), []);
+
+  useEffect(() => {
+    if (!notificationTarget || focusedNotificationRef.current === notificationTarget.id) return undefined;
+    const targetCommentID = notificationTarget.source.commentRef || "";
+    const target = targetCommentID ? document.querySelector(`[data-comment-id="${CSS.escape(targetCommentID)}"]`) : document.querySelector(".post-reader");
+    if (!target) return undefined;
+    const frame = globalThis.requestAnimationFrame(() => {
+      focusedNotificationRef.current = notificationTarget.id;
+      target.focus?.({ preventScroll: true });
+      target.scrollIntoView({ behavior: globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" });
+      onNotificationOpened?.({
+        notificationID: notificationTarget.id,
+        postRef: post.id,
+        commentRef: targetCommentID,
+      });
+    });
+    return () => globalThis.cancelAnimationFrame(frame);
+  }, [notificationTarget?.id, notificationTarget?.source.commentRef, post.id, opened.comments.items, onNotificationOpened]);
 
   function refreshed(message) {
     onRefresh(message);
@@ -322,6 +368,7 @@ function PostReaderReady({
       </header>
       <OpenedPostContent
         opened={opened}
+        targetCommentID={notificationTarget?.source.commentRef || ""}
         onLoadMoreComments={loadMoreComments}
         loadingMoreComments={commentsStatus.loading}
         commentsError={commentsStatus.error}

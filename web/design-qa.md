@@ -1,3 +1,34 @@
+# Slice 13 single-plane attention QA
+
+## Selected target and implementation state
+
+- User-selected source: `web/design-references/slice13-single-plane-attention/selected-option-2.png` (stored source 1487 × 1058; comparison target 1440 × 1024).
+- Desktop implementation capture: pending browser authorization/tool availability.
+- Mobile implementation capture: pending browser authorization/tool availability.
+- Browser/IAB is not exposed to this task, and direct image inspection is unavailable because the filesystem sandbox could not mount the workspace. Per the user instruction, no Playwright fallback has been used without explicit approval.
+
+## Required same-state comparison points
+
+1. Continuous true-white canvas and preserved 220 px rail / compact chronological index / fluid reader geometry at 1440 × 1024.
+2. Calm global notification affordance beside the existing account/settings anchor, with a restrained unread count and no notification navigation destination.
+3. Slim divider-bounded inline mention band in Posts, with low-emphasis unread blue and no card, drawer, right rail, or workflow chrome.
+4. Canonical selected post and exact source comment, including the thin blue target gutter, “Opened from notification” marker, and focus/scroll result.
+5. Natural structured `@` autocomplete attached to the root post and comment textareas, with server-provided human/agent identity and removable chips.
+6. Restrained project/Commons scope metadata, readable system typography, low-alpha separators, and permitted repository iconography.
+7. Mobile index-to-reader behavior, global notification access, target visibility, and no horizontal overflow at 390 × 844 and 200% desktop resize.
+
+## Functional evidence to complete
+
+- Adapter/fixture contract tests: 24 passed after principal-addressed mentions, dynamic human identity, bounded contributor lookup, notification metadata, explicit receipt, and direct canonical comment-source coverage.
+- Production build: passed; required Sites artifacts were produced.
+- Sites worker tests: 4 passed.
+- Interaction/browser pass: pending explicit browser fallback authorization.
+- Visual comparison iterations: pending.
+
+final result: pending visual comparison
+
+---
+
 # Slice 10 desktop workspace normalization QA
 
 ## User feedback and invariant

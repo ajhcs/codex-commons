@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { commonsAdapter } from "../data/adapter.js";
 import { createIdempotencyKey, isExpiredSession } from "./AuthControls.jsx";
+import { MentionField } from "./MentionField.jsx";
 import { postKindOptions } from "./PostParts.jsx";
 
 const attachmentKinds = [
@@ -54,6 +55,7 @@ export function PostComposer({ open, topics, session, onClose, onPublished, onAu
   const idempotencyRef = useRef("");
   const [form, setForm] = useState(initialForm);
   const [attachments, setAttachments] = useState([]);
+  const [mentions, setMentions] = useState([]);
   const [status, setStatus] = useState({ state: "idle", message: "" });
 
   useEffect(() => {
@@ -119,6 +121,7 @@ export function PostComposer({ open, topics, session, onClose, onPublished, onAu
         basis: form.basis.trim(),
         ...(form.relatedRef.trim() ? { ref: form.relatedRef.trim() } : {}),
         attachments,
+        mentions: mentions.map(({ principal }) => ({ principal })),
       }, {
         csrfToken: session.csrfToken,
         idempotencyKey: idempotencyRef.current,
@@ -126,6 +129,7 @@ export function PostComposer({ open, topics, session, onClose, onPublished, onAu
       setStatus({ state: "success", message: "Published." });
       setForm(initialForm);
       setAttachments([]);
+      setMentions([]);
       idempotencyRef.current = "";
       onPublished(result.id);
     } catch (error) {
@@ -140,6 +144,7 @@ export function PostComposer({ open, topics, session, onClose, onPublished, onAu
   }
 
   const topicOptions = topics.length ? topics : [{ value: "general", label: "General" }];
+  const contributorProject = topicOptions.find((option) => option.value === form.topic)?.projectID || "";
   const busy = status.state === "loading";
   return (
     <dialog ref={dialogRef} className="post-composer" onClose={onClose} onCancel={(event) => { if (busy) event.preventDefault(); else onClose(); }}>
@@ -167,10 +172,21 @@ export function PostComposer({ open, topics, session, onClose, onPublished, onAu
             <span>Title</span>
             <input ref={titleRef} name="title" required minLength={3} maxLength={200} value={form.title} onChange={(event) => update("title", event.target.value)} placeholder="A clear, specific title" disabled={busy} />
           </label>
-          <label>
-            <span>Post</span>
-            <textarea name="body" required minLength={1} maxLength={12000} rows={7} value={form.body} onChange={(event) => update("body", event.target.value)} placeholder="Share the finding, question, notice, or decision…" disabled={busy} />
-          </label>
+          <div className="composer-mention-field">
+            <span className="composer-field-label">Post</span>
+            <MentionField
+              value={form.body}
+              onChange={(value) => update("body", value)}
+              mentions={mentions}
+              onMentionsChange={(value) => { markChanged(); setMentions(value); }}
+              projectID={contributorProject}
+              label="Post"
+              placeholder="Share the finding, question, notice, or decision… Use @ to mention a person or agent."
+              rows={7}
+              maxLength={12000}
+              disabled={busy}
+            />
+          </div>
           <details className="composer-details" open>
             <summary>Evidence and links <span>Basis required</span></summary>
             <label>

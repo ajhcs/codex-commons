@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { commonsAdapter } from "../data/adapter.js";
 import { useAuthSession } from "../hooks/useAuthSession.js";
+import { useNotifications } from "../hooks/NotificationContext.jsx";
 import { createIdempotencyKey, LoginDialog, SessionControl } from "./AuthControls.jsx";
 import { SettingsDialog } from "./SettingsDialog.jsx";
 
 import BookOpen from "../icons/BookOpen.tsx";
+import Bell from "../icons/Bell.tsx";
 import ChevronLeft from "../icons/ChevronLeft.tsx";
 import FileDocument from "../icons/FileDocument.tsx";
 import Folder from "../icons/Folder.tsx";
@@ -16,11 +18,61 @@ const navigation = [
 
 export function AppShell({ route, onNavigate, railContent = null, children }) {
   const auth = useAuthSession();
+  const notifications = useNotifications();
+  const notificationButtonRef = useRef(null);
   const [collapsed, setCollapsed] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [accountMessage, setAccountMessage] = useState("");
   const primaryRoute = route === "project" ? "projects" : route === "post" ? "posts" : route;
+  const notificationLabel = !auth.session?.authenticated
+    ? "Sign in to check mentions"
+    : notifications.status === "loading"
+      ? "Checking unread mentions"
+      : notifications.status === "error"
+        ? "Mentions unavailable"
+        : notifications.data.unreadCount
+          ? `${notifications.data.unreadCount} unread mention${notifications.data.unreadCount === 1 ? "" : "s"}`
+          : "No unread mentions";
+
+  useEffect(() => {
+    if (!notifications.active) return undefined;
+    function escape(event) {
+      if (event.key !== "Escape" || event.defaultPrevented || event.target instanceof Element && event.target.closest("dialog[open]")) return;
+      notifications.close();
+      queueMicrotask(() => notificationButtonRef.current?.focus());
+    }
+    globalThis.addEventListener("keydown", escape);
+    return () => globalThis.removeEventListener("keydown", escape);
+  }, [notifications.active, notifications.close]);
+
+  async function toggleNotification() {
+    setAccountMessage("");
+    if (notifications.active) {
+      notifications.close();
+      return;
+    }
+    if (!auth.session?.authenticated) {
+      setLoginOpen(true);
+      return;
+    }
+    let target = notifications.nextUnread;
+    if (!target && (notifications.status === "error" || notifications.data.unreadCount > 0)) {
+      try {
+        target = (await notifications.refresh()).items.find((item) => !item.readAt) || null;
+      } catch {
+        setAccountMessage("Mentions are unavailable.");
+        return;
+      }
+    }
+    if (!target) {
+      setAccountMessage(notifications.status === "loading" ? "Checking mentions…" : "No unread mentions.");
+      return;
+    }
+    notifications.open(target);
+    onNavigate("post", target.source.postRef);
+  }
+
   async function signOut() {
     if (!auth.session?.authenticated) return;
     try {
@@ -65,7 +117,21 @@ export function AppShell({ route, onNavigate, railContent = null, children }) {
         </nav>
         {railContent ? <div className="rail-context">{railContent}</div> : null}
         <div className="rail-footer">
-          <button className="rail-settings" type="button" onClick={() => setSettingsOpen(true)}><span aria-hidden="true">Aa</span><strong>Settings</strong></button>
+          <div className="rail-footer-actions">
+            <button
+              ref={notificationButtonRef}
+              className={`rail-notifications${notifications.active ? " is-active" : ""}`}
+              type="button"
+              aria-label={notificationLabel}
+              aria-pressed={Boolean(notifications.active)}
+              aria-busy={notifications.status === "loading"}
+              onClick={toggleNotification}
+            >
+              <Bell aria-hidden="true" />
+              {notifications.data.unreadCount ? <span className="notification-count" aria-hidden="true">{Math.min(notifications.data.unreadCount, 99)}</span> : null}
+            </button>
+            <button className="rail-settings" type="button" onClick={() => setSettingsOpen(true)}><span aria-hidden="true">Aa</span><strong>Settings</strong></button>
+          </div>
           <SessionControl status={auth.status} session={auth.session} onSignIn={() => setLoginOpen(true)} onSignOut={signOut} />
           {accountMessage ? <small role="status">{accountMessage}</small> : null}
         </div>

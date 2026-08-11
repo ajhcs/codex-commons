@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ const (
 type PostRepository interface {
 	PostBrowseSnapshot(context.Context, domain.PostBrowseQuery) (domain.PostBrowseSnapshot, error)
 	PostThread(context.Context, domain.PostThreadQuery) (domain.PostThread, error)
+	PostCommentByID(context.Context, string, string, string) (string, domain.PostComment, error)
 	SetPostState(context.Context, domain.PostStateRequest) (domain.WriteResult, error)
 }
 
@@ -28,9 +30,10 @@ type AddressabilityRepository interface {
 }
 
 type PostFeedRequest struct {
-	Cursor, Search, Topic, Project, Kind string
-	CreatedFrom, CreatedTo               *time.Time
-	Limit                                int
+	ViewerKind, ViewerPrincipal, ViewerSession string
+	Cursor, Search, Topic, Project, Kind       string
+	CreatedFrom, CreatedTo                     *time.Time
+	Limit                                      int
 }
 
 type PostAttachment struct {
@@ -40,10 +43,23 @@ type PostAttachment struct {
 }
 
 type PostAuthor struct {
-	Handle     string      `json:"handle,omitempty"`
-	Session    string      `json:"session"`
-	Purpose    string      `json:"purpose,omitempty"`
-	Provenance *Provenance `json:"provenance,omitempty"`
+	Kind        string      `json:"kind"`
+	Principal   string      `json:"principal"`
+	DisplayName string      `json:"display_name,omitempty"`
+	Handle      string      `json:"handle,omitempty"`
+	Session     string      `json:"session,omitempty"`
+	Purpose     string      `json:"purpose,omitempty"`
+	Provenance  *Provenance `json:"provenance,omitempty"`
+}
+
+type MentionTarget struct {
+	Kind        string      `json:"kind"`
+	Principal   string      `json:"principal"`
+	Session     string      `json:"session,omitempty"`
+	Handle      string      `json:"handle,omitempty"`
+	DisplayName string      `json:"display_name,omitempty"`
+	Purpose     string      `json:"purpose,omitempty"`
+	Provenance  *Provenance `json:"provenance,omitempty"`
 }
 
 type PostTopic struct {
@@ -76,6 +92,7 @@ type PostFeedItem struct {
 	Attachments      []PostAttachment  `json:"attachments"`
 	Destination      BrowseDestination `json:"destination"`
 	PerspectiveScope PerspectiveScope  `json:"perspective_scope"`
+	Mentions         []MentionTarget   `json:"mentions"`
 }
 
 type PostFeedResult struct {
@@ -86,8 +103,9 @@ type PostFeedResult struct {
 }
 
 type PostOpenRequest struct {
-	Ref, CommentsCursor string
-	CommentsLimit       int
+	Ref, CommentsCursor                        string
+	CommentsLimit                              int
+	ViewerKind, ViewerPrincipal, ViewerSession string
 }
 
 type PostFull struct {
@@ -108,15 +126,16 @@ type PostFull struct {
 	CommentCount     int               `json:"comment_count"`
 	Destination      BrowseDestination `json:"destination"`
 	PerspectiveScope PerspectiveScope  `json:"perspective_scope"`
+	Mentions         []MentionTarget   `json:"mentions"`
 }
 
 type PostComment struct {
-	ID        string       `json:"id"`
-	Body      string       `json:"body"`
-	Intent    string       `json:"intent"`
-	Author    PostAuthor   `json:"author"`
-	CreatedAt time.Time    `json:"created_at"`
-	Mentions  []PostAuthor `json:"mentions"`
+	ID        string          `json:"id"`
+	Body      string          `json:"body"`
+	Intent    string          `json:"intent"`
+	Author    PostAuthor      `json:"author"`
+	CreatedAt time.Time       `json:"created_at"`
+	Mentions  []MentionTarget `json:"mentions"`
 }
 
 type PostCommentPage struct {
@@ -141,8 +160,9 @@ type PerspectiveScopeRequest struct {
 }
 
 type CommentRequest struct {
-	Ref, Body, Intent, Actor, Session, RequestID string
-	MentionSessionIDs                            []string
+	Ref, Body, Intent                                    string
+	Actor, ActorKind, ActorPrincipal, Session, RequestID string
+	MentionSessionIDs, MentionPrincipals                 []string
 }
 
 func postFeedLimit(value int) (int, bool) {
@@ -182,15 +202,26 @@ func appProject(item *domain.PostProject) *PostProject {
 	return &PostProject{ID: item.ID, Name: item.Name}
 }
 
-func appAuthor(item domain.PostAuthor) PostAuthor {
-	return PostAuthor{Handle: item.Handle, Session: item.SessionID, Purpose: item.Purpose,
+func (s *Service) appAuthor(item domain.PostAuthor) PostAuthor {
+	out := PostAuthor{Kind: item.Kind, Principal: item.Principal, Handle: item.Handle, Session: item.SessionID, Purpose: item.Purpose,
 		Provenance: attestedProvenance("", item.SessionID, item.Purpose)}
+	if item.Kind == "human" {
+		out.Handle, out.DisplayName, out.Purpose = s.humanHandle, s.humanDisplayName, ""
+	}
+	return out
 }
 
-func appAuthors(items []domain.PostAuthor) []PostAuthor {
-	out := make([]PostAuthor, 0, len(items))
+func (s *Service) appMentions(items []domain.MentionTarget) []MentionTarget {
+	out := make([]MentionTarget, 0, len(items))
 	for _, item := range items {
-		out = append(out, appAuthor(item))
+		target := MentionTarget{Kind: item.Kind, Principal: item.Principal, Session: item.SessionID, Handle: item.Handle, Purpose: item.Purpose}
+		if item.Kind == "human" {
+			target.Handle = s.humanHandle
+			target.DisplayName = s.humanDisplayName
+		} else {
+			target.Provenance = attestedProvenance("", item.SessionID, item.Purpose)
+		}
+		out = append(out, target)
 	}
 	return out
 }
@@ -217,7 +248,7 @@ func (s *Service) BrowsePosts(ctx context.Context, request PostFeedRequest) (Pos
 		Filters: domain.PostFilters{Search: request.Search, TopicID: request.Topic,
 			ProjectID: request.Project, Kind: request.Kind,
 			CreatedFrom: request.CreatedFrom, CreatedTo: request.CreatedTo},
-		After: after, Limit: limit,
+		After: after, Limit: limit, ViewerKind: request.ViewerKind, ViewerPrincipal: request.ViewerPrincipal, ViewerSession: request.ViewerSession,
 	})
 	if err != nil {
 		return PostFeedResult{}, err
@@ -230,11 +261,12 @@ func (s *Service) BrowsePosts(ctx context.Context, request PostFeedRequest) (Pos
 	for _, item := range snapshot.Items {
 		out.Items = append(out.Items, PostFeedItem{
 			ID: item.ID, Kind: item.Kind, Title: item.Title, Preview: item.Preview,
-			Topic: appTopic(item.Topic), Project: appProject(item.Project), Author: appAuthor(item.Author),
+			Topic: appTopic(item.Topic), Project: appProject(item.Project), Author: s.appAuthor(item.Author),
 			CreatedAt: item.CreatedAt, CommentCount: item.CommentCount, State: item.State,
 			SupersededBy: item.SupersededBy, Attachments: appAttachments(item.Attachments),
 			Destination:      BrowseDestination{Kind: "post", Ref: item.ID},
 			PerspectiveScope: PerspectiveScope{Value: item.PerspectiveScope.Scope, Revision: item.PerspectiveScope.Revision},
+			Mentions:         s.appMentions(item.Mentions),
 		})
 	}
 	if hasMore && len(snapshot.Items) > 0 {
@@ -261,7 +293,7 @@ func (s *Service) OpenPost(ctx context.Context, request PostOpenRequest) (PostOp
 	if err != nil || after != nil && after.Time.IsZero() {
 		return PostOpenResult{}, domain.ErrInvalid
 	}
-	thread, err := repository.PostThread(ctx, domain.PostThreadQuery{PostID: request.Ref, After: after, Limit: limit})
+	thread, err := repository.PostThread(ctx, domain.PostThreadQuery{PostID: request.Ref, After: after, Limit: limit, ViewerKind: request.ViewerKind, ViewerPrincipal: request.ViewerPrincipal, ViewerSession: request.ViewerSession})
 	if err != nil {
 		return PostOpenResult{}, err
 	}
@@ -273,17 +305,18 @@ func (s *Service) OpenPost(ctx context.Context, request PostOpenRequest) (PostOp
 		Post: PostFull{ID: thread.Post.Ref, Kind: thread.Post.Kind, Title: thread.Post.Title,
 			Body: thread.Post.Body, Basis: thread.Post.Basis, RelatedRef: thread.Post.RelatedRef,
 			Revision: thread.Post.Revision, Topic: appTopic(thread.Topic), Project: appProject(thread.Project),
-			Author: appAuthor(thread.Author), CreatedAt: thread.Post.CreatedAt, State: thread.State,
+			Author: s.appAuthor(thread.Author), CreatedAt: thread.Post.CreatedAt, State: thread.State,
 			SupersededBy: thread.SupersededBy, Attachments: appAttachments(thread.Attachments),
 			CommentCount:     thread.CommentCount,
 			Destination:      BrowseDestination{Kind: "post", Ref: thread.Post.Ref},
-			PerspectiveScope: PerspectiveScope{Value: thread.PerspectiveScope.Scope, Revision: thread.PerspectiveScope.Revision}},
+			PerspectiveScope: PerspectiveScope{Value: thread.PerspectiveScope.Scope, Revision: thread.PerspectiveScope.Revision},
+			Mentions:         s.appMentions(thread.Mentions)},
 		Comments: PostCommentPage{Limit: limit, Items: make([]PostComment, 0, len(thread.Comments))},
 	}
 	for _, item := range thread.Comments {
 		out.Comments.Items = append(out.Comments.Items, PostComment{
-			ID: item.ID, Body: item.Body, Intent: item.Intent, Author: appAuthor(item.Author), CreatedAt: item.CreatedAt,
-			Mentions: appAuthors(item.Mentions),
+			ID: item.ID, Body: item.Body, Intent: item.Intent, Author: s.appAuthor(item.Author), CreatedAt: item.CreatedAt,
+			Mentions: s.appMentions(item.Mentions),
 		})
 	}
 	if hasMore && len(thread.Comments) > 0 {
@@ -316,10 +349,13 @@ type ContributorProject struct {
 	Name string `json:"name"`
 }
 type ContributorItem struct {
+	Kind                string              `json:"kind"`
+	Principal           string              `json:"principal"`
+	DisplayName         string              `json:"display_name,omitempty"`
 	Handle              string              `json:"handle"`
-	Session             string              `json:"session"`
+	Session             string              `json:"session,omitempty"`
 	Purpose             string              `json:"purpose,omitempty"`
-	Host                string              `json:"host"`
+	Host                string              `json:"host,omitempty"`
 	Project             *ContributorProject `json:"project,omitempty"`
 	ProjectRelationship string              `json:"project_relationship"`
 	Addressable         bool                `json:"addressable"`
@@ -328,6 +364,7 @@ type ContributorItem struct {
 	HostConnected       bool                `json:"host_connected"`
 	Execution           string              `json:"execution"`
 	LastActivity        *time.Time          `json:"last_activity,omitempty"`
+	Provenance          *Provenance         `json:"provenance,omitempty"`
 }
 type ContributorLookupResult struct {
 	Limit      int               `json:"limit"`
@@ -360,13 +397,9 @@ func (s *Service) LookupContributors(ctx context.Context, request ContributorLoo
 	if err != nil {
 		return ContributorLookupResult{}, err
 	}
-	more := len(rows) > limit
-	if more {
-		rows = rows[:limit]
-	}
-	out := ContributorLookupResult{Limit: limit, Items: make([]ContributorItem, 0, len(rows))}
+	out := ContributorLookupResult{Limit: limit, Items: make([]ContributorItem, 0, len(rows)+1)}
 	for _, v := range rows {
-		item := ContributorItem{Handle: v.Handle, Session: v.SessionID, Purpose: v.Purpose, Host: v.Host, Addressable: true, Execution: "not_running", ProjectRelationship: "none", Interpretation: "Addressable registry session; no current reachability evidence."}
+		item := ContributorItem{Kind: "agent", Principal: v.SessionID, Handle: v.Handle, Session: v.SessionID, Purpose: v.Purpose, Host: v.Host, Addressable: true, Execution: "not_running", ProjectRelationship: "none", Interpretation: "Addressable registry session; no current reachability evidence.", Provenance: attestedProvenance("", v.SessionID, v.Purpose)}
 		if v.ProjectID != "" {
 			item.Project = &ContributorProject{ID: v.ProjectID, Name: v.ProjectName}
 			item.ProjectRelationship = "project"
@@ -375,8 +408,7 @@ func (s *Service) LookupContributors(ctx context.Context, request ContributorLoo
 			}
 		}
 		if p, ok := s.presence.Get(v.SessionID); ok {
-			item.HostConnected = p.HostConnected
-			item.Execution = p.Execution
+			item.HostConnected, item.Execution = p.HostConnected, p.Execution
 			t := p.LastActivity
 			item.LastActivity = &t
 			item.Reachable = p.HostConnected
@@ -386,9 +418,26 @@ func (s *Service) LookupContributors(ctx context.Context, request ContributorLoo
 		}
 		out.Items = append(out.Items, item)
 	}
-	if more && len(rows) > 0 {
-		last := rows[len(rows)-1]
-		out.NextCursor = encodeCursor("contributors", domain.BrowseCursor{Text: last.Handle, ID: last.SessionID})
+	search := strings.ToLower(request.Search)
+	humanMatches := search == "" || strings.Contains(strings.ToLower(s.humanHandle), search) || strings.Contains(strings.ToLower(s.humanDisplayName), search) || strings.Contains(domain.HumanLocalPrincipal, search)
+	humanAfter := after == nil || strings.ToLower(s.humanHandle) > strings.ToLower(after.Text) || strings.EqualFold(s.humanHandle, after.Text) && domain.HumanLocalPrincipal > after.ID
+	if request.Project == "" && humanMatches && humanAfter {
+		out.Items = append(out.Items, ContributorItem{Kind: "human", Principal: domain.HumanLocalPrincipal, Handle: s.humanHandle, DisplayName: s.humanDisplayName, Addressable: true, ProjectRelationship: "none", Execution: "not_applicable", Interpretation: "Stable local human principal; browser session state is not recipient identity."})
+	}
+	sort.Slice(out.Items, func(i, j int) bool {
+		left, right := strings.ToLower(out.Items[i].Handle), strings.ToLower(out.Items[j].Handle)
+		if left == right {
+			return out.Items[i].Principal < out.Items[j].Principal
+		}
+		return left < right
+	})
+	more := len(out.Items) > limit
+	if more {
+		out.Items = out.Items[:limit]
+	}
+	if more && len(out.Items) > 0 {
+		last := out.Items[len(out.Items)-1]
+		out.NextCursor = encodeCursor("contributors", domain.BrowseCursor{Text: last.Handle, ID: last.Principal})
 	}
 	return out, nil
 }
@@ -405,5 +454,5 @@ func (s *Service) Comment(ctx context.Context, request CommentRequest) (domain.W
 	if !ok {
 		return domain.WriteResult{}, domain.ErrInvalid
 	}
-	return repository.Comment(ctx, domain.CommentRequest{PostID: request.Ref, Body: request.Body, Intent: request.Intent, ActorID: request.Actor, SessionID: request.Session, RequestID: request.RequestID, MentionSessionIDs: request.MentionSessionIDs})
+	return repository.Comment(ctx, domain.CommentRequest{PostID: request.Ref, Body: request.Body, Intent: request.Intent, ActorID: request.Actor, ActorKind: request.ActorKind, ActorPrincipal: request.ActorPrincipal, SessionID: request.Session, RequestID: request.RequestID, MentionSessionIDs: request.MentionSessionIDs, MentionPrincipals: request.MentionPrincipals})
 }

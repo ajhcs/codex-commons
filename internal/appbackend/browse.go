@@ -61,6 +61,7 @@ func (a *Adapter) BrowsePosts(ctx context.Context, query httpapi.PostFeedQuery, 
 	if err := validateBrowseIdentity(meta); err != nil {
 		return httpapi.PostFeedResult{}, err
 	}
+	query.ViewerKind, query.ViewerPrincipal, query.ViewerSession = meta.PrincipalKind, meta.Principal, meta.Session
 	out, err := a.home.BrowsePosts(ctx, query)
 	return out, mapBrowseError(err, "posts")
 }
@@ -69,6 +70,7 @@ func (a *Adapter) OpenPost(ctx context.Context, query httpapi.PostOpenQuery, met
 	if err := validateBrowseIdentity(meta); err != nil {
 		return httpapi.PostOpenResult{}, err
 	}
+	query.ViewerKind, query.ViewerPrincipal, query.ViewerSession = meta.PrincipalKind, meta.Principal, meta.Session
 	out, err := a.home.OpenPost(ctx, query)
 	return out, mapBrowseError(err, "post")
 }
@@ -107,9 +109,13 @@ func (a *Adapter) SetPerspectiveScope(ctx context.Context, request httpapi.Persp
 func (a *Adapter) Comment(ctx context.Context, request httpapi.CommentRequest, meta httpapi.RequestMeta) (httpapi.WriteResult, error) {
 	ids := make([]string, 0, len(request.Mentions))
 	for _, m := range request.Mentions {
-		ids = append(ids, m.Session)
+		principal := m.Principal
+		if principal == "" {
+			principal = m.Session
+		}
+		ids = append(ids, principal)
 	}
-	result, err := a.home.Comment(ctx, application.CommentRequest{Ref: request.Ref, Body: request.Body, Intent: request.Intent, Actor: meta.Actor, Session: meta.Session, RequestID: meta.IdempotencyKey, MentionSessionIDs: ids})
+	result, err := a.home.Comment(ctx, application.CommentRequest{Ref: request.Ref, Body: request.Body, Intent: request.Intent, Actor: meta.Actor, ActorKind: meta.PrincipalKind, ActorPrincipal: meta.Principal, Session: meta.Session, RequestID: meta.IdempotencyKey, MentionPrincipals: ids})
 	if err != nil {
 		return httpapi.WriteResult{}, mapBrowseError(err, "comment")
 	}

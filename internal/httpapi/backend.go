@@ -21,6 +21,15 @@ type Backend interface {
 	ProjectOverview(context.Context, ProjectOverviewQuery, RequestMeta) (ProjectOverviewResult, error)
 }
 
+type CommentReadBackend interface {
+	OpenComment(context.Context, CommentOpenQuery, RequestMeta) (CommentOpenResult, error)
+}
+
+type NotificationBackend interface {
+	Notifications(context.Context, NotificationListQuery, RequestMeta) (NotificationListResult, error)
+	MarkNotificationRead(context.Context, NotificationReadRequest, RequestMeta) (WriteResult, error)
+}
+
 type AddressabilityBackend interface {
 	LookupContributors(context.Context, ContributorLookupQuery, RequestMeta) (ContributorLookupResult, error)
 	SetPerspectiveScope(context.Context, PerspectiveScopeWriteRequest, RequestMeta) (WriteResult, error)
@@ -43,6 +52,7 @@ type LegacyBackend interface {
 
 type RequestMeta struct {
 	PrincipalKind  string
+	Principal      string
 	Actor          string
 	Session        string
 	Host           string
@@ -70,6 +80,10 @@ type ContributorLookupResult = application.ContributorLookupResult
 type PostAttachment = application.PostAttachment
 type ProjectOverviewQuery = application.ProjectOverviewQuery
 type ProjectOverviewResult = application.ProjectOverview
+type NotificationListQuery = application.NotificationListRequest
+type CommentOpenQuery = application.CommentOpenRequest
+type CommentOpenResult = application.CommentOpenResult
+type NotificationListResult = application.NotificationListResult
 
 type HealthResult struct {
 	Status  string `json:"status"`
@@ -206,6 +220,7 @@ type PostRequest struct {
 	Basis       string           `json:"basis"`
 	Ref         string           `json:"ref,omitempty"`
 	Attachments []PostAttachment `json:"attachments,omitempty"`
+	Mentions    []MentionRequest `json:"mentions,omitempty"`
 }
 
 type PostStateWriteRequest struct {
@@ -220,16 +235,17 @@ type PerspectiveScopeWriteRequest struct {
 	BaseRevision int64  `json:"base_revision"`
 }
 
-type CommentMentionRequest struct {
-	Session string `json:"session"`
+type MentionRequest struct {
+	Principal string `json:"principal"`
+	Session   string `json:"session,omitempty"`
 }
 
 type CommentRequest struct {
-	Ref      string                  `json:"ref"`
-	Body     string                  `json:"body"`
-	Intent   string                  `json:"intent"`
-	Basis    string                  `json:"basis,omitempty"`
-	Mentions []CommentMentionRequest `json:"mentions,omitempty"`
+	Ref      string           `json:"ref"`
+	Body     string           `json:"body"`
+	Intent   string           `json:"intent"`
+	Basis    string           `json:"basis,omitempty"`
+	Mentions []MentionRequest `json:"mentions,omitempty"`
 }
 
 type StatusRequest struct {
@@ -247,6 +263,10 @@ type TopicRequest struct {
 // WriteResult acknowledges a committed write. Revision is positive for
 // project-scoped writes; zero is reserved for any committed post on the global
 // General topic, which has no project change cursor.
+type NotificationReadRequest struct {
+	ID string `json:"id"`
+}
+
 type WriteResult struct {
 	ID        string `json:"id"`
 	Revision  int64  `json:"revision"`

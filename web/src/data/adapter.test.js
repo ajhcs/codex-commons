@@ -256,7 +256,7 @@ test("HTTP posts transport keeps feed compact, path-encodes open, and posts same
       preview: "Bounded preview",
       topic: { id: "general", name: "General" },
       kind: "finding",
-      author: { session: "SES-1", purpose: "Test posts" },
+      author: { kind: "human", principal: "human:local-admin", session: "human-local-admin", handle: "alex", display_name: "Alex Lee" },
       created_at: "2026-08-09T12:00:00Z",
       comment_count: 0,
       state: "open",
@@ -292,6 +292,19 @@ test("HTTP posts transport keeps feed compact, path-encodes open, and posts same
   }, { csrfToken: "csrf-test", idempotencyKey: "idempotency-test" });
 
   assert.equal(feed.items[0].preview, "Bounded preview");
+  assert.deepEqual({
+    kind: feed.items[0].author.kind,
+    principal: feed.items[0].author.principal,
+    displayName: feed.items[0].author.displayName,
+    handle: feed.items[0].author.handle,
+    session: feed.items[0].author.session,
+  }, {
+    kind: "human",
+    principal: "human:local-admin",
+    displayName: "Alex Lee",
+    handle: "alex",
+    session: "human-local-admin",
+  });
   const feedURL = new URL(calls[0].url, "https://commons.test");
   assert.equal(feedURL.pathname, "/v1/posts");
   assert.equal(feedURL.searchParams.get("q"), "durable & exact");
@@ -315,7 +328,7 @@ test("HTTP auth uses only same-origin cookies and validates the bounded session 
       calls.push({ url, options });
       if (url === "/v1/auth/login") return apiResponse({
         authenticated: true,
-        principal: { kind: "human", display_name: "Alex Lee" },
+        principal: { kind: "human", principal: "human:local-admin", handle: "alex", display_name: "Alex Lee" },
         csrf_token: "csrf-rotated",
       });
       return apiResponse({ authenticated: false });
@@ -328,6 +341,8 @@ test("HTTP auth uses only same-origin cookies and validates the bounded session 
 
   assert.equal(initial.authenticated, false);
   assert.equal(authenticated.principal.displayName, "Alex Lee");
+  assert.equal(authenticated.principal.principal, "human:local-admin");
+  assert.equal(authenticated.principal.handle, "alex");
   assert.equal(authenticated.csrfToken, "csrf-rotated");
   assert.equal(loggedOut.authenticated, false);
   assert.equal(calls[0].url, "/v1/auth/session");
@@ -544,26 +559,27 @@ test("Project Core rejects task and task-event requests above their response bud
   );
 });
 
-test("Slice 12 contributor lookup and structured writes preserve exact session targets", async () => {
+test("Slice 13 contributor lookup and structured writes preserve exact principal targets", async () => {
   const calls = [];
   const adapter = createHTTPAdapter({ fetchImpl: async (url, options) => {
     calls.push({ url, options });
     const path = new URL(url, "https://commons.test").pathname;
-    if (path === "/v1/contributors") return apiResponse({ limit: 8, items: [{ handle: "agent-000042", session: "SES-exact", purpose: "Review evidence", host: "plumbob", project: { id: "alpha", name: "Alpha" }, project_relationship: "same_project", addressable: true, reachable: false, interpretation: "Addressable registry session; no current reachability evidence.", host_connected: false, execution: "not_running" }] });
+    if (path === "/v1/contributors") return apiResponse({ limit: 8, items: [{ kind: "agent", principal: "SES-exact", handle: "agent-000042", session: "SES-exact", purpose: "Review evidence", host: "plumbob", project: { id: "alpha", name: "Alpha" }, project_relationship: "same_project", addressable: true, reachable: false, interpretation: "Addressable registry session; no current reachability evidence.", host_connected: false, execution: "not_running" }] });
     return apiResponse({ id: "write-1", revision: 3, persisted: true });
   }});
   const contributors = await adapter.readContributors({ q: "agent-42", project: "alpha", cursor: "", limit: 8 });
   assert.equal(contributors.items[0].session, "SES-exact");
+  assert.equal(contributors.items[0].principal, "SES-exact");
   assert.equal(contributors.items[0].reachable, false);
-  await adapter.createComment({ ref: "P-1", body: "plain @text and selected mention", intent: "clarify", mentions: [{ session: "SES-exact" }] }, { csrfToken: "csrf", idempotencyKey: "comment-key" });
+  await adapter.createComment({ ref: "P-1", body: "plain @text and selected mention", intent: "clarify", mentions: [{ principal: "SES-exact" }] }, { csrfToken: "csrf", idempotencyKey: "comment-key" });
   await adapter.changePerspectiveScope({ ref: "P-1", scope: "commons", base_revision: 2 }, { csrfToken: "csrf", idempotencyKey: "scope-key" });
   assert.equal(new URL(calls[0].url, "https://commons.test").pathname, "/v1/contributors");
-  assert.deepEqual(JSON.parse(calls[1].options.body).mentions, [{ session: "SES-exact" }]);
+  assert.deepEqual(JSON.parse(calls[1].options.body).mentions, [{ principal: "SES-exact" }]);
   assert.deepEqual(JSON.parse(calls[2].options.body), { ref: "P-1", scope: "commons", base_revision: 2 });
 });
 
 test("Slice 12 rejects malformed contributor facts and structured mentions", async () => {
-  const malformedContributor = createHTTPAdapter({ fetchImpl: async () => apiResponse({ limit: 8, items: [{ handle: "agent-000042", session: "SES-exact", host: "plumbob", project_relationship: "same_project", addressable: true, reachable: "false", interpretation: "Addressable only.", host_connected: false, execution: "not_running" }] }) });
+  const malformedContributor = createHTTPAdapter({ fetchImpl: async () => apiResponse({ limit: 8, items: [{ kind: "agent", principal: "SES-exact", handle: "agent-000042", session: "SES-exact", host: "plumbob", project_relationship: "same_project", addressable: true, reachable: "false", interpretation: "Addressable only.", host_connected: false, execution: "not_running" }] }) });
   await assert.rejects(
     malformedContributor.readContributors({ q: "agent", project: "alpha", cursor: "", limit: 8 }),
     (error) => error.code === "invalid_payload",
@@ -580,4 +596,97 @@ test("Slice 12 rejects malformed contributor facts and structured mentions", asy
     malformedMentions.readPost("P-1", { comments_cursor: "", comments_limit: 20 }),
     (error) => error.code === "invalid_payload",
   );
+});
+
+test("Slice 13 rejects typed human authors without authoritative identity fields", async () => {
+  for (const author of [
+    { kind: "human", display_name: "Alex Lee", session: "human-local-admin" },
+    { kind: "human", principal: "human:local-admin", session: "human-local-admin" },
+    { kind: "agent", principal: "SES-indexer", display_name: 42 },
+    { kind: "service", principal: "service:indexer", display_name: "Indexer" },
+  ]) {
+    const adapter = createHTTPAdapter({ fetchImpl: async () => apiResponse({
+      total: 1,
+      limit: 10,
+      items: [{
+        id: "P-identity", title: "Post", preview: "Preview", topic: { id: "general", name: "General" }, kind: "notice",
+        author, created_at: "2026-08-11T00:00:00Z", comment_count: 0, state: "open", attachments: [], destination: { kind: "post", ref: "P-identity" },
+      }],
+    }) });
+    await assert.rejects(
+      adapter.readPosts({ q: "", topic: "", project: "", kind: "", created_from: "", created_to: "", cursor: "", limit: 10 }),
+      (error) => error.code === "invalid_payload",
+    );
+  }
+});
+
+test("Slice 13 notifications stay metadata-only and exact source reads precede explicit receipts", async () => {
+  const calls = [];
+  const adapter = createHTTPAdapter({ fetchImpl: async (url, options) => {
+    calls.push({ url, options });
+    const path = new URL(url, "https://commons.test").pathname;
+    if (path === "/v1/notifications") return apiResponse({
+      items: [{
+        id: "N-1",
+        recipient: { kind: "human", principal: "human:local-admin", handle: "alex", display_name: "Alex Lee" },
+        source: { kind: "comment", post_ref: "P-1", comment_ref: "C-9" },
+        actor: { kind: "agent", principal: "SES-release", handle: "release-scout", purpose: "Release scout" },
+        snippet: "@alex, can you verify the maintenance window?",
+        created_at: "2026-08-11T13:52:00Z",
+      }],
+      next_cursor: "notification-next",
+      unread_count: 1,
+    });
+    if (path === "/v1/comments/C-9") return apiResponse({
+      post_ref: "P-1",
+      comment: { id: "C-9", body: "@alex, can you verify the maintenance window?", intent: "clarify", author: { session: "SES-release", handle: "release-scout", purpose: "Release scout" }, created_at: "2026-08-11T13:52:00Z", mentions: [{ kind: "human", principal: "human:local-admin", handle: "alex", display_name: "Alex Lee" }] },
+    });
+    return apiResponse({ id: "N-1", revision: 0, persisted: true });
+  }});
+
+  const notifications = await adapter.readNotifications({ unread: true, cursor: "", limit: 20 });
+  const source = await adapter.readCommentSource("C-9");
+  await adapter.markNotificationRead({ id: "N-1" }, { csrfToken: "csrf", idempotencyKey: "read-N-1" });
+
+  assert.equal(notifications.unreadCount, 1);
+  assert.equal(notifications.items[0].source.postRef, "P-1");
+  assert.equal(notifications.items[0].recipient.principal, "human:local-admin");
+  assert.equal(source.postRef, "P-1");
+  assert.equal(source.comment.mentions[0].principal, "human:local-admin");
+  const listURL = new URL(calls[0].url, "https://commons.test");
+  assert.equal(listURL.searchParams.get("unread"), "true");
+  assert.equal(listURL.searchParams.get("limit"), "20");
+  assert.equal(new URL(calls[1].url, "https://commons.test").pathname, "/v1/comments/C-9");
+  assert.equal(calls[2].url, "/v1/notification-reads");
+  assert.deepEqual(JSON.parse(calls[2].options.body), { id: "N-1" });
+  assert.equal(calls[2].options.headers["X-Commons-CSRF"], "csrf");
+  assert.equal(calls[2].options.headers["Idempotency-Key"], "read-N-1");
+});
+
+test("Slice 13 fixture mode keeps human identity dynamic and project lookup bounded", async () => {
+  const session = await fixtureAdapter.readSession();
+  const global = await fixtureAdapter.readContributors({ q: session.principal.handle, project: "", cursor: "", limit: 8 });
+  const project = await fixtureAdapter.readContributors({ q: session.principal.handle, project: "billing-orchestrator", cursor: "", limit: 8 });
+  const release = await fixtureAdapter.readContributors({ q: "re", project: "", cursor: "", limit: 8 });
+  const notifications = await fixtureAdapter.readNotifications({ unread: true, cursor: "", limit: 20 });
+  const source = await fixtureAdapter.readCommentSource(notifications.items[0].source.commentRef);
+
+  assert.equal(global.items[0].kind, "human");
+  assert.equal(global.items[0].principal, session.principal.principal);
+  assert.equal(global.items[0].displayName, session.principal.displayName);
+  assert.equal(project.items.some((item) => item.kind === "human"), false);
+  assert.equal(release.items[0].handle, "release-scout");
+  assert.equal(release.items[0].reachable, true);
+  assert.equal(release.items[1].handle, "research-indexer");
+  assert.equal(notifications.unreadCount, 1);
+  assert.equal(source.postRef, notifications.items[0].source.postRef);
+  assert.equal(source.comment.id, notifications.items[0].source.commentRef);
+  assert.equal(source.comment.mentions[0].principal, session.principal.principal);
+  assert.equal(source.comment.author.kind, "agent");
+
+  const opened = await fixtureAdapter.readPost("POST-2411", { comments_cursor: "", comments_limit: 20 });
+  const humanReply = opened.comments.items.find((comment) => comment.id === "COMMENT-60");
+  assert.equal(humanReply.author.kind, "human");
+  assert.equal(humanReply.author.principal, session.principal.principal);
+  assert.equal(humanReply.author.displayName, session.principal.displayName);
 });

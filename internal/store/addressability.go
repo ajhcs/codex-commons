@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 
@@ -24,9 +25,10 @@ func (s *Store) Contributors(ctx context.Context, q domain.ContributorQuery) ([]
 FROM session_handles h JOIN sessions s ON s.id=h.session_id LEFT JOIN projects p ON p.id=s.project_id
 WHERE (?='' OR lower(h.handle) LIKE ? ESCAPE '\' OR lower(s.purpose) LIKE ? ESCAPE '\')
 AND (?='' OR s.project_id=?)
+AND s.id<>?
 AND (?='' OR lower(h.handle)>lower(?) OR (lower(h.handle)=lower(?) AND s.id>?))
 ORDER BY lower(h.handle),s.id LIMIT ?`, q.Search, pattern, pattern, q.ProjectID, q.ProjectID,
-		q.AfterHandle, q.AfterHandle, q.AfterHandle, q.AfterSessionID, q.Limit+1)
+		domain.HumanLegacySession, q.AfterHandle, q.AfterHandle, q.AfterHandle, q.AfterSessionID, q.Limit+1)
 	if err != nil {
 		return nil, err
 	}
@@ -111,8 +113,12 @@ func (s *Store) SetPerspectiveScope(ctx context.Context, req domain.PerspectiveS
 	defer tx.Rollback()
 	var current string
 	var revision int64
-	if err = tx.QueryRowContext(ctx, `SELECT scope,revision FROM post_perspective_scopes WHERE post_id=?`, req.PostID).Scan(&current, &revision); err != nil {
+	var project sql.NullString
+	if err = tx.QueryRowContext(ctx, `SELECT ps.scope,ps.revision,p.project_id FROM post_perspective_scopes ps JOIN posts p ON p.id=ps.post_id WHERE ps.post_id=?`, req.PostID).Scan(&current, &revision, &project); err != nil {
 		return domain.WriteResult{}, mapErr(err)
+	}
+	if req.Scope == "project" && !project.Valid {
+		return domain.WriteResult{}, domain.ErrInvalid
 	}
 	if revision != req.BaseRevision {
 		return domain.WriteResult{}, domain.ErrConflict

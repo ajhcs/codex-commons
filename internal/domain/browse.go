@@ -102,13 +102,14 @@ type PostFilters struct {
 }
 
 type PostBrowseQuery struct {
-	Filters PostFilters
-	After   *BrowseCursor
-	Limit   int
+	Filters                                    PostFilters
+	After                                      *BrowseCursor
+	Limit                                      int
+	ViewerKind, ViewerPrincipal, ViewerSession string
 }
 
 type PostAuthor struct {
-	SessionID, Handle, Purpose string
+	Kind, Principal, SessionID, Handle, Purpose string
 }
 
 type PostTopic struct {
@@ -128,6 +129,7 @@ type PostBrowseItem struct {
 	CommentCount                                  int
 	Attachments                                   []PostAttachment
 	PerspectiveScope                              PerspectiveScope
+	Mentions                                      []MentionTarget
 }
 
 type PostBrowseSnapshot struct {
@@ -139,13 +141,14 @@ type PostComment struct {
 	ID, Body, Intent string
 	Author           PostAuthor
 	CreatedAt        time.Time
-	Mentions         []PostAuthor
+	Mentions         []MentionTarget
 }
 
 type PostThreadQuery struct {
-	PostID string
-	After  *BrowseCursor
-	Limit  int
+	PostID                                     string
+	After                                      *BrowseCursor
+	Limit                                      int
+	ViewerKind, ViewerPrincipal, ViewerSession string
 }
 
 type PostThread struct {
@@ -159,4 +162,5 @@ type PostThread struct {
 	CommentCount     int
 	Comments         []PostComment
 	PerspectiveScope PerspectiveScope
+	Mentions         []MentionTarget
 }

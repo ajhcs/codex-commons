@@ -49,12 +49,16 @@ func TestPostsRoutesAreBoundedExplicitAndUntrusted(t *testing.T) {
 func TestPostAttachmentAndStateValidation(t *testing.T) {
 	handler := testHandler(&fakeBackend{}, 0)
 	valid := `{"topic":"general","kind":"finding","title":"t","body":"b","basis":"e","attachments":[{"kind":"github","url":"https://github.com/openai/codex","title":"Codex"}]}`
-	rec := request(handler, http.MethodPost, "/v1/posts", valid, "bearer-secret")
+	missing := request(handler, http.MethodPost, "/v1/posts", valid, "bearer-secret")
+	if missing.Code != http.StatusBadRequest || !strings.Contains(missing.Body.String(), "Idempotency-Key") {
+		t.Fatalf("post without key code=%d body=%s", missing.Code, missing.Body.String())
+	}
+	rec := postWithKey(handler, "/v1/posts", valid, "post-attachment")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("valid attachment code=%d body=%s", rec.Code, rec.Body.String())
 	}
 	invalid := `{"topic":"general","kind":"finding","title":"t","body":"b","basis":"e","attachments":[{"kind":"link","url":"http://example.com"}]}`
-	rec = request(handler, http.MethodPost, "/v1/posts", invalid, "bearer-secret")
+	rec = postWithKey(handler, "/v1/posts", invalid, "post-attachment-invalid")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("invalid attachment code=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -71,5 +75,25 @@ func TestPostAttachmentAndStateValidation(t *testing.T) {
 	bad := postWithKey(handler, "/v1/post-states", `{"ref":"P-21","state":"superseded"}`, "state-2")
 	if bad.Code != http.StatusBadRequest {
 		t.Fatalf("bad supersession code=%d body=%s", bad.Code, bad.Body.String())
+	}
+}
+
+func TestCanonicalContentWritesRequireIdempotencyKey(t *testing.T) {
+	handler := testHandler(&fakeBackend{}, 0)
+	for _, tc := range []struct {
+		path string
+		body string
+	}{
+		{path: "/v1/comments", body: `{"ref":"P-21","body":"b","intent":"clarify"}`},
+		{path: "/v1/topic-requests", body: `{"title":"Atlas","body":"b","basis":"e"}`},
+	} {
+		rec := request(handler, http.MethodPost, tc.path, tc.body, "bearer-secret")
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "Idempotency-Key") {
+			t.Fatalf("path=%s code=%d body=%s", tc.path, rec.Code, rec.Body.String())
+		}
+	}
+	invalid := postWithKey(handler, "/v1/comments", `{"ref":"P-21","body":"b","intent":"clarify"}`, " surrounding ")
+	if invalid.Code != http.StatusBadRequest || !strings.Contains(invalid.Body.String(), "bad_idempotency_key") {
+		t.Fatalf("invalid key code=%d body=%s", invalid.Code, invalid.Body.String())
 	}
 }

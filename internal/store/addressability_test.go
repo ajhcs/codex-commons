@@ -20,6 +20,7 @@ func TestAddressabilityHandlesScopesAndMentions(t *testing.T) {
 	must(t, s.CreateTopic(ctx, domain.Topic{ID: "alpha-posts", ProjectID: "alpha", Name: "Alpha posts"}))
 	must(t, s.UpsertSession(ctx, domain.Session{ID: "S-B", Host: "host-b", ProjectID: "alpha", Purpose: "review"}))
 	must(t, s.UpsertSession(ctx, domain.Session{ID: "S-a", Host: "host-a", ProjectID: "alpha", Purpose: "write"}))
+	must(t, s.UpsertSession(ctx, domain.Session{ID: domain.HumanLegacySession, Host: "local", Purpose: "historical human provenance"}))
 	contributors, err := s.Contributors(ctx, domain.ContributorQuery{Limit: 20})
 	must(t, err)
 	if len(contributors) != 2 || contributors[0].Handle != "agent-000001" || contributors[0].SessionID != "S-B" || contributors[1].Handle != "agent-000002" || contributors[1].SessionID != "S-a" {
@@ -40,10 +41,17 @@ func TestAddressabilityHandlesScopesAndMentions(t *testing.T) {
 		t.Fatal("case-insensitive collision accepted")
 	}
 
+	if _, err = s.Post(ctx, domain.PostRequest{TopicID: "alpha-posts", Kind: "question", Title: "No key", Body: "Body", Basis: "Basis", SessionID: "S-a"}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("post without request id=%v", err)
+	}
+
 	post, err := s.Post(ctx, domain.PostRequest{TopicID: "alpha-posts", Kind: "question", Title: "Need evidence", Body: "Body", Basis: "Basis", ActorID: "a", SessionID: "S-a", RequestID: "post"})
 	must(t, err)
 	thread, err := s.PostThread(ctx, domain.PostThreadQuery{PostID: post.ID, Limit: 10})
-	must(t, err)
+	if _, err = s.Comment(ctx, domain.CommentRequest{PostID: post.ID, Body: "No key", Intent: "clarify", SessionID: "S-a"}); !errors.Is(err, domain.ErrInvalid) {
+		must(t, err)
+		t.Fatalf("comment without request id=%v", err)
+	}
 	if thread.PerspectiveScope.Scope != "closed" || thread.PerspectiveScope.Revision != 0 {
 		t.Fatalf("scope=%+v", thread.PerspectiveScope)
 	}
@@ -88,6 +96,10 @@ func TestAddressabilityHandlesScopesAndMentions(t *testing.T) {
 	_, err = s.Comment(ctx, domain.CommentRequest{PostID: post.ID, Body: "bad", Intent: "clarify", ActorID: "a", SessionID: "S-a", RequestID: "bad", MentionSessionIDs: []string{"historical-only"}})
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("invalid mention=%v", err)
+	}
+	_, err = s.Comment(ctx, domain.CommentRequest{PostID: post.ID, Body: "bad human alias", Intent: "clarify", ActorID: "a", SessionID: "S-a", RequestID: "bad-human-alias", MentionPrincipals: []string{domain.HumanLegacySession}})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("legacy human session mention=%v", err)
 	}
 	var after int
 	must(t, s.DB().QueryRowContext(ctx, `SELECT count(*) FROM comments`).Scan(&after))

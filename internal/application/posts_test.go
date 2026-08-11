@@ -25,6 +25,9 @@ func (r *postsRepositoryStub) PostBrowseSnapshot(context.Context, domain.PostBro
 func (r *postsRepositoryStub) PostThread(context.Context, domain.PostThreadQuery) (domain.PostThread, error) {
 	return r.thread, nil
 }
+func (r *postsRepositoryStub) PostCommentByID(context.Context, string, string, string) (string, domain.PostComment, error) {
+	return "", domain.PostComment{}, domain.ErrNotFound
+}
 func (r *postsRepositoryStub) SetPostState(context.Context, domain.PostStateRequest) (domain.WriteResult, error) {
 	return domain.WriteResult{ID: "PS-1", Revision: 4}, nil
 }
@@ -112,5 +115,19 @@ func BenchmarkBoundedPostsFeed(b *testing.B) {
 		}
 		b.ReportMetric(float64(len(payload)), "bytes/op")
 		b.ReportMetric(float64((len(payload)+2)/3), "est_tokens/op")
+	}
+}
+
+func TestHumanPostAuthorUsesConfiguredIdentityAndKeepsProvenance(t *testing.T) {
+	service := New(nil, nil, nil)
+	service.ConfigureHumanIdentity("Configured Person", "configured-handle")
+	author := service.appAuthor(domain.PostAuthor{
+		Kind: "human", Principal: domain.HumanLocalPrincipal, SessionID: domain.HumanLegacySession,
+		Handle: "agent-000001", Purpose: "legacy local admin",
+	})
+	if author.Kind != "human" || author.Principal != domain.HumanLocalPrincipal ||
+		author.DisplayName != "Configured Person" || author.Handle != "configured-handle" || author.Purpose != "" ||
+		author.Session != domain.HumanLegacySession || author.Provenance == nil || author.Provenance.Session != domain.HumanLegacySession {
+		t.Fatalf("human author=%+v", author)
 	}
 }

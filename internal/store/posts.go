@@ -39,6 +39,9 @@ func validPostAttachments(items []domain.PostAttachment) bool {
 }
 
 func validatePostBrowseQuery(query domain.PostBrowseQuery) bool {
+	if _, _, ok := postDiscoveryPredicate(query.ViewerKind, query.ViewerSession); !ok {
+		return false
+	}
 	if query.Limit < 1 || query.Limit > maxPostFeedLimit {
 		return false
 	}
@@ -106,6 +109,9 @@ func (s *Store) PostBrowseSnapshot(ctx context.Context, query domain.PostBrowseQ
 	if err != nil {
 		return out, err
 	}
+	discovery, discoveryArgs, _ := postDiscoveryPredicate(query.ViewerKind, query.ViewerSession)
+	where += " AND " + discovery
+	args = append(args, discoveryArgs...)
 	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM "+postFrom(query.Filters)+" WHERE "+where, args...).Scan(&out.Total); err != nil {
 		return out, err
 	}
@@ -113,6 +119,8 @@ func (s *Store) PostBrowseSnapshot(ctx context.Context, query domain.PostBrowseQ
 	if err != nil {
 		return out, err
 	}
+	pageWhere += " AND " + discovery
+	pageArgs = append(pageArgs, discoveryArgs...)
 	pageArgs = append(pageArgs, query.Limit+1)
 	rows, err := tx.QueryContext(ctx, `SELECT p.id,p.kind,p.title,p.body,p.created_at,t.id,t.name,
 COALESCE(pr.id,''),COALESCE(pr.name,''),p.session_id,COALESCE(h.handle,''),COALESCE(s.purpose,''),
@@ -145,6 +153,7 @@ LIMIT ?`, pageArgs...)
 		item.Title = boundedUTF8(item.Title, 200)
 		item.Preview = boundedUTF8(strings.TrimSpace(body), 320)
 		item.CreatedAt = parseStamp(created)
+		setCanonicalAuthor(&item.Author)
 		if projectID != "" {
 			item.Project = &domain.PostProject{ID: projectID, Name: projectName}
 		}
@@ -161,6 +170,17 @@ LIMIT ?`, pageArgs...)
 	}
 	if err := rows.Close(); err != nil {
 		return out, err
+	}
+	postIDs := make([]string, 0, len(out.Items))
+	for _, item := range out.Items {
+		postIDs = append(postIDs, item.ID)
+	}
+	mentions, err := readContentMentions(ctx, tx, "post", postIDs)
+	if err != nil {
+		return domain.PostBrowseSnapshot{}, err
+	}
+	for i := range out.Items {
+		out.Items[i].Mentions = mentions[out.Items[i].ID]
 	}
 	if err := tx.Commit(); err != nil {
 		return domain.PostBrowseSnapshot{}, err
@@ -190,6 +210,10 @@ func (s *Store) PostThread(ctx context.Context, query domain.PostThreadQuery) (d
 		query.After != nil && (query.After.Time.IsZero() || !boundedHomeValue(query.After.ID, maxHomeIdentifier)) {
 		return domain.PostThread{}, domain.ErrInvalid
 	}
+	discovery, discoveryArgs, ok := postDiscoveryPredicate(query.ViewerKind, query.ViewerSession)
+	if !ok {
+		return domain.PostThread{}, domain.ErrInvalid
+	}
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return domain.PostThread{}, err
@@ -207,7 +231,7 @@ COALESCE(psc.scope,'closed'),COALESCE(psc.revision,0)
 FROM posts p JOIN topics t ON t.id=p.topic_id
 LEFT JOIN projects pr ON pr.id=p.project_id LEFT JOIN sessions s ON s.id=p.session_id
 LEFT JOIN session_handles h ON h.session_id=p.session_id LEFT JOIN post_perspective_scopes psc ON psc.post_id=p.id
-WHERE p.id=?`, query.PostID).Scan(&out.Post.Ref, &out.Post.ProjectID, &out.Post.TopicID,
+WHERE p.id=? AND `+discovery, append([]any{query.PostID}, discoveryArgs...)...).Scan(&out.Post.Ref, &out.Post.ProjectID, &out.Post.TopicID,
 		&out.Post.Kind, &out.Post.Revision, &out.Post.Title, &out.Post.Body, &out.Post.Basis,
 		&out.Post.RelatedRef, &out.Post.SessionID, &created, &out.Topic.ID, &out.Topic.Name,
 		&projectID, &projectName, &out.Author.Handle, &out.Author.Purpose, &out.State, &out.SupersededBy, &out.CommentCount, &out.PerspectiveScope.Scope, &out.PerspectiveScope.Revision)
@@ -216,6 +240,7 @@ WHERE p.id=?`, query.PostID).Scan(&out.Post.Ref, &out.Post.ProjectID, &out.Post.
 	}
 	out.Post.CreatedAt = parseStamp(created)
 	out.Author.SessionID = out.Post.SessionID
+	setCanonicalAuthor(&out.Author)
 	if projectID != "" {
 		out.Project = &domain.PostProject{ID: projectID, Name: projectName}
 	}
@@ -243,6 +268,7 @@ ORDER BY julianday(c.created_at),c.id LIMIT ?`, args...)
 			return out, err
 		}
 		item.CreatedAt = parseStamp(stampValue)
+		setCanonicalAuthor(&item.Author)
 		out.Comments = append(out.Comments, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -252,11 +278,16 @@ ORDER BY julianday(c.created_at),c.id LIMIT ?`, args...)
 	if err := rows.Close(); err != nil {
 		return out, err
 	}
+	postMentions, err := readContentMentions(ctx, tx, "post", []string{query.PostID})
+	if err != nil {
+		return out, err
+	}
+	out.Mentions = postMentions[query.PostID]
 	commentIDs := make([]string, 0, len(out.Comments))
 	for _, item := range out.Comments {
 		commentIDs = append(commentIDs, item.ID)
 	}
-	mentions, err := mentionAuthorsForComments(ctx, tx, commentIDs)
+	mentions, err := readContentMentions(ctx, tx, "comment", commentIDs)
 	if err != nil {
 		return out, err
 	}

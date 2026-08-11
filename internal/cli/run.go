@@ -1,502 +1,542 @@
 package cli
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"sort"
 	"strconv"
 	"strings"
+	"time"
 
-	"codex-commons/internal/commons"
+	"codex-commons/internal/apiclient"
+	"codex-commons/internal/httpapi"
 )
 
-const usage = `commons — deterministic Slice 0 agent contract
+const realUsage = `commons — authenticated Codex Commons client
 
-Usage:
-  commons context <project> [--since REV] [--budget TOKENS] [--json]
-  commons who [PROJECT] [--state STATE] [--limit N] [--json]
-  commons inbox [PROJECT] [--limit N] [--json]
-  commons open <ref> [--budget TOKENS] [--json]
-  commons search <project> <query> [--limit N] [--json]
-  commons next <project> [--limit N] [--json]
-  commons claim <task-id> [--lease DURATION] [--request-id KEY] [--json]
-  commons post <topic> <kind> --title TEXT --body TEXT --basis TEXT [--request-id KEY] [--json]
+Global: commons [--config PATH] [--timeout DURATION] [--json] COMMAND ...
+Fixture: commons --fixture COMMAND ...
 
-Kinds: finding, question, notice, decision, topic_request
-Topics: general, commons-lab
-This stub validates requests and returns fixed data; it never persists writes.`
+Commands:
+  context [PROJECT] [--since REV] [--budget TOKENS]
+  search QUERY... [--project PROJECT] [--limit N]
+  open REF [--budget TOKENS]
+  who [PROJECT] [--state STATE] [--limit N]
+  inbox [PROJECT] [--limit N]
+  contributors [--query TEXT] [--project PROJECT] [--cursor CURSOR] [--limit N]
+  next [PROJECT] [--limit N]
+  claim TASK --request-id KEY [--lease DURATION]
+  post TOPIC KIND --title TEXT --body TEXT --basis TEXT --request-id KEY [--mention PRINCIPAL]...
+  comment REF --intent INTENT --body TEXT --request-id KEY [--mention PRINCIPAL]...
+  status REF --status STATE --basis TEXT --request-id KEY
+  topic-request --title TEXT --body TEXT --basis TEXT --request-id KEY
 
-type parsed struct {
-	pos   []string
-	flags map[string]string
-	json  bool
+Use - as a single --body/--basis/--title value to read bounded text from stdin.`
+
+const maxStdinBytes = int64(64 << 10)
+
+type realArgs struct {
+	pos      []string
+	flags    map[string]string
+	mentions []string
+	json     bool
+}
+
+var realCommandFlags = map[string]map[string]bool{
+	"context":       {"since": true, "budget": true},
+	"search":        {"project": true, "limit": true},
+	"open":          {"budget": true},
+	"who":           {"state": true, "limit": true},
+	"inbox":         {"limit": true},
+	"contributors":  {"query": true, "project": true, "cursor": true, "limit": true},
+	"next":          {"limit": true},
+	"claim":         {"request-id": true, "lease": true},
+	"post":          {"title": true, "body": true, "basis": true, "request-id": true, "mention": true},
+	"comment":       {"intent": true, "body": true, "request-id": true, "mention": true},
+	"status":        {"status": true, "basis": true, "request-id": true},
+	"topic-request": {"title": true, "body": true, "basis": true, "request-id": true},
+}
+
+var realCommands = func() map[string]bool {
+	commands := make(map[string]bool, len(realCommandFlags))
+	for command := range realCommandFlags {
+		commands[command] = true
+	}
+	return commands
+}()
+
+func validateRealCommand(command string, p *realArgs) error {
+	allowed := realCommandFlags[command]
+	for name := range p.flags {
+		if !allowed[name] {
+			return fmt.Errorf("--%s is not valid for %s", name, command)
+		}
+	}
+	if len(p.mentions) > 0 && !allowed["mention"] {
+		return fmt.Errorf("--mention is not valid for %s", command)
+	}
+	seen := map[string]bool{}
+	mentions := make([]string, 0, len(p.mentions))
+	for _, raw := range p.mentions {
+		principal := strings.TrimSpace(raw)
+		if principal == "" || len(principal) > 200 {
+			return errors.New("--mention values must be non-empty and at most 200 characters")
+		}
+		if !seen[principal] {
+			seen[principal] = true
+			mentions = append(mentions, principal)
+		}
+	}
+	if len(mentions) > 5 {
+		return errors.New("--mention may identify at most 5 principals")
+	}
+	p.mentions = mentions
+	return nil
 }
 
 func Run(args []string, stdout, stderr io.Writer) int {
-	if len(args) > 0 && args[0] == "--json" {
-		args = append(args[1:], "--json")
+	return RunContext(context.Background(), args, nil, stdout, stderr)
+}
+
+func RunContext(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if stdin == nil {
+		stdin = strings.NewReader("")
+	}
+	configPath := ""
+	timeout := time.Duration(0)
+	asJSON, fixture := false, false
+	for len(args) > 0 {
+		switch args[0] {
+		case "--json":
+			asJSON, args = true, args[1:]
+		case "--fixture":
+			fixture, args = true, args[1:]
+		case "--config", "--timeout":
+			if len(args) < 2 {
+				return realFailure(stderr, exitUsage, "USAGE", args[0]+" requires a value")
+			}
+			if args[0] == "--config" {
+				configPath = args[1]
+			} else {
+				var err error
+				timeout, err = time.ParseDuration(args[1])
+				if err != nil || timeout <= 0 || timeout > time.Minute {
+					return realFailure(stderr, exitUsage, "BAD_TIMEOUT", "duration must be positive and no greater than 1m")
+				}
+			}
+			args = args[2:]
+		default:
+			goto parsedGlobals
+		}
+	}
+parsedGlobals:
+	if fixture {
+		if asJSON {
+			args = append(args, "--json")
+		}
+		return runFixture(args, stdout, stderr)
 	}
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
-		fmt.Fprintln(stdout, usage)
+		fmt.Fprintln(stdout, realUsage)
 		return 0
 	}
-
-	p, err := parse(args[1:])
+	p, err := parseRealArgs(args[1:])
 	if err != nil {
-		return fail(stderr, "USAGE", err.Error())
+		return realFailure(stderr, exitUsage, "USAGE", err.Error())
 	}
-
+	p.json = p.json || asJSON
+	if !realCommands[args[0]] {
+		return realFailure(stderr, exitUsage, "UNKNOWN_COMMAND", args[0])
+	}
+	if err := validateRealCommand(args[0], &p); err != nil {
+		return realFailure(stderr, exitUsage, "USAGE", err.Error())
+	}
+	client, config, err := loadAgentClient(runtimeDeps{configPath: configPath, timeoutOverride: timeout})
+	if err != nil {
+		return realFailure(stderr, exitUsage, "CONFIG", err.Error())
+	}
 	switch args[0] {
 	case "context":
-		return contextCmd(p, stdout, stderr)
-	case "who":
-		return whoCmd(p, stdout, stderr)
-	case "inbox":
-		return inboxCmd(p, stdout, stderr)
-	case "open":
-		return openCmd(p, stdout, stderr)
+		return realContext(ctx, client, config, p, stdout, stderr)
 	case "search":
-		return searchCmd(p, stdout, stderr)
+		return realSearch(ctx, client, config, p, stdout, stderr)
+	case "open":
+		return realOpen(ctx, client, p, stdout, stderr)
+	case "who":
+		return realWho(ctx, client, config, p, stdout, stderr)
+	case "inbox":
+		return realInbox(ctx, client, config, p, stdout, stderr)
+	case "contributors":
+		return realContributors(ctx, client, p, stdout, stderr)
 	case "next":
-		return nextCmd(p, stdout, stderr)
+		return realNext(ctx, client, config, p, stdout, stderr)
 	case "claim":
-		return claimCmd(p, stdout, stderr)
-	case "task":
-		return taskCmd(p, stdout, stderr)
+		return realClaim(ctx, client, p, stdout, stderr)
 	case "post":
-		return postCmd(p, stdout, stderr)
+		return realPost(ctx, client, p, stdin, stdout, stderr)
+	case "comment":
+		return realComment(ctx, client, p, stdin, stdout, stderr)
+	case "status":
+		return realStatus(ctx, client, p, stdin, stdout, stderr)
+	case "topic-request":
+		return realTopicRequest(ctx, client, p, stdin, stdout, stderr)
 	default:
-		return fail(stderr, "UNKNOWN_COMMAND", args[0])
+		return realFailure(stderr, exitUsage, "UNKNOWN_COMMAND", args[0])
 	}
 }
 
-func parse(args []string) (parsed, error) {
-	p := parsed{flags: map[string]string{}}
-	valueFlags := map[string]bool{"since": true, "budget": true, "project": true, "state": true, "limit": true, "kind": true, "title": true, "body": true, "basis": true, "lease": true, "request-id": true, "ref": true}
+func parseRealArgs(args []string) (realArgs, error) {
+	p := realArgs{flags: map[string]string{}}
+	valueFlags := map[string]bool{"since": true, "budget": true, "state": true, "limit": true, "query": true, "project": true, "cursor": true, "lease": true, "request-id": true, "title": true, "body": true, "basis": true, "intent": true, "status": true, "mention": true}
 	for i := 0; i < len(args); i++ {
-		a := args[i]
-		if a == "--json" {
+		arg := args[i]
+		if arg == "--json" {
 			p.json = true
 			continue
 		}
-		if !strings.HasPrefix(a, "--") {
-			p.pos = append(p.pos, a)
+		if !strings.HasPrefix(arg, "--") {
+			p.pos = append(p.pos, arg)
 			continue
 		}
-		name := strings.TrimPrefix(a, "--")
-		if !valueFlags[name] {
-			return p, fmt.Errorf("unknown flag --%s", name)
-		}
-		if i+1 >= len(args) {
-			return p, fmt.Errorf("--%s requires a value", name)
+		name := strings.TrimPrefix(arg, "--")
+		if !valueFlags[name] || i+1 >= len(args) {
+			return p, fmt.Errorf("invalid or missing value for --%s", name)
 		}
 		i++
-		p.flags[name] = args[i]
+		if name == "mention" {
+			p.mentions = append(p.mentions, args[i])
+		} else {
+			if _, duplicate := p.flags[name]; duplicate {
+				return p, fmt.Errorf("--%s may be supplied once", name)
+			}
+			p.flags[name] = args[i]
+		}
 	}
 	return p, nil
 }
 
-func contextCmd(p parsed, out, errOut io.Writer) int {
-	if len(p.pos) != 1 {
-		return fail(errOut, "USAGE", "context requires PROJECT")
-	}
-	project, ok := projectByID(p.pos[0])
-	if !ok {
-		return fail(errOut, "NOT_FOUND", "project="+p.pos[0])
-	}
-	budget := 800
-	if raw := p.flags["budget"]; raw != "" {
-		var err error
-		budget, err = strconv.Atoi(raw)
-		if err != nil || budget < 100 || budget > 2000 {
-			return fail(errOut, "BAD_BUDGET", "range=100..2000")
-		}
-	}
-	since := 0
-	if raw := p.flags["since"]; raw != "" {
-		var err error
-		since, err = strconv.Atoi(raw)
-		if err != nil || since < 0 {
-			return fail(errOut, "BAD_REVISION", raw)
-		}
-	}
-	if since > project.Revision {
-		return fail(errOut, "BAD_REVISION", fmt.Sprintf("future=%d current=%d", since, project.Revision))
-	}
-	if since == project.Revision {
-		return emit(p.json, out, map[string]any{"type": "unchanged", "project": project.ID, "revision": project.Revision}, fmt.Sprintf("UNCHANGED project=%s rev=%d", project.ID, project.Revision))
-	}
-	if since > 0 {
-		changes := make([]commons.Change, 0)
-		for _, change := range project.Changes {
-			if change.Revision > since {
-				changes = append(changes, change)
-			}
-		}
-		lines := []string{fmt.Sprintf("DELTA project=%s from=%d to=%d changes=%d", project.ID, since, project.Revision, len(changes))}
-		for _, c := range changes {
-			lines = append(lines, fmt.Sprintf("CHANGE %d | %s | %s", c.Revision, c.Kind, c.Summary))
-		}
-		text := strings.Join(lines, "\n")
-		if estimateTokens(text) > budget {
-			return fail(errOut, "BUDGET_TOO_SMALL", fmt.Sprintf("required=%d provided=%d", estimateTokens(text), budget))
-		}
-		return emit(p.json, out, map[string]any{"type": "delta", "project": project.ID, "from": since, "to": project.Revision, "changes": changes}, text)
-	}
-
-	next, _ := nextTask(project)
-	projectSessions := make([]commons.Session, 0)
-	for _, session := range commons.Sessions {
-		if session.Project == project.ID {
-			projectSessions = append(projectSessions, session)
-		}
-	}
-	unread := 0
-	for _, message := range commons.Messages {
-		if message.Unread {
-			unread++
-		}
-	}
-	payload := map[string]any{"type": "context", "project": project.ID, "revision": project.Revision, "status": project.Status, "purpose": project.Purpose, "milestone": project.Milestone, "now": project.Now, "topics": []string{"general", project.ID}, "tasks": project.Tasks, "decisions": project.Decisions, "wiki": project.Wiki, "sessions": projectSessions, "inbox": map[string]int{"mentions": 0, "replies": unread}, "next_task": next}
-	lines := []string{
-		fmt.Sprintf("CONTEXT project=%s rev=%d status=%s", project.ID, project.Revision, project.Status),
-		"PURPOSE " + project.Purpose,
-		"MILESTONE " + project.Milestone,
-		"TOPICS general," + project.ID,
-	}
-	for _, task := range project.Tasks {
-		meta := fmt.Sprintf("state=%s priority=%d", task.State, task.Priority)
-		if task.Owner != "" {
-			meta += " owner=" + task.Owner
-		}
-		if task.DependsOn != "" {
-			meta += " blocker=" + task.DependsOn
-		}
-		lines = append(lines, fmt.Sprintf("TASK %s %s | %s", task.ID, meta, task.Title))
-	}
-	for _, d := range project.Decisions {
-		lines = append(lines, fmt.Sprintf("DECISION %s@%d | %s | %s", d.ID, d.Revision, d.Title, d.Rationale))
-	}
-	if len(project.Wiki) > 0 {
-		page := project.Wiki[0]
-		lines = append(lines, fmt.Sprintf("WIKI %s@%d | project wiki home", page.Slug, page.Revision))
-	}
-	for _, session := range projectSessions {
-		lines = append(lines, fmt.Sprintf("SESSION %s state=%s host=%s host_state=%s | %s", session.ID, session.Turn, session.Host, session.HostState, session.Purpose))
-	}
-	lines = append(lines, fmt.Sprintf("INBOX unread=%d mentions=0 replies=%d", unread, unread))
-	text := strings.Join(lines, "\n")
-	if estimateTokens(text) > budget {
-		return fail(errOut, "BUDGET_TOO_SMALL", fmt.Sprintf("required=%d provided=%d use=--since", estimateTokens(text), budget))
-	}
-	return emit(p.json, out, payload, text)
-}
-
-func whoCmd(p parsed, out, errOut io.Writer) int {
+func projectArg(p realArgs, config agentConfig, required bool) (string, error) {
 	if len(p.pos) > 1 {
-		return fail(errOut, "USAGE", "who accepts at most one PROJECT")
+		return "", errors.New("too many project arguments")
 	}
-	project := p.flags["project"]
+	project := config.DefaultProject
 	if len(p.pos) == 1 {
 		project = p.pos[0]
 	}
-	if project != "" {
-		if _, ok := projectByID(project); !ok {
-			return fail(errOut, "NOT_FOUND", "project="+project)
+	if required && project == "" {
+		return "", errors.New("project is required (argument or default_project)")
+	}
+	return project, nil
+}
+
+func intFlag(p realArgs, name string, fallback, min, max int) (int, error) {
+	if p.flags[name] == "" {
+		return fallback, nil
+	}
+	value, err := strconv.Atoi(p.flags[name])
+	if err != nil || value < min || value > max {
+		return 0, fmt.Errorf("--%s must be %d..%d", name, min, max)
+	}
+	return value, nil
+}
+
+func realContext(ctx context.Context, client *apiclient.Client, config agentConfig, p realArgs, out, errOut io.Writer) int {
+	project, err := projectArg(p, config, true)
+	if err != nil {
+		return realFailure(errOut, exitUsage, "USAGE", err.Error())
+	}
+	budget, err := intFlag(p, "budget", 800, 100, 2000)
+	if err != nil {
+		return realFailure(errOut, exitUsage, "BAD_BUDGET", err.Error())
+	}
+	var since *int64
+	if raw := p.flags["since"]; raw != "" {
+		value, parseErr := strconv.ParseInt(raw, 10, 64)
+		if parseErr != nil || value < 0 {
+			return realFailure(errOut, exitUsage, "BAD_REVISION", raw)
 		}
+		since = &value
+	}
+	result, err := client.Context(ctx, httpapi.ContextQuery{Project: project, Since: since, Budget: budget})
+	if err != nil {
+		return realAPIError(errOut, err)
+	}
+	return emitReal(p.json, out, result, fmt.Sprintf("CONTEXT project=%s revision=%d unchanged=%t budget=%d/%d\n%s", result.Project, result.Revision, result.Unchanged, result.Budget.Used, result.Budget.Requested, compactJSON(result.Packet)))
+}
+
+func realSearch(ctx context.Context, client *apiclient.Client, config agentConfig, p realArgs, out, errOut io.Writer) int {
+	project := p.flags["project"]
+	if project == "" {
+		project = config.DefaultProject
+	}
+	if len(p.pos) > 1 && project == "" {
+		project, p.pos = p.pos[0], p.pos[1:]
+	}
+	if project == "" || len(p.pos) == 0 {
+		return realFailure(errOut, exitUsage, "USAGE", "search requires PROJECT (or default_project) and QUERY")
+	}
+	limit, err := intFlag(p, "limit", 5, 1, 10)
+	if err != nil {
+		return realFailure(errOut, exitUsage, "BAD_LIMIT", err.Error())
+	}
+	result, err := client.Search(ctx, httpapi.SearchQuery{Project: project, Query: strings.Join(p.pos, " "), Limit: limit})
+	if err != nil {
+		return realAPIError(errOut, err)
+	}
+	lines := []string{fmt.Sprintf("SEARCH project=%s count=%d", result.Project, len(result.Hits))}
+	for _, hit := range result.Hits {
+		lines = append(lines, fmt.Sprintf("%s %s | %s | %s", hit.Ref, hit.Kind, hit.Title, hit.Snippet))
+	}
+	return emitReal(p.json, out, result, strings.Join(lines, "\n"))
+}
+
+func realOpen(ctx context.Context, client *apiclient.Client, p realArgs, out, errOut io.Writer) int {
+	if len(p.pos) != 1 {
+		return realFailure(errOut, exitUsage, "USAGE", "open requires REF")
+	}
+	budget, err := intFlag(p, "budget", 600, 100, 2000)
+	if err != nil {
+		return realFailure(errOut, exitUsage, "BAD_BUDGET", err.Error())
+	}
+	result, err := client.Open(ctx, httpapi.OpenQuery{Ref: p.pos[0], Budget: budget})
+	if err != nil {
+		return realAPIError(errOut, err)
+	}
+	return emitReal(p.json, out, result, fmt.Sprintf("OPEN ref=%s kind=%s revision=%d\n%s", result.Ref, result.Kind, result.Revision, compactJSON(result.Object)))
+}
+
+func realWho(ctx context.Context, client *apiclient.Client, config agentConfig, p realArgs, out, errOut io.Writer) int {
+	project, err := projectArg(p, config, false)
+	if err != nil {
+		return realFailure(errOut, exitUsage, "USAGE", err.Error())
+	}
+	limit, err := intFlag(p, "limit", 5, 1, 20)
+	if err != nil {
+		return realFailure(errOut, exitUsage, "BAD_LIMIT", err.Error())
 	}
 	state := p.flags["state"]
 	if state == "" {
 		state = "active"
 	}
-	if state != "active" && state != "live" && state != "idle" && state != "inactive" && state != "all" {
-		return fail(errOut, "BAD_STATE", state)
+	result, err := client.Who(ctx, httpapi.WhoQuery{Project: project, State: state, Limit: limit})
+	if err != nil {
+		return realAPIError(errOut, err)
 	}
-	limit := 5
-	if raw := p.flags["limit"]; raw != "" {
-		var err error
-		limit, err = strconv.Atoi(raw)
-		if err != nil || limit < 1 || limit > 20 {
-			return fail(errOut, "BAD_LIMIT", "range=1..20")
-		}
+	lines := []string{fmt.Sprintf("WHO count=%d", len(result.Sessions))}
+	for _, item := range result.Sessions {
+		lines = append(lines, fmt.Sprintf("%s execution=%s connected=%t project=%s last=%s", item.Session, item.Execution, item.HostConnected, item.Project, item.LastActivity))
 	}
-	ss := make([]commons.Session, 0)
-	for _, session := range commons.Sessions {
-		if project != "" && session.Project != project {
-			continue
-		}
-		if state == "active" && session.Turn != "live" && session.Turn != "idle" {
-			continue
-		}
-		if state != "active" && state != "all" && session.Turn != state {
-			continue
-		}
-		ss = append(ss, session)
-		if len(ss) == limit {
-			break
-		}
-	}
-	scope := project
-	if scope == "" {
-		scope = "all"
-	}
-	lines := []string{fmt.Sprintf("WHO %s count=%d", scope, len(ss))}
-	for _, session := range ss {
-		lines = append(lines, fmt.Sprintf("SESSION %s state=%s host=%s host_state=%s last=%s | %s", session.ID, session.Turn, session.Host, session.HostState, session.Last, session.Purpose))
-	}
-	return emit(p.json, out, map[string]any{"type": "sessions", "scope": scope, "sessions": ss}, strings.Join(lines, "\n"))
+	return emitReal(p.json, out, result, strings.Join(lines, "\n"))
 }
 
-func inboxCmd(p parsed, out, errOut io.Writer) int {
-	if len(p.pos) > 1 {
-		return fail(errOut, "USAGE", "inbox accepts at most one PROJECT")
+func realInbox(ctx context.Context, client *apiclient.Client, config agentConfig, p realArgs, out, errOut io.Writer) int {
+	project, err := projectArg(p, config, true)
+	if err != nil {
+		return realFailure(errOut, exitUsage, "USAGE", err.Error())
 	}
-	project := commons.DemoProject.ID
-	if len(p.pos) == 1 {
-		project = p.pos[0]
+	limit, err := intFlag(p, "limit", 5, 1, 20)
+	if err != nil {
+		return realFailure(errOut, exitUsage, "BAD_LIMIT", err.Error())
 	}
-	if _, ok := projectByID(project); !ok {
-		return fail(errOut, "NOT_FOUND", "project="+project)
+	result, err := client.Inbox(ctx, httpapi.InboxQuery{Project: project, Limit: limit})
+	if err != nil {
+		return realAPIError(errOut, err)
 	}
-	limit := 5
-	if raw := p.flags["limit"]; raw != "" {
-		var err error
-		limit, err = strconv.Atoi(raw)
-		if err != nil || limit < 1 || limit > 20 {
-			return fail(errOut, "BAD_LIMIT", "range=1..20")
-		}
+	lines := []string{fmt.Sprintf("INBOX project=%s unread=%d mentions=%d", result.Project, result.Unread, result.Mentions)}
+	for _, item := range result.Items {
+		lines = append(lines, fmt.Sprintf("%s from=%s ref=%s | %s", item.Kind, item.From, item.Ref, item.Snippet))
 	}
-	messages := commons.Messages
-	if len(messages) > limit {
-		messages = messages[:limit]
-	}
-	unread := 0
-	lines := []string{}
-	for _, message := range messages {
-		if message.Unread {
-			unread++
-		}
-		lines = append(lines, fmt.Sprintf("MESSAGE %s kind=%s from=%s age=%s ref=%s | %s", message.ID, message.Kind, message.From, message.Age, message.Ref, message.Snippet))
-	}
-	lines = append([]string{fmt.Sprintf("INBOX %s count=%d unread=%d", project, len(messages), unread)}, lines...)
-	return emit(p.json, out, map[string]any{"type": "inbox", "project": project, "unread": unread, "messages": messages}, strings.Join(lines, "\n"))
+	return emitReal(p.json, out, result, strings.Join(lines, "\n"))
 }
 
-func openCmd(p parsed, out, errOut io.Writer) int {
+func realContributors(ctx context.Context, client *apiclient.Client, p realArgs, out, errOut io.Writer) int {
+	if len(p.pos) != 0 {
+		return realFailure(errOut, exitUsage, "USAGE", "contributors accepts flags only")
+	}
+	limit, err := intFlag(p, "limit", 10, 1, 20)
+	if err != nil {
+		return realFailure(errOut, exitUsage, "BAD_LIMIT", err.Error())
+	}
+	result, err := client.LookupContributors(ctx, httpapi.ContributorLookupQuery{Search: p.flags["query"], Project: p.flags["project"], Cursor: p.flags["cursor"], Limit: limit})
+	if err != nil {
+		return realAPIError(errOut, err)
+	}
+	lines := []string{fmt.Sprintf("CONTRIBUTORS count=%d", len(result.Items))}
+	for _, item := range result.Items {
+		lines = append(lines, fmt.Sprintf("%s %s handle=%s purpose=%s reachable=%t", item.Kind, item.Principal, item.Handle, item.Purpose, item.Reachable))
+	}
+	return emitReal(p.json, out, result, strings.Join(lines, "\n"))
+}
+
+func realNext(ctx context.Context, client *apiclient.Client, config agentConfig, p realArgs, out, errOut io.Writer) int {
+	project, err := projectArg(p, config, true)
+	if err != nil {
+		return realFailure(errOut, exitUsage, "USAGE", err.Error())
+	}
+	limit, err := intFlag(p, "limit", 1, 1, 10)
+	if err != nil {
+		return realFailure(errOut, exitUsage, "BAD_LIMIT", err.Error())
+	}
+	result, err := client.Next(ctx, httpapi.NextQuery{Project: project, Limit: limit})
+	if err != nil {
+		return realAPIError(errOut, err)
+	}
+	return emitReal(p.json, out, result, fmt.Sprintf("NEXT project=%s count=%d\n%s", result.Project, len(result.Tasks), compactJSON(result.Tasks)))
+}
+
+func requestKey(p realArgs) (string, error) {
+	key := p.flags["request-id"]
+	if key == "" || len(key) > 200 || strings.TrimSpace(key) != key {
+		return "", errors.New("--request-id is required, trimmed, and at most 200 characters")
+	}
+	for _, char := range key {
+		if char < 0x21 || char > 0x7e {
+			return "", errors.New("--request-id must contain visible ASCII characters only")
+		}
+	}
+	return key, nil
+}
+
+func realClaim(ctx context.Context, client *apiclient.Client, p realArgs, out, errOut io.Writer) int {
 	if len(p.pos) != 1 {
-		return fail(errOut, "USAGE", "open requires REF")
+		return realFailure(errOut, exitUsage, "USAGE", "claim requires TASK")
 	}
-	budget := 600
-	if raw := p.flags["budget"]; raw != "" {
-		var err error
-		budget, err = strconv.Atoi(raw)
-		if err != nil || budget < 100 || budget > 2000 {
-			return fail(errOut, "BAD_BUDGET", "range=100..2000")
-		}
+	key, err := requestKey(p)
+	if err != nil {
+		return realFailure(errOut, exitUsage, "BAD_REQUEST_ID", err.Error())
 	}
-	ref := p.pos[0]
-	payload := map[string]any{"type": "object", "ref": ref, "project": commons.DemoProject.ID}
-	text := ""
-	if task, ok := taskByID(commons.DemoProject, ref); ok {
-		payload["kind"], payload["data"] = "task", task
-		text = fmt.Sprintf("OBJECT %s kind=task project=%s rev=%d\nTITLE %s\nSTATE %s priority=%d owner=%s blocker=%s\nACCEPT %s", task.ID, commons.DemoProject.ID, commons.DemoProject.Revision, task.Title, task.State, task.Priority, task.Owner, task.DependsOn, task.Accept)
-	} else {
-		for _, decision := range commons.DemoProject.Decisions {
-			if decision.ID == ref {
-				payload["kind"], payload["data"] = "decision", decision
-				text = fmt.Sprintf("OBJECT %s kind=decision project=%s rev=%d\nTITLE %s\nBODY %s", decision.ID, commons.DemoProject.ID, decision.Revision, decision.Title, decision.Rationale)
-			}
-		}
-		for _, item := range commons.SearchCorpus() {
-			if item.Ref == ref {
-				payload["kind"], payload["data"] = item.Kind, item
-				text = fmt.Sprintf("OBJECT %s kind=%s project=%s rev=%d\nTITLE %s\nBODY %s", item.Ref, item.Kind, item.Project, item.Revision, item.Title, item.Body)
-			}
-		}
-	}
-	if text == "" {
-		return fail(errOut, "NOT_FOUND", "ref="+ref)
-	}
-	if estimateTokens(text) > budget {
-		return fail(errOut, "BUDGET_TOO_SMALL", fmt.Sprintf("required=%d provided=%d", estimateTokens(text), budget))
-	}
-	return emit(p.json, out, payload, text)
+	result, err := client.Claim(ctx, httpapi.ClaimRequest{Task: p.pos[0], Lease: p.flags["lease"]}, key)
+	return realWriteResult(p, result, err, out, errOut)
 }
 
-func searchCmd(p parsed, out, errOut io.Writer) int {
-	if len(p.pos) < 2 {
-		return fail(errOut, "USAGE", "search requires PROJECT QUERY")
+func mentionRequests(values []string) []httpapi.MentionRequest {
+	out := make([]httpapi.MentionRequest, 0, len(values))
+	for _, value := range values {
+		out = append(out, httpapi.MentionRequest{Principal: value})
 	}
-	if _, ok := projectByID(p.pos[0]); !ok {
-		return fail(errOut, "NOT_FOUND", "project="+p.pos[0])
-	}
-	limit := 5
-	if raw := p.flags["limit"]; raw != "" {
-		var err error
-		limit, err = strconv.Atoi(raw)
-		if err != nil || limit < 1 || limit > 10 {
-			return fail(errOut, "BAD_LIMIT", "range=1..10")
-		}
-	}
-	query := strings.Join(p.pos[1:], " ")
-	terms := strings.Fields(strings.ToLower(query))
-	type scored struct {
-		item  commons.SearchItem
-		score int
-	}
-	matches := make([]scored, 0)
-	for _, item := range commons.SearchCorpus() {
-		if item.Project != p.pos[0] {
-			continue
-		}
-		haystack := strings.ToLower(item.Ref + " " + item.Kind + " " + item.Title + " " + item.Body)
-		score := 0
-		for _, term := range terms {
-			if strings.Contains(haystack, term) {
-				score++
-			}
-		}
-		if score > 0 {
-			matches = append(matches, scored{item: item, score: score})
-		}
-	}
-	sort.SliceStable(matches, func(i, j int) bool {
-		if matches[i].score == matches[j].score {
-			return matches[i].item.Revision > matches[j].item.Revision
-		}
-		return matches[i].score > matches[j].score
-	})
-	if len(matches) > limit {
-		matches = matches[:limit]
-	}
-	items := make([]commons.SearchItem, 0, len(matches))
-	lines := []string{fmt.Sprintf("RESULTS project=%s query=%q count=%d", p.pos[0], query, len(matches))}
-	for _, match := range matches {
-		items = append(items, match.item)
-		lines = append(lines, fmt.Sprintf("RESULT ref=%s rev=%d | %s | %s | %s", match.item.Ref, match.item.Revision, match.item.Kind, match.item.Title, compactSnippet(match.item.Body, 96)))
-	}
-	return emit(p.json, out, map[string]any{"type": "results", "project": p.pos[0], "query": query, "results": items}, strings.Join(lines, "\n"))
+	return out
 }
 
-func nextCmd(p parsed, out, errOut io.Writer) int {
-	if len(p.pos) != 1 {
-		return fail(errOut, "USAGE", "next requires PROJECT")
-	}
-	project, ok := projectByID(p.pos[0])
-	if !ok {
-		return fail(errOut, "NOT_FOUND", "project="+p.pos[0])
-	}
-	task, ok := nextTask(project)
-	if !ok {
-		return emit(p.json, out, map[string]any{"type": "task", "task": nil}, "NONE task project="+project.ID)
-	}
-	text := fmt.Sprintf("NEXT %s count=1\nTASK %s state=%s priority=%d | %s\nACCEPT %s", project.ID, task.ID, task.State, task.Priority, task.Title, task.Accept)
-	return emit(p.json, out, map[string]any{"type": "next", "project": project.ID, "tasks": []commons.Task{task}}, text)
-}
-
-func claimCmd(p parsed, out, errOut io.Writer) int {
-	if len(p.pos) != 1 {
-		return fail(errOut, "USAGE", "claim requires TASK_ID")
-	}
-	task, ok := taskByID(commons.DemoProject, p.pos[0])
-	if !ok {
-		return fail(errOut, "NOT_FOUND", "task="+p.pos[0])
-	}
-	if task.State != "ready" {
-		return fail(errOut, "CONFLICT", "task="+task.ID+" state="+task.State)
-	}
-	lease := p.flags["lease"]
-	if lease == "" {
-		lease = "2h"
-	}
-	ack := map[string]any{"type": "claim_simulation", "stub": true, "task": task.ID, "owner": "SIM-LOCAL", "lease": lease, "persisted": false, "request_id": p.flags["request-id"]}
-	return emit(p.json, out, ack, fmt.Sprintf("WOULD_CLAIM task=%s owner=SIM-LOCAL lease=%s stub=true persisted=false", task.ID, lease))
-}
-
-func taskCmd(p parsed, out, errOut io.Writer) int {
-	if len(p.pos) < 1 {
-		return fail(errOut, "USAGE", "task requires next or claim")
-	}
-	alias := parsed{pos: p.pos[1:], flags: p.flags, json: p.json}
-	switch p.pos[0] {
-	case "next":
-		return nextCmd(alias, out, errOut)
-	case "claim":
-		return claimCmd(alias, out, errOut)
-	default:
-		return fail(errOut, "UNKNOWN_TASK_COMMAND", p.pos[0])
-	}
-}
-
-func postCmd(p parsed, out, errOut io.Writer) int {
+func realPost(ctx context.Context, client *apiclient.Client, p realArgs, stdin io.Reader, out, errOut io.Writer) int {
 	if len(p.pos) != 2 {
-		return fail(errOut, "USAGE", "post requires TOPIC KIND")
+		return realFailure(errOut, exitUsage, "USAGE", "post requires TOPIC KIND")
 	}
-	topic := p.pos[0]
-	if topic != "general" && topic != commons.DemoProject.ID {
-		return fail(errOut, "NOT_FOUND", "topic="+topic)
+	key, err := requestKey(p)
+	if err != nil {
+		return realFailure(errOut, exitUsage, "BAD_REQUEST_ID", err.Error())
 	}
-	validKinds := map[string]bool{"finding": true, "question": true, "notice": true, "decision": true, "topic_request": true}
-	if !validKinds[p.pos[1]] {
-		return fail(errOut, "BAD_KIND", p.pos[1])
+	values, err := resolveTextFlags(stdin, p, "title", "body", "basis")
+	if err != nil {
+		return realFailure(errOut, exitUsage, "BAD_INPUT", err.Error())
 	}
-	for _, field := range []string{"title", "body", "basis"} {
-		if strings.TrimSpace(p.flags[field]) == "" {
-			return fail(errOut, "MISSING_FIELD", "--"+field)
+	result, err := client.Post(ctx, httpapi.PostRequest{Topic: p.pos[0], Kind: p.pos[1], Title: values["title"], Body: values["body"], Basis: values["basis"], Mentions: mentionRequests(p.mentions)}, key)
+	return realWriteResult(p, result, err, out, errOut)
+}
+
+func realComment(ctx context.Context, client *apiclient.Client, p realArgs, stdin io.Reader, out, errOut io.Writer) int {
+	if len(p.pos) != 1 || p.flags["intent"] == "" {
+		return realFailure(errOut, exitUsage, "USAGE", "comment requires REF and --intent")
+	}
+	key, err := requestKey(p)
+	if err != nil {
+		return realFailure(errOut, exitUsage, "BAD_REQUEST_ID", err.Error())
+	}
+	values, err := resolveTextFlags(stdin, p, "body")
+	if err != nil {
+		return realFailure(errOut, exitUsage, "BAD_INPUT", err.Error())
+	}
+	result, err := client.Comment(ctx, httpapi.CommentRequest{Ref: p.pos[0], Intent: p.flags["intent"], Body: values["body"], Mentions: mentionRequests(p.mentions)}, key)
+	return realWriteResult(p, result, err, out, errOut)
+}
+
+func realStatus(ctx context.Context, client *apiclient.Client, p realArgs, stdin io.Reader, out, errOut io.Writer) int {
+	if len(p.pos) != 1 || p.flags["status"] == "" {
+		return realFailure(errOut, exitUsage, "USAGE", "status requires REF and --status")
+	}
+	key, err := requestKey(p)
+	if err != nil {
+		return realFailure(errOut, exitUsage, "BAD_REQUEST_ID", err.Error())
+	}
+	values, err := resolveTextFlags(stdin, p, "basis")
+	if err != nil {
+		return realFailure(errOut, exitUsage, "BAD_INPUT", err.Error())
+	}
+	result, err := client.SetStatus(ctx, httpapi.StatusRequest{Ref: p.pos[0], Status: p.flags["status"], Basis: values["basis"]}, key)
+	return realWriteResult(p, result, err, out, errOut)
+}
+
+func realTopicRequest(ctx context.Context, client *apiclient.Client, p realArgs, stdin io.Reader, out, errOut io.Writer) int {
+	if len(p.pos) != 0 {
+		return realFailure(errOut, exitUsage, "USAGE", "topic-request accepts flags only")
+	}
+	key, err := requestKey(p)
+	if err != nil {
+		return realFailure(errOut, exitUsage, "BAD_REQUEST_ID", err.Error())
+	}
+	values, err := resolveTextFlags(stdin, p, "title", "body", "basis")
+	if err != nil {
+		return realFailure(errOut, exitUsage, "BAD_INPUT", err.Error())
+	}
+	result, err := client.RequestTopic(ctx, httpapi.TopicRequest{Title: values["title"], Body: values["body"], Basis: values["basis"]}, key)
+	return realWriteResult(p, result, err, out, errOut)
+}
+
+func resolveTextFlags(stdin io.Reader, p realArgs, names ...string) (map[string]string, error) {
+	out := make(map[string]string, len(names))
+	stdinName := ""
+	for _, name := range names {
+		value := p.flags[name]
+		if value == "-" {
+			if stdinName != "" {
+				return nil, errors.New("stdin may supply only one text field")
+			}
+			stdinName = name
+			continue
 		}
-	}
-	sum := sha256.Sum256([]byte(strings.Join([]string{topic, p.pos[1], p.flags["title"], p.flags["body"], p.flags["basis"]}, "\x00")))
-	id := "sim-" + hex.EncodeToString(sum[:4])
-	ack := map[string]any{"type": "post_simulation", "stub": true, "persisted": false, "id": id, "topic": topic, "kind": p.pos[1], "request_id": p.flags["request-id"]}
-	return emit(p.json, out, ack, fmt.Sprintf("WOULD_POST id=%s topic=%s kind=%s stub=true persisted=false", id, topic, p.pos[1]))
-}
-
-func compactSnippet(value string, limit int) string {
-	if len(value) <= limit {
-		return value
-	}
-	return strings.TrimSpace(value[:limit-3]) + "..."
-}
-
-func projectByID(id string) (commons.Project, bool) {
-	if id == commons.DemoProject.ID {
-		return commons.DemoProject, true
-	}
-	return commons.Project{}, false
-}
-
-func nextTask(project commons.Project) (commons.Task, bool) {
-	for _, task := range project.Tasks {
-		if task.State == "ready" {
-			return task, true
+		if strings.TrimSpace(value) == "" {
+			return nil, fmt.Errorf("--%s is required", name)
 		}
+		out[name] = value
 	}
-	return commons.Task{}, false
-}
-
-func taskByID(project commons.Project, id string) (commons.Task, bool) {
-	for _, task := range project.Tasks {
-		if task.ID == id {
-			return task, true
+	if stdinName != "" {
+		body, err := io.ReadAll(io.LimitReader(stdin, maxStdinBytes+1))
+		if err != nil {
+			return nil, err
 		}
+		if int64(len(body)) > maxStdinBytes || strings.TrimSpace(string(body)) == "" {
+			return nil, errors.New("stdin text must be non-empty and at most 65536 bytes")
+		}
+		out[stdinName] = strings.TrimSuffix(string(body), "\n")
 	}
-	return commons.Task{}, false
+	return out, nil
 }
 
-func estimateTokens(s string) int {
-	// Conservative dependency-free upper estimate used only for a response ceiling.
-	return (len([]byte(s)) + 2) / 3
+func realWriteResult(p realArgs, result httpapi.WriteResult, err error, out, errOut io.Writer) int {
+	if err != nil {
+		return realAPIError(errOut, err)
+	}
+	if !result.Persisted || result.ID == "" {
+		return realFailure(errOut, exitTransport, "INVALID_ACK", "server did not acknowledge a persisted write")
+	}
+	return emitReal(p.json, out, result, fmt.Sprintf("PERSISTED id=%s revision=%d persisted=true", result.ID, result.Revision))
 }
 
-func emit(asJSON bool, out io.Writer, payload any, text string) int {
+func compactJSON(value any) string {
+	if value == nil {
+		return ""
+	}
+	body, _ := json.Marshal(value)
+	return string(body)
+}
+
+func emitReal(asJSON bool, out io.Writer, payload any, text string) int {
 	if asJSON {
-		enc := json.NewEncoder(out)
-		enc.SetEscapeHTML(false)
-		if err := enc.Encode(payload); err != nil {
-			return 1
+		encoder := json.NewEncoder(out)
+		encoder.SetEscapeHTML(false)
+		if err := encoder.Encode(payload); err != nil {
+			return exitTransport
 		}
 		return 0
 	}
@@ -504,7 +544,38 @@ func emit(asJSON bool, out io.Writer, payload any, text string) int {
 	return 0
 }
 
-func fail(errOut io.Writer, code, detail string) int {
-	fmt.Fprintf(errOut, "ERROR code=%s detail=%q\n", code, detail)
-	return 2
+const (
+	exitUsage       = 2
+	exitAuth        = 3
+	exitNotFound    = 4
+	exitConflict    = 5
+	exitUnavailable = 6
+	exitTransport   = 7
+	exitInvalid     = 8
+)
+
+func realAPIError(errOut io.Writer, err error) int {
+	var apiErr *apiclient.APIError
+	if !errors.As(err, &apiErr) {
+		return realFailure(errOut, exitTransport, "TRANSPORT", err.Error())
+	}
+	code := exitTransport
+	switch apiErr.Code {
+	case "unauthorized", "forbidden", "origin_forbidden", "csrf_failed":
+		code = exitAuth
+	case httpapi.CodeNotFound:
+		code = exitNotFound
+	case httpapi.CodeConflict:
+		code = exitConflict
+	case httpapi.CodeUnavailable:
+		code = exitUnavailable
+	case httpapi.CodeInvalid, "bad_request", "bad_query", "bad_body", "bad_idempotency_key":
+		code = exitInvalid
+	}
+	return realFailure(errOut, code, strings.ToUpper(apiErr.Code), apiErr.Message)
+}
+
+func realFailure(errOut io.Writer, exit int, code, detail string) int {
+	fmt.Fprintf(errOut, "ERROR %s %s\n", code, detail)
+	return exit
 }

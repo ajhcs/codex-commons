@@ -1,4 +1,4 @@
-import { MAX_API_RESPONSE_BYTES, MAX_BROWSE_LIMIT, MAX_OVERVIEW_LIMIT, MAX_TASK_EVENTS, MAX_TASK_LIST, MAX_WIKI_REVISIONS } from "../contracts/commons.js";
+import { MAX_API_RESPONSE_BYTES, MAX_BROWSE_LIMIT, MAX_NOTIFICATIONS, MAX_OVERVIEW_LIMIT, MAX_TASK_EVENTS, MAX_TASK_LIST, MAX_WIKI_REVISIONS } from "../contracts/commons.js";
 
 const encoder = new TextEncoder();
 
@@ -196,6 +196,16 @@ export function createHTTPTransport({
     readContributors(query, signal) {
       return read("/v1/contributors", { q: boundedText(query.q), project: query.project, cursor: query.cursor, limit: boundedLimit(query.limit, 20) }, signal);
     },
+    readNotifications(query, signal) {
+      return read("/v1/notifications", {
+        unread: query.unread,
+        cursor: query.cursor,
+        limit: boundedLimit(query.limit, MAX_NOTIFICATIONS),
+      }, signal);
+    },
+    markNotificationRead(input, writeOptions, signal) {
+      return write("/v1/notification-reads", input, writeOptions, signal);
+    },
 
     readTopics(limit = 100, signal) {
       return read("/v1/topics", { limit: boundedLimit(limit, 100) }, signal);
@@ -206,6 +216,10 @@ export function createHTTPTransport({
         comments_cursor: query.comments_cursor,
         comments_limit: boundedLimit(query.comments_limit, 20),
       }, signal);
+    },
+    readCommentSource(commentID, signal) {
+      if (typeof commentID !== "string" || !commentID) throw new CommonsAPIError("Comment ID is required.", { code: "invalid_comment" });
+      return read(`/v1/comments/${encodeURIComponent(commentID)}`, {}, signal);
     },
     createPost(input, writeOptions, signal) {
       return write("/v1/posts", input, writeOptions, signal);
