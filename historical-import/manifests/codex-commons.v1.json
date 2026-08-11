@@ -330,14 +330,14 @@
       "kind": "repository_document",
       "stable_id": "docs/slice-10.md",
       "locator": "docs/slice-10.md",
-      "digest": "sha256:9aaa6eb340485857cbf836a53fabbe6cf1ecf0cd78d83827c6ce40da36805b19"
+      "digest": "sha256:cce1545345154bdf2e487885d989983fcf7a4b6291ab577952f48058991ad37c"
     },
     {
       "ref": "doc-project-core",
       "kind": "repository_document",
       "stable_id": "docs/project-core.md",
       "locator": "docs/project-core.md",
-      "digest": "sha256:7861529cd24cfbb66865afd8911dcae73cd4eb5e8c08cb8a9735943c7dc03c20"
+      "digest": "sha256:70549e4a475b935aa6a5258b0df48f1efb450b0f9fab332330dd36f6f6691fe2"
     },
     {
       "ref": "doc-dogfood-content",
