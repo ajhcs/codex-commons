@@ -28,7 +28,7 @@ func strconvQuote(value string) string {
 }
 
 func TestRealCLIUsesAuthenticatedHTTPAndPersistedAcknowledgement(t *testing.T) {
-	var received map[string]any
+	var received, receivedScope map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer test-token" {
 			t.Fatalf("authorization=%q", r.Header.Get("Authorization"))
@@ -45,6 +45,14 @@ func TestRealCLIUsesAuthenticatedHTTPAndPersistedAcknowledgement(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, _ = w.Write([]byte(`{"ok":true,"data":{"id":"P-real","revision":8,"persisted":true},"meta":{"request_id":"req-2"}}`))
+		case "/v1/post-perspective-scopes":
+			if r.Method != http.MethodPost || r.Header.Get("Idempotency-Key") != "scope-1" {
+				t.Fatalf("scope method=%s idempotency=%q", r.Method, r.Header.Get("Idempotency-Key"))
+			}
+			if err := json.NewDecoder(r.Body).Decode(&receivedScope); err != nil {
+				t.Fatal(err)
+			}
+			_, _ = w.Write([]byte(`{"ok":true,"data":{"id":"P-real","revision":9,"persisted":true},"meta":{"request_id":"req-3"}}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -68,6 +76,14 @@ func TestRealCLIUsesAuthenticatedHTTPAndPersistedAcknowledgement(t *testing.T) {
 	mentions, ok := received["mentions"].([]any)
 	if !ok || len(mentions) != 1 || mentions[0].(map[string]any)["principal"] != "human:local-admin" {
 		t.Fatalf("mentions=%#v", received["mentions"])
+	}
+	out.Reset()
+	code = RunContext(context.Background(), []string{"--config", config, "scope", "P-real", "project", "--base-revision", "8", "--request-id", "scope-1"}, strings.NewReader(""), &out, &errOut)
+	if code != 0 || !strings.Contains(out.String(), "PERSISTED id=P-real revision=9 persisted=true") {
+		t.Fatalf("scope code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+	if receivedScope["ref"] != "P-real" || receivedScope["scope"] != "project" || receivedScope["base_revision"] != float64(8) {
+		t.Fatalf("scope request=%#v", receivedScope)
 	}
 }
 
@@ -105,6 +121,27 @@ func TestRealCLIRejectsUnknownAndIrrelevantFlagsBeforeConfig(t *testing.T) {
 		var out, errOut bytes.Buffer
 		code := RunContext(context.Background(), tc.args, strings.NewReader(""), &out, &errOut)
 		if code != exitUsage || out.Len() != 0 || !strings.Contains(errOut.String(), tc.want) || strings.Contains(errOut.String(), "ERROR CONFIG") {
+			t.Fatalf("args=%v code=%d out=%q err=%q", tc.args, code, out.String(), errOut.String())
+		}
+	}
+}
+
+func TestRealCLIScopeStableValidationErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("invalid scope command reached HTTP server")
+	}))
+	defer server.Close()
+	config := writeAgentConfig(t, server.URL)
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{args: []string{"scope", "P-1", "public", "--base-revision", "0", "--request-id", "scope-1"}, want: "ERROR BAD_SCOPE"},
+		{args: []string{"scope", "P-1", "project", "--base-revision", "-1", "--request-id", "scope-1"}, want: "ERROR BAD_REVISION"},
+	} {
+		var out, errOut bytes.Buffer
+		code := RunContext(context.Background(), append([]string{"--config", config}, tc.args...), strings.NewReader(""), &out, &errOut)
+		if code != exitUsage || out.Len() != 0 || !strings.Contains(errOut.String(), tc.want) {
 			t.Fatalf("args=%v code=%d out=%q err=%q", tc.args, code, out.String(), errOut.String())
 		}
 	}

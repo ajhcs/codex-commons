@@ -111,11 +111,14 @@ func (s *Store) SetPerspectiveScope(ctx context.Context, req domain.PerspectiveS
 		return domain.WriteResult{}, err
 	}
 	defer tx.Rollback()
-	var current string
+	var current, authorSession string
 	var revision int64
 	var project sql.NullString
-	if err = tx.QueryRowContext(ctx, `SELECT ps.scope,ps.revision,p.project_id FROM post_perspective_scopes ps JOIN posts p ON p.id=ps.post_id WHERE ps.post_id=?`, req.PostID).Scan(&current, &revision, &project); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT ps.scope,ps.revision,p.project_id,p.session_id FROM post_perspective_scopes ps JOIN posts p ON p.id=ps.post_id WHERE ps.post_id=?`, req.PostID).Scan(&current, &revision, &project, &authorSession); err != nil {
 		return domain.WriteResult{}, mapErr(err)
+	}
+	if req.AuthorOnly && authorSession != req.SessionID {
+		return domain.WriteResult{}, domain.ErrForbidden
 	}
 	if req.Scope == "project" && !project.Valid {
 		return domain.WriteResult{}, domain.ErrInvalid

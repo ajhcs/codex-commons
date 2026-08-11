@@ -161,6 +161,7 @@ type PostStateRequest struct {
 type PerspectiveScopeRequest struct {
 	PostID, Scope, ActorID, SessionID, RequestID string
 	BaseRevision                                 int64
+	AuthorOnly                                   bool
 }
 
 type StatusRequest struct {

@@ -30,6 +30,7 @@ Commands:
   claim TASK --request-id KEY [--lease DURATION]
   post TOPIC KIND --title TEXT --body TEXT --basis TEXT --request-id KEY [--mention PRINCIPAL]...
   comment REF --intent INTENT --body TEXT --request-id KEY [--mention PRINCIPAL]...
+	scope REF VALUE --base-revision N --request-id KEY
   status REF --status STATE --basis TEXT --request-id KEY
   topic-request --title TEXT --body TEXT --basis TEXT --request-id KEY
 
@@ -54,6 +55,7 @@ var realCommandFlags = map[string]map[string]bool{
 	"next":          {"limit": true},
 	"claim":         {"request-id": true, "lease": true},
 	"post":          {"title": true, "body": true, "basis": true, "request-id": true, "mention": true},
+	"scope":         {"base-revision": true, "request-id": true},
 	"comment":       {"intent": true, "body": true, "request-id": true, "mention": true},
 	"status":        {"status": true, "basis": true, "request-id": true},
 	"topic-request": {"title": true, "body": true, "basis": true, "request-id": true},
@@ -176,6 +178,8 @@ parsedGlobals:
 		return realClaim(ctx, client, p, stdout, stderr)
 	case "post":
 		return realPost(ctx, client, p, stdin, stdout, stderr)
+	case "scope":
+		return realScope(ctx, client, p, stdout, stderr)
 	case "comment":
 		return realComment(ctx, client, p, stdin, stdout, stderr)
 	case "status":
@@ -189,7 +193,7 @@ parsedGlobals:
 
 func parseRealArgs(args []string) (realArgs, error) {
 	p := realArgs{flags: map[string]string{}}
-	valueFlags := map[string]bool{"since": true, "budget": true, "state": true, "limit": true, "query": true, "project": true, "cursor": true, "lease": true, "request-id": true, "title": true, "body": true, "basis": true, "intent": true, "status": true, "mention": true}
+	valueFlags := map[string]bool{"since": true, "budget": true, "state": true, "limit": true, "query": true, "project": true, "cursor": true, "lease": true, "request-id": true, "title": true, "body": true, "basis": true, "intent": true, "status": true, "mention": true, "base-revision": true}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--json" {
@@ -435,6 +439,25 @@ func realPost(ctx context.Context, client *apiclient.Client, p realArgs, stdin i
 	return realWriteResult(p, result, err, out, errOut)
 }
 
+func realScope(ctx context.Context, client *apiclient.Client, p realArgs, out, errOut io.Writer) int {
+	if len(p.pos) != 2 {
+		return realFailure(errOut, exitUsage, "USAGE", "scope requires REF VALUE")
+	}
+	if p.pos[1] != "closed" && p.pos[1] != "project" && p.pos[1] != "commons" {
+		return realFailure(errOut, exitUsage, "BAD_SCOPE", "VALUE must be closed, project, or commons")
+	}
+	key, err := requestKey(p)
+	if err != nil {
+		return realFailure(errOut, exitUsage, "BAD_REQUEST_ID", err.Error())
+	}
+	raw := p.flags["base-revision"]
+	baseRevision, err := strconv.ParseInt(raw, 10, 64)
+	if raw == "" || err != nil || baseRevision < 0 {
+		return realFailure(errOut, exitUsage, "BAD_REVISION", "--base-revision is required and must be a non-negative integer")
+	}
+	result, err := client.SetPerspectiveScope(ctx, httpapi.PerspectiveScopeWriteRequest{Ref: p.pos[0], Scope: p.pos[1], BaseRevision: baseRevision}, key)
+	return realWriteResult(p, result, err, out, errOut)
+}
 func realComment(ctx context.Context, client *apiclient.Client, p realArgs, stdin io.Reader, out, errOut io.Writer) int {
 	if len(p.pos) != 1 || p.flags["intent"] == "" {
 		return realFailure(errOut, exitUsage, "USAGE", "comment requires REF and --intent")
