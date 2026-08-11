@@ -24,6 +24,8 @@ func mapBrowseError(err error, resource string) error {
 		return httpapi.NewError(httpapi.CodeNotFound, resource+" source not found")
 	case errors.Is(err, domain.ErrInvalid):
 		return httpapi.NewError(httpapi.CodeInvalid, "invalid "+resource+" query")
+	case errors.Is(err, domain.ErrForbidden):
+		return httpapi.NewError(httpapi.CodeForbidden, resource+" forbidden")
 	case errors.Is(err, domain.ErrConflict), errors.Is(err, domain.ErrFutureRevision):
 		return httpapi.NewError(httpapi.CodeConflict, resource+" conflict")
 	case errors.Is(err, domain.ErrUnavailable):
@@ -97,10 +99,10 @@ func (a *Adapter) LookupContributors(ctx context.Context, query httpapi.Contribu
 	return out, mapBrowseError(err, "contributors")
 }
 func (a *Adapter) SetPerspectiveScope(ctx context.Context, request httpapi.PerspectiveScopeWriteRequest, meta httpapi.RequestMeta) (httpapi.WriteResult, error) {
-	if meta.PrincipalKind != "human" {
-		return httpapi.WriteResult{}, httpapi.NewError(httpapi.CodeForbidden, "only the local human may change perspective scope")
+	if meta.PrincipalKind != "human" && meta.PrincipalKind != "agent" {
+		return httpapi.WriteResult{}, httpapi.NewError(httpapi.CodeForbidden, "authenticated human or agent author required")
 	}
-	result, err := a.home.SetPerspectiveScope(ctx, application.PerspectiveScopeRequest{Ref: request.Ref, Scope: request.Scope, BaseRevision: request.BaseRevision, Actor: meta.Actor, Session: meta.Session, RequestID: meta.IdempotencyKey})
+	result, err := a.home.SetPerspectiveScope(ctx, application.PerspectiveScopeRequest{Ref: request.Ref, Scope: request.Scope, BaseRevision: request.BaseRevision, Actor: meta.Actor, Session: meta.Session, RequestID: meta.IdempotencyKey, AuthorOnly: meta.PrincipalKind == "agent"})
 	if err != nil {
 		return httpapi.WriteResult{}, mapBrowseError(err, "perspective scope")
 	}

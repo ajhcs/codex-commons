@@ -157,6 +157,7 @@ type PostStateRequest struct {
 type PerspectiveScopeRequest struct {
 	Ref, Scope, Actor, Session, RequestID string
 	BaseRevision                          int64
+	AuthorOnly                            bool
 }
 
 type CommentRequest struct {
@@ -447,7 +448,7 @@ func (s *Service) SetPerspectiveScope(ctx context.Context, request PerspectiveSc
 	if !ok {
 		return domain.WriteResult{}, domain.ErrInvalid
 	}
-	return repository.SetPerspectiveScope(ctx, domain.PerspectiveScopeRequest{PostID: request.Ref, Scope: request.Scope, BaseRevision: request.BaseRevision, ActorID: request.Actor, SessionID: request.Session, RequestID: request.RequestID})
+	return repository.SetPerspectiveScope(ctx, domain.PerspectiveScopeRequest{PostID: request.Ref, Scope: request.Scope, BaseRevision: request.BaseRevision, ActorID: request.Actor, SessionID: request.Session, RequestID: request.RequestID, AuthorOnly: request.AuthorOnly})
 }
 func (s *Service) Comment(ctx context.Context, request CommentRequest) (domain.WriteResult, error) {
 	repository, ok := s.repository.(AddressabilityRepository)
