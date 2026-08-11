@@ -14,7 +14,16 @@ type Backend interface {
 	BrowseAttention(context.Context, AttentionBrowseQuery, RequestMeta) (AttentionBrowseResult, error)
 	BrowseProjects(context.Context, ProjectsBrowseQuery, RequestMeta) (ProjectsBrowseResult, error)
 	BrowsePeople(context.Context, PeopleBrowseQuery, RequestMeta) (PeopleBrowseResult, error)
+	BrowseTopics(context.Context, TopicsQuery, RequestMeta) (TopicsResult, error)
+	BrowsePosts(context.Context, PostFeedQuery, RequestMeta) (PostFeedResult, error)
+	OpenPost(context.Context, PostOpenQuery, RequestMeta) (PostOpenResult, error)
+	SetPostState(context.Context, PostStateWriteRequest, RequestMeta) (WriteResult, error)
 	ProjectOverview(context.Context, ProjectOverviewQuery, RequestMeta) (ProjectOverviewResult, error)
+}
+
+type AddressabilityBackend interface {
+	LookupContributors(context.Context, ContributorLookupQuery, RequestMeta) (ContributorLookupResult, error)
+	SetPerspectiveScope(context.Context, PerspectiveScopeWriteRequest, RequestMeta) (WriteResult, error)
 }
 
 type LegacyBackend interface {
@@ -33,6 +42,7 @@ type LegacyBackend interface {
 }
 
 type RequestMeta struct {
+	PrincipalKind  string
 	Actor          string
 	Session        string
 	Host           string
@@ -48,6 +58,16 @@ type ProjectsBrowseQuery = application.ProjectsBrowseRequest
 type ProjectsBrowseResult = application.ProjectsBrowseResult
 type PeopleBrowseQuery = application.PeopleBrowseRequest
 type PeopleBrowseResult = application.PeopleBrowseResult
+type TopicsQuery = application.TopicsRequest
+type TopicsResult = application.TopicsResult
+type TopicItem = application.TopicItem
+type PostFeedQuery = application.PostFeedRequest
+type PostFeedResult = application.PostFeedResult
+type PostOpenQuery = application.PostOpenRequest
+type PostOpenResult = application.PostOpenResult
+type ContributorLookupQuery = application.ContributorLookupRequest
+type ContributorLookupResult = application.ContributorLookupResult
+type PostAttachment = application.PostAttachment
 type ProjectOverviewQuery = application.ProjectOverviewQuery
 type ProjectOverviewResult = application.ProjectOverview
 
@@ -179,18 +199,37 @@ type ClaimRequest struct {
 }
 
 type PostRequest struct {
-	Topic string `json:"topic"`
-	Kind  string `json:"kind"`
-	Title string `json:"title"`
-	Body  string `json:"body"`
-	Basis string `json:"basis"`
-	Ref   string `json:"ref,omitempty"`
+	Topic       string           `json:"topic"`
+	Kind        string           `json:"kind"`
+	Title       string           `json:"title"`
+	Body        string           `json:"body"`
+	Basis       string           `json:"basis"`
+	Ref         string           `json:"ref,omitempty"`
+	Attachments []PostAttachment `json:"attachments,omitempty"`
+}
+
+type PostStateWriteRequest struct {
+	Ref          string `json:"ref"`
+	State        string `json:"state"`
+	SupersededBy string `json:"superseded_by,omitempty"`
+}
+
+type PerspectiveScopeWriteRequest struct {
+	Ref          string `json:"ref"`
+	Scope        string `json:"scope"`
+	BaseRevision int64  `json:"base_revision"`
+}
+
+type CommentMentionRequest struct {
+	Session string `json:"session"`
 }
 
 type CommentRequest struct {
-	Ref   string `json:"ref"`
-	Body  string `json:"body"`
-	Basis string `json:"basis"`
+	Ref      string                  `json:"ref"`
+	Body     string                  `json:"body"`
+	Intent   string                  `json:"intent"`
+	Basis    string                  `json:"basis,omitempty"`
+	Mentions []CommentMentionRequest `json:"mentions,omitempty"`
 }
 
 type StatusRequest struct {
@@ -216,6 +255,7 @@ type WriteResult struct {
 
 // Error is the only backend error that crosses the transport boundary.
 const (
+	CodeForbidden   = "forbidden"
 	CodeNotFound    = "not_found"
 	CodeConflict    = "conflict"
 	CodeInvalid     = "invalid"

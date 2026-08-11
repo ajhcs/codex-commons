@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"codex-commons/internal/application"
 	"codex-commons/internal/domain"
 	"codex-commons/internal/httpapi"
 )
@@ -23,6 +24,8 @@ func mapBrowseError(err error, resource string) error {
 		return httpapi.NewError(httpapi.CodeNotFound, resource+" source not found")
 	case errors.Is(err, domain.ErrInvalid):
 		return httpapi.NewError(httpapi.CodeInvalid, "invalid "+resource+" query")
+	case errors.Is(err, domain.ErrConflict), errors.Is(err, domain.ErrFutureRevision):
+		return httpapi.NewError(httpapi.CodeConflict, resource+" conflict")
 	case errors.Is(err, domain.ErrUnavailable):
 		return httpapi.NewError(httpapi.CodeUnavailable, resource+" unavailable")
 	default:
@@ -52,4 +55,63 @@ func (a *Adapter) BrowsePeople(ctx context.Context, query httpapi.PeopleBrowseQu
 	}
 	out, err := a.home.BrowsePeople(ctx, query)
 	return out, mapBrowseError(err, "people")
+}
+
+func (a *Adapter) BrowsePosts(ctx context.Context, query httpapi.PostFeedQuery, meta httpapi.RequestMeta) (httpapi.PostFeedResult, error) {
+	if err := validateBrowseIdentity(meta); err != nil {
+		return httpapi.PostFeedResult{}, err
+	}
+	out, err := a.home.BrowsePosts(ctx, query)
+	return out, mapBrowseError(err, "posts")
+}
+
+func (a *Adapter) OpenPost(ctx context.Context, query httpapi.PostOpenQuery, meta httpapi.RequestMeta) (httpapi.PostOpenResult, error) {
+	if err := validateBrowseIdentity(meta); err != nil {
+		return httpapi.PostOpenResult{}, err
+	}
+	out, err := a.home.OpenPost(ctx, query)
+	return out, mapBrowseError(err, "post")
+}
+
+func (a *Adapter) SetPostState(ctx context.Context, request httpapi.PostStateWriteRequest, meta httpapi.RequestMeta) (httpapi.WriteResult, error) {
+	if err := validateBrowseIdentity(meta); err != nil {
+		return httpapi.WriteResult{}, err
+	}
+	result, err := a.home.SetPostState(ctx, application.PostStateRequest{
+		Ref: request.Ref, State: request.State, SupersededBy: request.SupersededBy,
+		Actor: meta.Actor, Session: meta.Session, RequestID: meta.IdempotencyKey,
+	})
+	if err != nil {
+		return httpapi.WriteResult{}, mapBrowseError(err, "post state")
+	}
+	return httpapi.WriteResult{ID: result.ID, Revision: result.Revision, Persisted: true}, nil
+}
+
+func (a *Adapter) LookupContributors(ctx context.Context, query httpapi.ContributorLookupQuery, meta httpapi.RequestMeta) (httpapi.ContributorLookupResult, error) {
+	if err := validateBrowseIdentity(meta); err != nil {
+		return httpapi.ContributorLookupResult{}, err
+	}
+	out, err := a.home.LookupContributors(ctx, query)
+	return out, mapBrowseError(err, "contributors")
+}
+func (a *Adapter) SetPerspectiveScope(ctx context.Context, request httpapi.PerspectiveScopeWriteRequest, meta httpapi.RequestMeta) (httpapi.WriteResult, error) {
+	if meta.PrincipalKind != "human" {
+		return httpapi.WriteResult{}, httpapi.NewError(httpapi.CodeForbidden, "only the local human may change perspective scope")
+	}
+	result, err := a.home.SetPerspectiveScope(ctx, application.PerspectiveScopeRequest{Ref: request.Ref, Scope: request.Scope, BaseRevision: request.BaseRevision, Actor: meta.Actor, Session: meta.Session, RequestID: meta.IdempotencyKey})
+	if err != nil {
+		return httpapi.WriteResult{}, mapBrowseError(err, "perspective scope")
+	}
+	return httpapi.WriteResult{ID: result.ID, Revision: result.Revision, Persisted: true}, nil
+}
+func (a *Adapter) Comment(ctx context.Context, request httpapi.CommentRequest, meta httpapi.RequestMeta) (httpapi.WriteResult, error) {
+	ids := make([]string, 0, len(request.Mentions))
+	for _, m := range request.Mentions {
+		ids = append(ids, m.Session)
+	}
+	result, err := a.home.Comment(ctx, application.CommentRequest{Ref: request.Ref, Body: request.Body, Intent: request.Intent, Actor: meta.Actor, Session: meta.Session, RequestID: meta.IdempotencyKey, MentionSessionIDs: ids})
+	if err != nil {
+		return httpapi.WriteResult{}, mapBrowseError(err, "comment")
+	}
+	return httpapi.WriteResult{ID: result.ID, Revision: result.Revision, Persisted: true}, nil
 }

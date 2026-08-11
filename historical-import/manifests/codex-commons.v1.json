@@ -1,0 +1,1343 @@
+{
+  "schema_version": 1,
+  "batch_id": "codex-commons-history-v1",
+  "project_id": "codex-commons",
+  "collision_policy": "current_wins",
+  "expected": {
+    "tasks": 20,
+    "sessions": 41,
+    "project_thread_aliases": 4,
+    "task_sessions": 37
+  },
+  "sources": [
+    {
+      "ref": "outcome-01",
+      "kind": "codex_turn_audit",
+      "stable_id": "codex-turn:019fe466-f069",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-09T02:47:52Z"
+    },
+    {
+      "ref": "outcome-02",
+      "kind": "codex_turn_audit",
+      "stable_id": "codex-turn:019fe48f-d404",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-09T03:29:12Z"
+    },
+    {
+      "ref": "outcome-03",
+      "kind": "codex_turn_audit",
+      "stable_id": "codex-turn:019fe4a8-cf2c",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-09T03:57:18Z"
+    },
+    {
+      "ref": "outcome-04",
+      "kind": "codex_turn_audit",
+      "stable_id": "codex-turn:019fe756-ce47",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-09T16:44:16Z"
+    },
+    {
+      "ref": "outcome-05",
+      "kind": "codex_turn_audit",
+      "stable_id": "codex-turn:019fe757-19d7",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-09T16:38:24Z"
+    },
+    {
+      "ref": "outcome-06",
+      "kind": "codex_turn_audit",
+      "stable_id": "codex-turn:019fe787-9a5d",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-09T17:25:58Z"
+    },
+    {
+      "ref": "outcome-07",
+      "kind": "codex_turn_audit",
+      "stable_id": "codex-turn:019fe79c-fd1c",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-09T17:44:50Z"
+    },
+    {
+      "ref": "outcome-08",
+      "kind": "codex_turn_audit",
+      "stable_id": "codex-turn:019fe792-6edc",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-09T17:39:22Z"
+    },
+    {
+      "ref": "outcome-09",
+      "kind": "codex_turn_audit",
+      "stable_id": "codex-turn:019fe79d-7427",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-09T17:44:14Z"
+    },
+    {
+      "ref": "outcome-10",
+      "kind": "codex_turn_audit",
+      "stable_id": "codex-turn:019fe7c5-0252",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-09T18:53:54Z"
+    },
+    {
+      "ref": "outcome-11",
+      "kind": "codex_turn_audit",
+      "stable_id": "codex-turn:019fe7cc-1c78",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-09T18:52:25Z"
+    },
+    {
+      "ref": "outcome-12",
+      "kind": "codex_turn_audit",
+      "stable_id": "codex-turn:019fe81b-9fed",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-09T20:16:23Z"
+    },
+    {
+      "ref": "outcome-13",
+      "kind": "codex_turn_audit",
+      "stable_id": "codex-turn:019fe7fc-4fb4",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-09T20:15:35Z"
+    },
+    {
+      "ref": "outcome-14",
+      "kind": "codex_turn_audit",
+      "stable_id": "codex-turn:019fe7fc-ada4",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-09T19:47:12Z"
+    },
+    {
+      "ref": "outcome-15",
+      "kind": "codex_turn_audit",
+      "stable_id": "codex-turn:019fe857-ff81",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-09T21:19:11Z"
+    },
+    {
+      "ref": "outcome-16",
+      "kind": "codex_turn_audit",
+      "stable_id": "codex-turn:019fe8a2-b424",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-09T22:29:06Z"
+    },
+    {
+      "ref": "outcome-17",
+      "kind": "codex_turn_audit",
+      "stable_id": "codex-turn:019fe8c6-b810",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-09T23:06:13Z"
+    },
+    {
+      "ref": "outcome-18",
+      "kind": "codex_turn_audit",
+      "stable_id": "codex-turn:019fec2f-9135",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-10T15:53:56Z"
+    },
+    {
+      "ref": "outcome-19",
+      "kind": "codex_turn_audit",
+      "stable_id": "codex-turn:019fecd6-dd6e",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-10T19:15:41Z"
+    },
+    {
+      "ref": "outcome-20",
+      "kind": "codex_turn_audit",
+      "stable_id": "codex-turn:019fed2f-85ee",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-10T19:57:01Z"
+    },
+    {
+      "ref": "root-01",
+      "kind": "codex_session_uuidv7",
+      "stable_id": "codex-session:019fe428-09cf-75f0-b02f-d8ebed105a6a",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-09T01:34:17.039Z"
+    },
+    {
+      "ref": "root-02",
+      "kind": "codex_session_uuidv7",
+      "stable_id": "codex-session:019fe7c2-ccff-77b2-b80b-eb4a185b818d",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-09T18:22:11.199Z"
+    },
+    {
+      "ref": "root-03",
+      "kind": "codex_session_uuidv7",
+      "stable_id": "codex-session:019fe7ec-07a1-79b0-8d2c-dedc5ec1d24f",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-09T19:07:13.185Z"
+    },
+    {
+      "ref": "root-04",
+      "kind": "codex_session_uuidv7",
+      "stable_id": "codex-session:019fe855-b3d0-7eb1-8451-42750efd4fcd",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-09T21:02:38.544Z"
+    },
+    {
+      "ref": "event-01-interrupted",
+      "kind": "codex_turn_audit",
+      "stable_id": "codex-turn:019fe457-50aa",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-09T02:28:46Z"
+    },
+    {
+      "ref": "event-06-retried",
+      "kind": "codex_turn_audit",
+      "stable_id": "codex-turn:019fe787-269f",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-09T17:17:19Z"
+    },
+    {
+      "ref": "event-14-reviewed",
+      "kind": "codex_turn_audit",
+      "stable_id": "codex-turn:019fe818-b96d",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-09T20:06:53Z"
+    },
+    {
+      "ref": "event-18-remediated",
+      "kind": "codex_turn_audit",
+      "stable_id": "codex-turn:019fec53-797b",
+      "locator": "historical-import/sources/verified-thread-inventory.v1.json",
+      "digest": "sha256:cce287b30633759b6038ce306fffb15e0de0ed230b7b992b8c3559606d406f77",
+      "occurred_at": "2026-08-10T15:40:47Z"
+    },
+    {
+      "ref": "doc-design-synthesis",
+      "kind": "repository_document",
+      "stable_id": "research/design-synthesis.md",
+      "locator": "research/design-synthesis.md",
+      "digest": "sha256:cd24612bd439c0be21d6a8fb29b765069e6d1c741c8c8b8598c415de3c6b8d1b"
+    },
+    {
+      "ref": "doc-agent-contract",
+      "kind": "repository_document",
+      "stable_id": "docs/agent-contract.md",
+      "locator": "docs/agent-contract.md",
+      "digest": "sha256:a3a55224f5f297f5954ab9d4f5910e808a3f9089cbb3dcac8158356f2fea4823"
+    },
+    {
+      "ref": "doc-slice-1",
+      "kind": "repository_document",
+      "stable_id": "docs/slice-1.md",
+      "locator": "docs/slice-1.md",
+      "digest": "sha256:1f9f3c36a0dce9ad75dca502cb4ef5bc96b03feee35af5aa85a7dc18c2bc7b3f"
+    },
+    {
+      "ref": "doc-slice-2",
+      "kind": "repository_document",
+      "stable_id": "docs/slice-2.md",
+      "locator": "docs/slice-2.md",
+      "digest": "sha256:a66642378e1a8111687f197164887f2a29b83f480865c64a01567fd1d4ba3623"
+    },
+    {
+      "ref": "doc-slice-4",
+      "kind": "repository_document",
+      "stable_id": "docs/slice-4.md",
+      "locator": "docs/slice-4.md",
+      "digest": "sha256:6741ee1a52373338f5d688ac7ddf8b174655982925dd3551ee3a97296f40ae5e"
+    },
+    {
+      "ref": "doc-slice-5",
+      "kind": "repository_document",
+      "stable_id": "docs/slice-5.md",
+      "locator": "docs/slice-5.md",
+      "digest": "sha256:c84968848c30a85a0a420e7be99ba06fab9398d56d901a3216a02256ed6c01d8"
+    },
+    {
+      "ref": "doc-slice-6",
+      "kind": "repository_document",
+      "stable_id": "docs/slice-6.md",
+      "locator": "docs/slice-6.md",
+      "digest": "sha256:3c84bac9c48150d97cd10cdf20b6877e1c240c964c9e44987f5fbd9dabee28cd"
+    },
+    {
+      "ref": "doc-general-home",
+      "kind": "repository_document",
+      "stable_id": "docs/general-home-backend.md",
+      "locator": "docs/general-home-backend.md",
+      "digest": "sha256:6262e7da5df7e150c6dbdcf8259515154eb70380357d8fb9ad0df29f040fb1c2"
+    },
+    {
+      "ref": "doc-design-reference",
+      "kind": "repository_document",
+      "stable_id": "research/design/openai-reference/README.md",
+      "locator": "research/design/openai-reference/README.md",
+      "digest": "sha256:90a5db15df9db55961a890df1075a8928e1f369d19dd5bff3a8bd822c1b0217a"
+    },
+    {
+      "ref": "doc-slice-7",
+      "kind": "repository_document",
+      "stable_id": "docs/slice-7.md",
+      "locator": "docs/slice-7.md",
+      "digest": "sha256:f9d7bea047816c1203156d491b9bb1f4f88798f73831f4dcf4edb47f73a6ce90"
+    },
+    {
+      "ref": "doc-slice-8",
+      "kind": "repository_document",
+      "stable_id": "docs/slice-8.md",
+      "locator": "docs/slice-8.md",
+      "digest": "sha256:4c37eec05f6b75605fed3820ec63a1203d33ce25e05b8f9bd0c2d6a7aa997bb5"
+    },
+    {
+      "ref": "doc-slice-8-5",
+      "kind": "repository_document",
+      "stable_id": "docs/slice-8.5-validation.md",
+      "locator": "docs/slice-8.5-validation.md",
+      "digest": "sha256:36d19cbb852ec5a2c35118ecf0caa2be4cb2f495776337faccaf5c35af063c75"
+    },
+    {
+      "ref": "doc-slice-9",
+      "kind": "repository_document",
+      "stable_id": "docs/slice-9.md",
+      "locator": "docs/slice-9.md",
+      "digest": "sha256:6ac7b715352902aff74e9c0f02b65587042ead9cacf689290a07a84b86bdb072"
+    },
+    {
+      "ref": "doc-slice-10",
+      "kind": "repository_document",
+      "stable_id": "docs/slice-10.md",
+      "locator": "docs/slice-10.md",
+      "digest": "sha256:cce1545345154bdf2e487885d989983fcf7a4b6291ab577952f48058991ad37c"
+    },
+    {
+      "ref": "doc-project-core",
+      "kind": "repository_document",
+      "stable_id": "docs/project-core.md",
+      "locator": "docs/project-core.md",
+      "digest": "sha256:70549e4a475b935aa6a5258b0df48f1efb450b0f9fab332330dd36f6f6691fe2"
+    },
+    {
+      "ref": "doc-dogfood-content",
+      "kind": "repository_document",
+      "stable_id": "docs/dogfood-content.md",
+      "locator": "docs/dogfood-content.md",
+      "digest": "sha256:b7bbcbe64a6d5458d8db091b2256a67a5bc952c8e023a0a3092bdcdc5549dd12"
+    },
+    {
+      "ref": "doc-dogfood-bootstrap",
+      "kind": "repository_document",
+      "stable_id": "docs/dogfood-bootstrap.md",
+      "locator": "docs/dogfood-bootstrap.md",
+      "digest": "sha256:e665ce023d234bd4e4f65c1ebef8a6d2746fb1807d0cdbd570a1b0666beabbf4"
+    }
+  ],
+  "sessions": [
+    {
+      "id": "019fe428-09cf-75f0-b02f-d8ebed105a6a",
+      "kind": "root_alias",
+      "purpose": "Project conversation lineage 01",
+      "source_refs": [
+        "root-01"
+      ]
+    },
+    {
+      "id": "019fe7c2-ccff-77b2-b80b-eb4a185b818d",
+      "kind": "root_alias",
+      "purpose": "Project conversation lineage 02",
+      "source_refs": [
+        "root-02"
+      ]
+    },
+    {
+      "id": "019fe7ec-07a1-79b0-8d2c-dedc5ec1d24f",
+      "kind": "root_alias",
+      "purpose": "Project conversation lineage 03",
+      "source_refs": [
+        "root-03"
+      ]
+    },
+    {
+      "id": "019fe855-b3d0-7eb1-8451-42750efd4fcd",
+      "kind": "root_alias",
+      "purpose": "Project conversation lineage 04",
+      "source_refs": [
+        "root-04"
+      ]
+    },
+    {
+      "id": "019fe44f-9017-7623-9ba6-c4a15251d9cd",
+      "kind": "subagent",
+      "purpose": "Research and adjudicate the product model",
+      "source_refs": [
+        "outcome-01"
+      ]
+    },
+    {
+      "id": "019fe44f-aca5-7082-a69a-becf20bf9618",
+      "kind": "subagent",
+      "purpose": "Research and adjudicate the product model",
+      "source_refs": [
+        "outcome-01"
+      ]
+    },
+    {
+      "id": "019fe45a-0920-78a0-884f-4359e640c7ed",
+      "kind": "subagent",
+      "purpose": "Research and adjudicate the product model",
+      "source_refs": [
+        "outcome-01"
+      ]
+    },
+    {
+      "id": "019fe462-c8be-7272-b0c2-ade7ad347b39",
+      "kind": "subagent",
+      "purpose": "Research and adjudicate the product model",
+      "source_refs": [
+        "outcome-01"
+      ]
+    },
+    {
+      "id": "019fe466-eef9-7ce2-964d-ceef0e17fb3a",
+      "kind": "subagent",
+      "purpose": "Research and adjudicate the product model",
+      "source_refs": [
+        "outcome-01"
+      ]
+    },
+    {
+      "id": "019fe482-71fa-7ec1-aabb-3a6e2e6deef8",
+      "kind": "subagent",
+      "purpose": "Build the low-context agent contract and stub CLI",
+      "source_refs": [
+        "outcome-02"
+      ]
+    },
+    {
+      "id": "019fe482-97ef-7112-a06c-25228d8ba53f",
+      "kind": "subagent",
+      "purpose": "Build the low-context agent contract and stub CLI",
+      "source_refs": [
+        "outcome-02"
+      ]
+    },
+    {
+      "id": "019fe4a4-ac2a-7430-b669-443734e19848",
+      "kind": "subagent",
+      "purpose": "Blindly evaluate the Slice 0 contract",
+      "source_refs": [
+        "outcome-03"
+      ]
+    },
+    {
+      "id": "019fe4a4-c505-7f41-b636-fc0f15234d05",
+      "kind": "subagent",
+      "purpose": "Blindly evaluate the Slice 0 contract",
+      "source_refs": [
+        "outcome-03"
+      ]
+    },
+    {
+      "id": "019fe4a4-dd2a-7e33-8158-37427cbbfbd6",
+      "kind": "subagent",
+      "purpose": "Blindly evaluate the Slice 0 contract",
+      "source_refs": [
+        "outcome-03"
+      ]
+    },
+    {
+      "id": "019fe4a8-ade7-7030-a7f4-dfc3a63615cf",
+      "kind": "subagent",
+      "purpose": "Blindly evaluate the Slice 0 contract",
+      "source_refs": [
+        "outcome-03"
+      ]
+    },
+    {
+      "id": "019fe4a8-cddd-7c30-b3ec-f60e6b2e475d",
+      "kind": "subagent",
+      "purpose": "Blindly evaluate the Slice 0 contract",
+      "source_refs": [
+        "outcome-03"
+      ]
+    },
+    {
+      "id": "019fe756-cc3c-7243-b908-383c40d4253a",
+      "kind": "subagent",
+      "purpose": "Implement Slice 1 persistence",
+      "source_refs": [
+        "outcome-04"
+      ]
+    },
+    {
+      "id": "019fe757-18b9-76c3-8ed1-07a583e8b9a6",
+      "kind": "subagent",
+      "purpose": "Implement Slice 2 LAN transport",
+      "source_refs": [
+        "outcome-05"
+      ]
+    },
+    {
+      "id": "019fe76c-b8ef-7d83-b4ed-c5a356106031",
+      "kind": "subagent",
+      "purpose": "Review and harden the early backend",
+      "source_refs": [
+        "outcome-06"
+      ]
+    },
+    {
+      "id": "019fe792-3793-7f42-b2ce-e65e76f7e21c",
+      "kind": "subagent",
+      "purpose": "Implement forum kinds and bounded search",
+      "source_refs": [
+        "outcome-07"
+      ]
+    },
+    {
+      "id": "019fe792-6da5-70f1-974b-e657bcb65a29",
+      "kind": "subagent",
+      "purpose": "Implement conditional read-only GitHub synchronization",
+      "source_refs": [
+        "outcome-08"
+      ]
+    },
+    {
+      "id": "019fe792-a250-71d3-ba9f-39c098894e3b",
+      "kind": "subagent",
+      "purpose": "Implement bounded deterministic background work",
+      "source_refs": [
+        "outcome-09"
+      ]
+    },
+    {
+      "id": "019fe7c4-f617-72b1-9ba9-c2a7554b58a9",
+      "kind": "subagent",
+      "purpose": "Implement General and Home backend projections",
+      "source_refs": [
+        "outcome-10"
+      ]
+    },
+    {
+      "id": "019fe7cc-1a84-7ea2-bc0a-a25863123a0d",
+      "kind": "subagent",
+      "purpose": "Build a rights-aware design reference library",
+      "source_refs": [
+        "outcome-11"
+      ]
+    },
+    {
+      "id": "019fe7fc-1c59-7463-b3e9-c3edc06f0d6a",
+      "kind": "subagent",
+      "purpose": "Implement Slice 7 browse backend",
+      "source_refs": [
+        "outcome-12"
+      ]
+    },
+    {
+      "id": "019fe7fc-4d8e-7a01-a71a-187f65d4194f",
+      "kind": "subagent",
+      "purpose": "Implement Slice 7 and 8 frontend surfaces",
+      "source_refs": [
+        "outcome-13"
+      ]
+    },
+    {
+      "id": "019fe7fc-ab91-7af3-b00f-ace20389fe35",
+      "kind": "subagent",
+      "purpose": "Implement and review the Slice 8 project overview",
+      "source_refs": [
+        "outcome-14"
+      ]
+    },
+    {
+      "id": "019fe818-b777-7062-a6cd-3d32a5d72297",
+      "kind": "subagent",
+      "purpose": "Implement and review the Slice 8 project overview",
+      "source_refs": [
+        "outcome-14"
+      ]
+    },
+    {
+      "id": "019fe857-b8e1-73d0-87e3-0cc9f23064e8",
+      "kind": "subagent",
+      "purpose": "Integrate Slice 8.5 with the LAN runtime",
+      "source_refs": [
+        "outcome-15"
+      ]
+    },
+    {
+      "id": "019fe857-da2b-78a3-9aed-8e4155ba72b2",
+      "kind": "subagent",
+      "purpose": "Integrate Slice 8.5 with the LAN runtime",
+      "source_refs": [
+        "outcome-15"
+      ]
+    },
+    {
+      "id": "019fe857-fd90-7b62-a9cd-9cd3d2b32568",
+      "kind": "subagent",
+      "purpose": "Integrate Slice 8.5 with the LAN runtime",
+      "source_refs": [
+        "outcome-15"
+      ]
+    },
+    {
+      "id": "019fe881-6a56-77d0-9d46-547983e72032",
+      "kind": "subagent",
+      "purpose": "Make Posts the human home in Slice 9",
+      "source_refs": [
+        "outcome-16"
+      ]
+    },
+    {
+      "id": "019fe881-9961-7c91-916a-a300b2f1112c",
+      "kind": "subagent",
+      "purpose": "Make Posts the human home in Slice 9",
+      "source_refs": [
+        "outcome-16"
+      ]
+    },
+    {
+      "id": "019fe8c2-0eed-7253-8642-502b28b182a5",
+      "kind": "subagent",
+      "purpose": "Produce and evaluate feed design directions",
+      "source_refs": [
+        "outcome-17"
+      ]
+    },
+    {
+      "id": "019fe8c2-3179-7d80-adf7-5a3c718f0410",
+      "kind": "subagent",
+      "purpose": "Produce and evaluate feed design directions",
+      "source_refs": [
+        "outcome-17"
+      ]
+    },
+    {
+      "id": "019fe8c2-55a3-7873-9281-f38b3af0e39b",
+      "kind": "subagent",
+      "purpose": "Produce and evaluate feed design directions",
+      "source_refs": [
+        "outcome-17"
+      ]
+    },
+    {
+      "id": "019fec2f-4665-77d0-a2aa-f0b2d5eab46b",
+      "kind": "subagent",
+      "purpose": "Implement safe human writes in Slice 10",
+      "source_refs": [
+        "outcome-18"
+      ]
+    },
+    {
+      "id": "019fec2f-903b-7dd3-8821-83dbe096a726",
+      "kind": "subagent",
+      "purpose": "Implement safe human writes in Slice 10",
+      "source_refs": [
+        "outcome-18"
+      ]
+    },
+    {
+      "id": "019feccf-6255-7353-b434-ab6127b8e8bd",
+      "kind": "subagent",
+      "purpose": "Implement Project Core backend and frontend",
+      "source_refs": [
+        "outcome-19"
+      ]
+    },
+    {
+      "id": "019fecd7-2267-7ff1-8144-4d2611545c1a",
+      "kind": "subagent",
+      "purpose": "Implement Project Core backend and frontend",
+      "source_refs": [
+        "outcome-19"
+      ]
+    },
+    {
+      "id": "019fed2f-82a3-73e1-9c08-2ca3ed219d4b",
+      "kind": "subagent",
+      "purpose": "Build the high-quality Codex Commons dogfood corpus",
+      "source_refs": [
+        "outcome-20"
+      ]
+    }
+  ],
+  "project_thread_aliases": [
+    {
+      "alias": "root-01",
+      "session_id": "019fe428-09cf-75f0-b02f-d8ebed105a6a",
+      "source_ref": "root-01"
+    },
+    {
+      "alias": "root-02",
+      "session_id": "019fe7c2-ccff-77b2-b80b-eb4a185b818d",
+      "source_ref": "root-02"
+    },
+    {
+      "alias": "root-03",
+      "session_id": "019fe7ec-07a1-79b0-8d2c-dedc5ec1d24f",
+      "source_ref": "root-03"
+    },
+    {
+      "alias": "root-04",
+      "session_id": "019fe855-b3d0-7eb1-8451-42750efd4fcd",
+      "source_ref": "root-04"
+    }
+  ],
+  "tasks": [
+    {
+      "key": "history-product-model",
+      "title": "Research and adjudicate the Codex Commons product model",
+      "description": "Reconstructed the proposed system from first principles, reviewed external research and prior art, and adjudicated the smallest viable model.",
+      "acceptance": "A documented product model defines People, Presence, Purpose, Posts, Tasks, Wiki, activation rules, authority boundaries, and explicit non-goals.",
+      "state": "done",
+      "completion_source_ref": "outcome-01",
+      "source_refs": [
+        "outcome-01",
+        "doc-design-synthesis"
+      ],
+      "attributions": [
+        {
+          "session_id": "019fe44f-9017-7623-9ba6-c4a15251d9cd",
+          "role": "evaluator",
+          "confidence": "supported",
+          "source_ref": "outcome-01"
+        },
+        {
+          "session_id": "019fe44f-aca5-7082-a69a-becf20bf9618",
+          "role": "evaluator",
+          "confidence": "uncertain",
+          "source_ref": "outcome-01"
+        },
+        {
+          "session_id": "019fe45a-0920-78a0-884f-4359e640c7ed",
+          "role": "evaluator",
+          "confidence": "supported",
+          "source_ref": "outcome-01"
+        },
+        {
+          "session_id": "019fe462-c8be-7272-b0c2-ade7ad347b39",
+          "role": "evaluator",
+          "confidence": "supported",
+          "source_ref": "outcome-01"
+        },
+        {
+          "session_id": "019fe466-eef9-7ce2-964d-ceef0e17fb3a",
+          "role": "reviewer",
+          "confidence": "verified",
+          "source_ref": "outcome-01"
+        }
+      ],
+      "events": [
+        {
+          "key": "literature-attempt-interrupted",
+          "kind": "failed",
+          "summary": "One literature-review lane was interrupted without a final and was retained only as evidence within the shared research outcome.",
+          "session_id": "019fe44f-aca5-7082-a69a-becf20bf9618",
+          "confidence": "verified",
+          "source_ref": "event-01-interrupted"
+        }
+      ]
+    },
+    {
+      "key": "history-agent-contract",
+      "title": "Build the low-context agent contract and stub CLI",
+      "description": "Defined and exercised a fixed-response agent contract so a fresh Codex task can orient and act with very little context.",
+      "acceptance": "The contract and stub CLI are bounded, deterministic, benchmarked, and avoid mandatory polling or routine posting.",
+      "state": "done",
+      "completion_source_ref": "outcome-02",
+      "source_refs": [
+        "outcome-02",
+        "doc-agent-contract"
+      ],
+      "attributions": [
+        {
+          "session_id": "019fe482-71fa-7ec1-aabb-3a6e2e6deef8",
+          "role": "implementer",
+          "confidence": "supported",
+          "source_ref": "outcome-02"
+        },
+        {
+          "session_id": "019fe482-97ef-7112-a06c-25228d8ba53f",
+          "role": "implementer",
+          "confidence": "supported",
+          "source_ref": "outcome-02"
+        }
+      ],
+      "events": [
+        {
+          "key": "contract-work-retried",
+          "kind": "retried",
+          "summary": "Interrupted contract and CLI attempts were resumed and completed.",
+          "confidence": "verified",
+          "source_ref": "outcome-02"
+        }
+      ]
+    },
+    {
+      "key": "history-slice-0-evaluation",
+      "title": "Evaluate Slice 0 blindly",
+      "description": "Ran multiple independent evaluations against the low-context contract to test whether agents could use it without inherited project knowledge.",
+      "acceptance": "Independent evaluators can orient, search, explicitly open, and select a useful action within the stated token and latency budgets.",
+      "state": "done",
+      "completion_source_ref": "outcome-03",
+      "source_refs": [
+        "outcome-03",
+        "doc-agent-contract"
+      ],
+      "attributions": [
+        {
+          "session_id": "019fe4a4-ac2a-7430-b669-443734e19848",
+          "role": "evaluator",
+          "confidence": "supported",
+          "source_ref": "outcome-03"
+        },
+        {
+          "session_id": "019fe4a4-c505-7f41-b636-fc0f15234d05",
+          "role": "evaluator",
+          "confidence": "supported",
+          "source_ref": "outcome-03"
+        },
+        {
+          "session_id": "019fe4a4-dd2a-7e33-8158-37427cbbfbd6",
+          "role": "evaluator",
+          "confidence": "supported",
+          "source_ref": "outcome-03"
+        },
+        {
+          "session_id": "019fe4a8-ade7-7030-a7f4-dfc3a63615cf",
+          "role": "evaluator",
+          "confidence": "supported",
+          "source_ref": "outcome-03"
+        },
+        {
+          "session_id": "019fe4a8-cddd-7c30-b3ec-f60e6b2e475d",
+          "role": "evaluator",
+          "confidence": "supported",
+          "source_ref": "outcome-03"
+        }
+      ],
+      "events": [
+        {
+          "key": "blind-evaluation-completed",
+          "kind": "evaluated",
+          "summary": "Five independent evaluator sessions completed the blind Slice 0 assessment.",
+          "confidence": "verified",
+          "source_ref": "outcome-03"
+        }
+      ]
+    },
+    {
+      "key": "history-slice-1-persistence",
+      "title": "Implement Slice 1 local persistence",
+      "description": "Implemented the durable single-host data layer, migrations, idempotent writes, revisions, and bounded search foundations.",
+      "acceptance": "Persistence invariants and migrations pass tests; SQLite remains a measured default with a documented escape hatch.",
+      "state": "done",
+      "completion_source_ref": "outcome-04",
+      "source_refs": [
+        "outcome-04",
+        "doc-slice-1"
+      ],
+      "attributions": [
+        {
+          "session_id": "019fe756-cc3c-7243-b908-383c40d4253a",
+          "role": "implementer",
+          "confidence": "verified",
+          "source_ref": "outcome-04"
+        }
+      ]
+    },
+    {
+      "key": "history-slice-2-transport",
+      "title": "Implement Slice 2 LAN transport",
+      "description": "Implemented the LAN HTTP contract, server-attested agent identity, truthful presence semantics, and bounded transport responses.",
+      "acceptance": "Authenticated agents can use the stable LAN contract without self-asserting identity; presence does not overclaim reachability.",
+      "state": "done",
+      "completion_source_ref": "outcome-05",
+      "source_refs": [
+        "outcome-05",
+        "doc-slice-2"
+      ],
+      "attributions": [
+        {
+          "session_id": "019fe757-18b9-76c3-8ed1-07a583e8b9a6",
+          "role": "implementer",
+          "confidence": "verified",
+          "source_ref": "outcome-05"
+        }
+      ]
+    },
+    {
+      "key": "history-senior-hardening",
+      "title": "Review and harden the early backend",
+      "description": "Performed a senior engineering review, simplified code where possible, fixed identified issues, and verified the early persistence and transport layers.",
+      "acceptance": "Review findings are remediated without reducing functionality and the relevant Go checks pass.",
+      "state": "done",
+      "completion_source_ref": "outcome-06",
+      "source_refs": [
+        "outcome-06",
+        "doc-slice-1",
+        "doc-slice-2"
+      ],
+      "attributions": [
+        {
+          "session_id": "019fe76c-b8ef-7d83-b4ed-c5a356106031",
+          "role": "reviewer",
+          "confidence": "verified",
+          "source_ref": "outcome-06"
+        }
+      ],
+      "events": [
+        {
+          "key": "hardening-retried",
+          "kind": "retried",
+          "summary": "The senior hardening review resumed after interrupted attempts and proceeded to final verification.",
+          "session_id": "019fe76c-b8ef-7d83-b4ed-c5a356106031",
+          "confidence": "verified",
+          "source_ref": "event-06-retried"
+        }
+      ]
+    },
+    {
+      "key": "history-slice-4-forum-search",
+      "title": "Implement forum kinds and bounded search",
+      "description": "Added the five durable post kinds and FTS5 discovery with metadata-first results and explicit full opens.",
+      "acceptance": "Search returns bounded IDs, titles, kinds, timestamps, and snippets; full bodies require an explicit open.",
+      "state": "done",
+      "completion_source_ref": "outcome-07",
+      "source_refs": [
+        "outcome-07",
+        "doc-slice-4"
+      ],
+      "attributions": [
+        {
+          "session_id": "019fe792-3793-7f42-b2ce-e65e76f7e21c",
+          "role": "implementer",
+          "confidence": "verified",
+          "source_ref": "outcome-07"
+        }
+      ],
+      "events": [
+        {
+          "key": "search-correction",
+          "kind": "remediated",
+          "summary": "A follow-up correction was completed after the initial forum and search implementation.",
+          "session_id": "019fe792-3793-7f42-b2ce-e65e76f7e21c",
+          "confidence": "verified",
+          "source_ref": "outcome-07"
+        }
+      ]
+    },
+    {
+      "key": "history-slice-5-github",
+      "title": "Implement conditional read-only GitHub synchronization",
+      "description": "Implemented bounded conditional reads for repository metadata, open issues, pull requests, checks, and referenced commits.",
+      "acceptance": "Unchanged checks use validators and create minimal work; no outbound GitHub writes are possible.",
+      "state": "done",
+      "completion_source_ref": "outcome-08",
+      "source_refs": [
+        "outcome-08",
+        "doc-slice-5"
+      ],
+      "attributions": [
+        {
+          "session_id": "019fe792-6da5-70f1-974b-e657bcb65a29",
+          "role": "implementer",
+          "confidence": "verified",
+          "source_ref": "outcome-08"
+        }
+      ]
+    },
+    {
+      "key": "history-slice-6-background",
+      "title": "Implement bounded background work",
+      "description": "Implemented a deterministic watcher and a review-only interpretive proposal job with strict envelopes and kill switches.",
+      "acceptance": "No-change runs create no model work, and jobs cannot recursively create jobs or wake agents.",
+      "state": "done",
+      "completion_source_ref": "outcome-09",
+      "source_refs": [
+        "outcome-09",
+        "doc-slice-6"
+      ],
+      "attributions": [
+        {
+          "session_id": "019fe792-a250-71d3-ba9f-39c098894e3b",
+          "role": "implementer",
+          "confidence": "verified",
+          "source_ref": "outcome-09"
+        }
+      ],
+      "events": [
+        {
+          "key": "background-followup",
+          "kind": "remediated",
+          "summary": "A bounded follow-up completed after the initial background-work implementation.",
+          "session_id": "019fe792-a250-71d3-ba9f-39c098894e3b",
+          "confidence": "verified",
+          "source_ref": "outcome-09"
+        }
+      ]
+    },
+    {
+      "key": "history-general-home",
+      "title": "Implement General and Home backend projections",
+      "description": "Implemented action-changing attention, activity, and presence projections for the original operational overview.",
+      "acceptance": "The projection is bounded, truthful about live versus durable state, and excludes routine chatter.",
+      "state": "done",
+      "completion_source_ref": "outcome-10",
+      "source_refs": [
+        "outcome-10",
+        "doc-general-home"
+      ],
+      "attributions": [
+        {
+          "session_id": "019fe7c4-f617-72b1-9ba9-c2a7554b58a9",
+          "role": "implementer",
+          "confidence": "verified",
+          "source_ref": "outcome-10"
+        }
+      ]
+    },
+    {
+      "key": "history-design-reference",
+      "title": "Build a rights-aware OpenAI design reference library",
+      "description": "Collected and documented reusable official design-language references, symbols, iconography, and implementation guidance.",
+      "acceptance": "The library records provenance and reuse boundaries and avoids copying unlicensed product assets.",
+      "state": "done",
+      "completion_source_ref": "outcome-11",
+      "source_refs": [
+        "outcome-11",
+        "doc-design-reference"
+      ],
+      "attributions": [
+        {
+          "session_id": "019fe7cc-1a84-7ea2-bc0a-a25863123a0d",
+          "role": "evaluator",
+          "confidence": "verified",
+          "source_ref": "outcome-11"
+        }
+      ]
+    },
+    {
+      "key": "history-slice-7-backend",
+      "title": "Implement Slice 7 browse backend",
+      "description": "Implemented the read-side browse contracts and integrated follow-up fixes for the first visually testable frontend surfaces.",
+      "acceptance": "Bounded browse routes return stable destinations and support the accepted frontend without demo-only assumptions.",
+      "state": "done",
+      "completion_source_ref": "outcome-12",
+      "source_refs": [
+        "outcome-12",
+        "doc-slice-7"
+      ],
+      "attributions": [
+        {
+          "session_id": "019fe7fc-1c59-7463-b3e9-c3edc06f0d6a",
+          "role": "implementer",
+          "confidence": "verified",
+          "source_ref": "outcome-12"
+        }
+      ],
+      "events": [
+        {
+          "key": "browse-integrated-fixes",
+          "kind": "remediated",
+          "summary": "Integrated browse-backend fixes completed after the initial implementation.",
+          "session_id": "019fe7fc-1c59-7463-b3e9-c3edc06f0d6a",
+          "confidence": "verified",
+          "source_ref": "outcome-12"
+        }
+      ]
+    },
+    {
+      "key": "history-slice-7-8-frontend",
+      "title": "Implement Slice 7 and 8 frontend surfaces",
+      "description": "Implemented the first cohesive Posts, Projects, People, General, and project-area frontend experience.",
+      "acceptance": "The frontend renders the backend contracts responsively and supports direct visual evaluation of project navigation.",
+      "state": "done",
+      "completion_source_ref": "outcome-13",
+      "source_refs": [
+        "outcome-13",
+        "doc-slice-7",
+        "doc-slice-8"
+      ],
+      "attributions": [
+        {
+          "session_id": "019fe7fc-4d8e-7a01-a71a-187f65d4194f",
+          "role": "implementer",
+          "confidence": "verified",
+          "source_ref": "outcome-13"
+        }
+      ]
+    },
+    {
+      "key": "history-slice-8-overview",
+      "title": "Implement and review the Slice 8 project overview",
+      "description": "Implemented the project overview and then reviewed its visual and navigation behavior as a separate event.",
+      "acceptance": "The overview exposes bounded project state and task entry points with reviewed navigation and severity presentation.",
+      "state": "done",
+      "completion_source_ref": "outcome-14",
+      "source_refs": [
+        "outcome-14",
+        "doc-slice-8"
+      ],
+      "attributions": [
+        {
+          "session_id": "019fe7fc-ab91-7af3-b00f-ace20389fe35",
+          "role": "implementer",
+          "confidence": "verified",
+          "source_ref": "outcome-14"
+        },
+        {
+          "session_id": "019fe818-b777-7062-a6cd-3d32a5d72297",
+          "role": "reviewer",
+          "confidence": "verified",
+          "source_ref": "outcome-14"
+        }
+      ],
+      "events": [
+        {
+          "key": "overview-review",
+          "kind": "reviewed",
+          "summary": "A separate reviewer completed the project-overview review and fix pass.",
+          "session_id": "019fe818-b777-7062-a6cd-3d32a5d72297",
+          "confidence": "verified",
+          "source_ref": "event-14-reviewed"
+        }
+      ]
+    },
+    {
+      "key": "history-slice-8-5-integration",
+      "title": "Integrate Slice 8.5 with the LAN runtime",
+      "description": "Connected the Slice 7 and 8 frontend data flows to the real Go server and established a clean end-to-end seed and persistence proof.",
+      "acceptance": "The LAN experience uses real server data across restart, with bounded fallback behavior and no direct browser database access.",
+      "state": "done",
+      "completion_source_ref": "outcome-15",
+      "source_refs": [
+        "outcome-15",
+        "doc-slice-8-5"
+      ],
+      "attributions": [
+        {
+          "session_id": "019fe857-b8e1-73d0-87e3-0cc9f23064e8",
+          "role": "implementer",
+          "confidence": "supported",
+          "source_ref": "outcome-15"
+        },
+        {
+          "session_id": "019fe857-da2b-78a3-9aed-8e4155ba72b2",
+          "role": "implementer",
+          "confidence": "supported",
+          "source_ref": "outcome-15"
+        },
+        {
+          "session_id": "019fe857-fd90-7b62-a9cd-9cd3d2b32568",
+          "role": "evaluator",
+          "confidence": "verified",
+          "source_ref": "outcome-15"
+        }
+      ]
+    },
+    {
+      "key": "history-slice-9-posts-home",
+      "title": "Make Posts the human home in Slice 9",
+      "description": "Reframed Posts as the primary human landing surface while keeping people and presence available to agents.",
+      "acceptance": "The feed and project posts use real contracts and preserve the distinction between durable collaboration and live Codex messaging.",
+      "state": "done",
+      "completion_source_ref": "outcome-16",
+      "source_refs": [
+        "outcome-16",
+        "doc-slice-9"
+      ],
+      "attributions": [
+        {
+          "session_id": "019fe881-6a56-77d0-9d46-547983e72032",
+          "role": "implementer",
+          "confidence": "verified",
+          "source_ref": "outcome-16"
+        },
+        {
+          "session_id": "019fe881-9961-7c91-916a-a300b2f1112c",
+          "role": "implementer",
+          "confidence": "verified",
+          "source_ref": "outcome-16"
+        }
+      ],
+      "events": [
+        {
+          "key": "posts-boundary-correction",
+          "kind": "remediated",
+          "summary": "The frontend boundary was corrected after the initial Posts implementation.",
+          "session_id": "019fe881-9961-7c91-916a-a300b2f1112c",
+          "confidence": "verified",
+          "source_ref": "outcome-16"
+        }
+      ]
+    },
+    {
+      "key": "history-feed-directions",
+      "title": "Produce and evaluate feed design directions",
+      "description": "Produced three distinct OpenAI-aligned engineering feed directions and completed the handoff for visual selection.",
+      "acceptance": "Each direction is materially distinct, preserves the product model, and can be compared without backend commitment.",
+      "state": "done",
+      "completion_source_ref": "outcome-17",
+      "source_refs": [
+        "outcome-17",
+        "doc-design-reference"
+      ],
+      "attributions": [
+        {
+          "session_id": "019fe8c2-0eed-7253-8642-502b28b182a5",
+          "role": "evaluator",
+          "confidence": "supported",
+          "source_ref": "outcome-17"
+        },
+        {
+          "session_id": "019fe8c2-3179-7d80-adf7-5a3c718f0410",
+          "role": "evaluator",
+          "confidence": "supported",
+          "source_ref": "outcome-17"
+        },
+        {
+          "session_id": "019fe8c2-55a3-7873-9281-f38b3af0e39b",
+          "role": "evaluator",
+          "confidence": "supported",
+          "source_ref": "outcome-17"
+        }
+      ],
+      "events": [
+        {
+          "key": "directions-evaluated",
+          "kind": "evaluated",
+          "summary": "Three independent design directions reached completed handoffs for visual comparison.",
+          "confidence": "verified",
+          "source_ref": "outcome-17"
+        }
+      ]
+    },
+    {
+      "key": "history-slice-10-human-writes",
+      "title": "Implement safe human writes in Slice 10",
+      "description": "Implemented local human authentication and append-only browser writes, including a migration correction and matching frontend flows.",
+      "acceptance": "Same-origin sessions and CSRF protect writes; authentication is server-attested; destructive moderation remains deferred.",
+      "state": "done",
+      "completion_source_ref": "outcome-18",
+      "source_refs": [
+        "outcome-18",
+        "doc-slice-10"
+      ],
+      "attributions": [
+        {
+          "session_id": "019fec2f-4665-77d0-a2aa-f0b2d5eab46b",
+          "role": "implementer",
+          "confidence": "verified",
+          "source_ref": "outcome-18"
+        },
+        {
+          "session_id": "019fec2f-903b-7dd3-8821-83dbe096a726",
+          "role": "implementer",
+          "confidence": "verified",
+          "source_ref": "outcome-18"
+        }
+      ],
+      "events": [
+        {
+          "key": "human-write-migration-fix",
+          "kind": "remediated",
+          "summary": "A migration issue found after the initial backend completion was corrected before the combined outcome closed.",
+          "session_id": "019fec2f-4665-77d0-a2aa-f0b2d5eab46b",
+          "confidence": "verified",
+          "source_ref": "event-18-remediated"
+        }
+      ]
+    },
+    {
+      "key": "history-project-core",
+      "title": "Implement Project Core",
+      "description": "Implemented canonical Projects, Milestones, Tasks, append-only task events, Wiki revisions, and their frontend surfaces.",
+      "acceptance": "Project Core persists through the LAN server, enforces revisions and idempotency, and passes backend and frontend tests.",
+      "state": "done",
+      "completion_source_ref": "outcome-19",
+      "source_refs": [
+        "outcome-19",
+        "doc-project-core"
+      ],
+      "attributions": [
+        {
+          "session_id": "019feccf-6255-7353-b434-ab6127b8e8bd",
+          "role": "implementer",
+          "confidence": "verified",
+          "source_ref": "outcome-19"
+        },
+        {
+          "session_id": "019fecd7-2267-7ff1-8144-4d2611545c1a",
+          "role": "implementer",
+          "confidence": "verified",
+          "source_ref": "outcome-19"
+        }
+      ],
+      "events": [
+        {
+          "key": "project-core-resumed",
+          "kind": "retried",
+          "summary": "The Project Core backend resumed after an interrupted attempt and completed alongside the frontend.",
+          "session_id": "019feccf-6255-7353-b434-ab6127b8e8bd",
+          "confidence": "verified",
+          "source_ref": "outcome-19"
+        }
+      ]
+    },
+    {
+      "key": "history-dogfood-corpus",
+      "title": "Build the Codex Commons dogfood corpus",
+      "description": "Replaced generic demo volume with a small, source-backed Codex Commons project corpus for real product evaluation.",
+      "acceptance": "The corpus contains only high-value current records, is deterministic and idempotent, and preserves the three authoritative open dogfood tasks.",
+      "state": "done",
+      "completion_source_ref": "outcome-20",
+      "source_refs": [
+        "outcome-20",
+        "doc-dogfood-content",
+        "doc-dogfood-bootstrap"
+      ],
+      "attributions": [
+        {
+          "session_id": "019fed2f-82a3-73e1-9c08-2ca3ed219d4b",
+          "role": "implementer",
+          "confidence": "verified",
+          "source_ref": "outcome-20"
+        }
+      ],
+      "events": [
+        {
+          "key": "dogfood-resumed",
+          "kind": "retried",
+          "summary": "The dogfood corpus work completed after an earlier interrupted attempt.",
+          "session_id": "019fed2f-82a3-73e1-9c08-2ca3ed219d4b",
+          "confidence": "supported",
+          "source_ref": "outcome-20"
+        }
+      ]
+    }
+  ]
+}

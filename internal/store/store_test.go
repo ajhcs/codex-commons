@@ -83,7 +83,7 @@ func TestBundledSQLiteCapabilitiesAndMigrations(t *testing.T) {
 	}
 	var n int
 	must(t, s.DB().QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations").Scan(&n))
-	if n != 2 {
+	if n != 7 {
 		t.Fatalf("migrations=%d", n)
 	}
 	must(t, s.Close())
@@ -91,7 +91,7 @@ func TestBundledSQLiteCapabilitiesAndMigrations(t *testing.T) {
 	must(t, err)
 	defer reopened.Close()
 	must(t, reopened.DB().QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations").Scan(&n))
-	if n != 2 {
+	if n != 7 {
 		t.Fatalf("reopen migrations=%d", n)
 	}
 	_, err = reopened.DB().ExecContext(ctx, "CREATE VIRTUAL TABLE temp.probe_fts USING fts5(body)")
@@ -166,7 +166,7 @@ func TestAppendOnlyHistoryAndWrites(t *testing.T) {
 	if again.ID != post.ID || again.Revision != post.Revision {
 		t.Fatalf("idempotent post=%+v", again)
 	}
-	comment, err := s.Comment(ctx, domain.CommentRequest{PostID: post.ID, Body: "Evidence retained.", SessionID: "S-2", RequestID: "comment-1"})
+	comment, err := s.Comment(ctx, domain.CommentRequest{PostID: post.ID, Body: "Evidence retained.", Intent: "add_evidence", SessionID: "S-2", RequestID: "comment-1"})
 	must(t, err)
 	if comment.Revision != 2 {
 		t.Fatalf("comment=%+v", comment)
@@ -273,7 +273,7 @@ func TestActorScopedSemanticIdempotency(t *testing.T) {
 
 	post, err := s.Post(ctx, domain.PostRequest{TopicID: "commons-lab", Kind: "finding", Title: "Replay", Body: "body", Basis: "basis", SessionID: "S-1", RequestID: "post-replay"})
 	must(t, err)
-	commentReq := domain.CommentRequest{PostID: post.ID, Body: "same", ActorID: "agent-a", SessionID: "S-1", RequestID: "comment-shared"}
+	commentReq := domain.CommentRequest{PostID: post.ID, Body: "same", Intent: "clarify", ActorID: "agent-a", SessionID: "S-1", RequestID: "comment-shared"}
 	firstComment, err := s.Comment(ctx, commentReq)
 	must(t, err)
 	replayedComment, err := s.Comment(ctx, commentReq)
@@ -281,11 +281,16 @@ func TestActorScopedSemanticIdempotency(t *testing.T) {
 	if replayedComment != firstComment {
 		t.Fatalf("comment replay=%+v first=%+v", replayedComment, firstComment)
 	}
+	changedIntent := commentReq
+	changedIntent.Intent = "answer"
+	if _, err := s.Comment(ctx, changedIntent); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("changed intent err=%v", err)
+	}
 	commentReq.Body = "changed"
 	if _, err := s.Comment(ctx, commentReq); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("changed comment err=%v", err)
 	}
-	otherComment, err := s.Comment(ctx, domain.CommentRequest{PostID: post.ID, Body: "changed", ActorID: "agent-b", SessionID: "S-2", RequestID: "comment-shared"})
+	otherComment, err := s.Comment(ctx, domain.CommentRequest{PostID: post.ID, Body: "changed", Intent: "challenge", ActorID: "agent-b", SessionID: "S-2", RequestID: "comment-shared"})
 	must(t, err)
 	if otherComment.ID == firstComment.ID {
 		t.Fatalf("actor-scoped comments collided: %+v", otherComment)

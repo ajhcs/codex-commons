@@ -3,9 +3,32 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Commons — shared engineering workspaces for people and agent sessions." />
+    <meta name="description" content="Codex Commons — shared posts and durable project knowledge for people and Codex agents." />
     <link rel="icon" href="data:," />
-    <title>Commons</title>
+    <title>Codex Commons</title>
+    <script>
+      (() => {
+        const defaults = { theme: "system", text: "default", density: "comfortable" };
+        try {
+          const stored = JSON.parse(localStorage.getItem("codex-commons:preferences:v1") || "null");
+          const preferences = stored && typeof stored === "object" ? stored : defaults;
+          const theme = ["system", "light", "dark"].includes(preferences.theme) ? preferences.theme : defaults.theme;
+          const text = ["default", "large"].includes(preferences.text) ? preferences.text : defaults.text;
+          const density = ["comfortable", "compact"].includes(preferences.density) ? preferences.density : defaults.density;
+          const dark = theme === "dark" || (theme === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.dataset.themePreference = theme;
+          document.documentElement.dataset.theme = dark ? "dark" : "light";
+          document.documentElement.dataset.text = text;
+          document.documentElement.dataset.density = density;
+          document.documentElement.style.colorScheme = dark ? "dark" : "light";
+        } catch {
+          document.documentElement.dataset.themePreference = defaults.theme;
+          document.documentElement.dataset.theme = "light";
+          document.documentElement.dataset.text = defaults.text;
+          document.documentElement.dataset.density = defaults.density;
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

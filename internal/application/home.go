@@ -22,6 +22,7 @@ type HomeRepository interface {
 }
 
 type PresenceRegistry interface {
+	Get(session string) (presence.Snapshot, bool)
 	List(project string) []presence.Snapshot
 }
 

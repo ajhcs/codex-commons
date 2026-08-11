@@ -1,24 +1,60 @@
+import { useState } from "react";
+import { commonsAdapter } from "../data/adapter.js";
+import { useAuthSession } from "../hooks/useAuthSession.js";
+import { createIdempotencyKey, LoginDialog, SessionControl } from "./AuthControls.jsx";
+import { SettingsDialog } from "./SettingsDialog.jsx";
+
 import BookOpen from "../icons/BookOpen.tsx";
 import ChevronLeft from "../icons/ChevronLeft.tsx";
+import FileDocument from "../icons/FileDocument.tsx";
 import Folder from "../icons/Folder.tsx";
-import Home from "../icons/Home.tsx";
-import Members from "../icons/Members.tsx";
 
 const navigation = [
-  { id: "attention", label: "General", icon: Home },
+  { id: "posts", label: "Posts", icon: FileDocument },
   { id: "projects", label: "Projects", icon: Folder },
-  { id: "people", label: "People", icon: Members },
 ];
 
-export function AppShell({ route, onNavigate, presence, presenceTotal, presenceStatus, children }) {
-  const primaryRoute = route === "project" ? "projects" : route;
+export function AppShell({ route, onNavigate, railContent = null, children }) {
+  const auth = useAuthSession();
+  const [collapsed, setCollapsed] = useState(false);
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [accountMessage, setAccountMessage] = useState("");
+  const primaryRoute = route === "project" ? "projects" : route === "post" ? "posts" : route;
+  async function signOut() {
+    if (!auth.session?.authenticated) return;
+    try {
+      const session = await commonsAdapter.logout(auth.session.csrfToken, createIdempotencyKey());
+      auth.accept(session);
+      setAccountMessage("Signed out");
+    } catch (error) {
+      setAccountMessage(error.message);
+      if (error.status === 401 || error.code === "csrf_failed") auth.expire();
+    }
+  }
+
+  function authenticated(session) {
+    auth.accept(session);
+    setLoginOpen(false);
+    setAccountMessage("");
+  }
+
   return (
-    <div className="app-shell">
+    <>
+    <div className={`app-shell${collapsed ? " app-shell--collapsed" : ""}`}>
       <aside className="left-rail">
         <div className="brand-row">
           <span className="brand-icon" aria-hidden="true"><BookOpen /></span>
-          <span className="brand-name">Commons</span>
-          <button className="rail-collapse" type="button" aria-label="Collapse navigation"><ChevronLeft /></button>
+          <span className="brand-name">Codex Commons</span>
+          <button
+            className="rail-collapse"
+            type="button"
+            aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}
+            aria-expanded={!collapsed}
+            onClick={() => setCollapsed((value) => !value)}
+          >
+            <ChevronLeft />
+          </button>
         </div>
         <nav className="primary-nav" aria-label="Primary navigation">
           {navigation.map(({ id, label, icon: Icon }) => (
@@ -27,27 +63,18 @@ export function AppShell({ route, onNavigate, presence, presenceTotal, presenceS
             </button>
           ))}
         </nav>
-        <section className="presence-panel" aria-labelledby="presence-title">
-          <div className="presence-heading"><span id="presence-title">Live presence</span><span>{presenceTotal == null ? "—" : `${presence.length} of ${presenceTotal}`}</span></div>
-          <ul>
-            {presence.map((item) => (
-              <li key={item.session}>
-                <span className={`presence-dot ${item.connected ? "is-connected" : ""}`} aria-hidden="true" />
-                <div>
-                  <div className="presence-name"><strong>{item.actor}</strong><span>{item.updated.relative}</span></div>
-                  <div className="presence-facts"><span>{item.execution === "executing" ? "Executing" : "Not running"}</span><span>{item.purpose}</span></div>
-                  <span className="sr-only">Host {item.connected ? "connected" : "disconnected"}</span>
-                </div>
-              </li>
-            ))}
-            {presenceStatus === "loading" ? <li className="presence-state">Loading session facts…</li> : null}
-            {presenceStatus === "error" ? <li className="presence-state">Presence unavailable</li> : null}
-          </ul>
-        </section>
-        <div className="rail-footnote">Presence reports execution and connectivity separately.</div>
+        {railContent ? <div className="rail-context">{railContent}</div> : null}
+        <div className="rail-footer">
+          <button className="rail-settings" type="button" onClick={() => setSettingsOpen(true)}><span aria-hidden="true">Aa</span><strong>Settings</strong></button>
+          <SessionControl status={auth.status} session={auth.session} onSignIn={() => setLoginOpen(true)} onSignOut={signOut} />
+          {accountMessage ? <small role="status">{accountMessage}</small> : null}
+        </div>
       </aside>
       <main className="main-plane">{children}</main>
-    </div>
+      </div>
+      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <LoginDialog open={loginOpen} onClose={() => setLoginOpen(false)} onAuthenticated={authenticated} />
+    </>
   );
 }
 

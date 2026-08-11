@@ -96,7 +96,7 @@ LIMIT ?`, query.ProjectID, query.AttentionLimit)
 		return out, err
 	}
 
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM tasks
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM active_tasks
 WHERE project_id=? AND state IN ('ready','in_progress','blocked')`, query.ProjectID).Scan(&out.OpenWorkTotal); err != nil {
 		return out, err
 	}
@@ -105,7 +105,7 @@ WHERE project_id=? AND state IN ('ready','in_progress','blocked')`, query.Projec
  WHERE a.project_id=t.project_id AND a.object_ref=t.id
  AND a.kind IN ('task_claimed','task_status_changed')
  ORDER BY julianday(a.occurred_at) DESC,a.id DESC LIMIT 1) AS updated_at
-FROM tasks t
+FROM active_tasks t
 WHERE t.project_id=? AND t.state IN ('ready','in_progress','blocked')
 ORDER BY CASE t.state WHEN 'in_progress' THEN 0 WHEN 'blocked' THEN 1 ELSE 2 END,
 t.priority,t.id
@@ -135,34 +135,8 @@ LIMIT ?`, query.ProjectID, query.WorkLimit)
 		return out, err
 	}
 
-	rows, err = tx.QueryContext(ctx, `SELECT substr(occurred_at,1,10),count(*)
-FROM activity_events
-WHERE project_id=? AND substr(occurred_at,1,10)>=? AND substr(occurred_at,1,10)<?
-GROUP BY substr(occurred_at,1,10)
-ORDER BY substr(occurred_at,1,10)`, query.ProjectID, query.ActivityStart.Format(time.DateOnly), query.ActivityEnd.Format(time.DateOnly))
+	out.Activity, err = readProjectActivityDays(ctx, tx, query.ProjectID, query.ActivityStart, query.ActivityEnd)
 	if err != nil {
-		return out, err
-	}
-	for rows.Next() {
-		var day string
-		var item domain.ProjectOverviewActivityDay
-		if err := rows.Scan(&day, &item.Count); err != nil {
-			rows.Close()
-			return out, err
-		}
-		parsed, err := time.ParseInLocation(time.DateOnly, day, time.UTC)
-		if err != nil {
-			rows.Close()
-			return out, err
-		}
-		item.Day = parsed
-		out.Activity = append(out.Activity, item)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return out, err
-	}
-	if err := rows.Close(); err != nil {
 		return out, err
 	}
 

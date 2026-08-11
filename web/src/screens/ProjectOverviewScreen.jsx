@@ -8,19 +8,19 @@ import { Notice, PageHeader } from "../components/AppShell.jsx";
 import { ActionButton, SeverityIndicator, Timestamp } from "../components/Controls.jsx";
 import { DataTable } from "../components/DataTable.jsx";
 import { TaskPreviewDialog } from "../components/TaskPreviewDialog.jsx";
-import { fixtureAdapter } from "../data/adapter.js";
+import { commonsAdapter } from "../data/adapter.js";
 import { useResource } from "../hooks/useResource.js";
 
 const projectTabs = ["Overview", "Tasks", "Posts", "Wiki", "GitHub", "History"];
 
-export function ProjectOverviewScreen({ onBack }) {
+export function ProjectOverviewScreen({ onBack, projectID }) {
   const [notice, setNotice] = useState("");
   const [selectedTask, setSelectedTask] = useState(null);
-  const resource = useResource((signal) => fixtureAdapter.readProjectOverview(
-    "billing-orchestrator",
+  const resource = useResource((signal) => commonsAdapter.readProjectOverview(
+    projectID,
     { attention_limit: 3, work_limit: 4 },
     signal,
-  ), []);
+  ), [projectID]);
   const data = resource.data;
   const attentionColumns = useMemo(() => [
     { key: "severity", label: "Severity", className: "cell-severity", render: (item) => <SeverityIndicator severity={item.severity} /> },
@@ -45,7 +45,13 @@ export function ProjectOverviewScreen({ onBack }) {
   ], [data?.project.name]);
 
   if (resource.status === "loading" && !data) return <OverviewSkeleton />;
-  if (resource.status === "error") return <div className="page-error" role="alert"><h1>Project overview unavailable</h1><p>{resource.error}</p></div>;
+  if (resource.status === "error") return (
+    <div className="page-error" role="alert">
+      <button className="back-button" type="button" onClick={onBack}><ChevronLeft aria-hidden="true" />Back to projects</button>
+      <h1>Project overview unavailable</h1>
+      <p>{resource.error}</p>
+    </div>
+  );
 
   return (
     <>

@@ -63,11 +63,19 @@ type ProjectCurrentWork struct {
 	Priority         int
 }
 
+type ProjectMilestoneSummary struct {
+	ID, Title, Status, TargetDate string
+	Position                      int
+}
+
 type ProjectBrowseItem struct {
 	ID, Name, Status, Purpose string
 	CurrentWork               *ProjectCurrentWork
 	OpenTasks                 int
 	LatestActivity            *time.Time
+	ActiveMilestone           *ProjectMilestoneSummary
+	TaskCounts                TaskStateCounts
+	LastDurableActivity       *DurableActivity
 }
 
 type ProjectBrowseSnapshot struct {
@@ -86,4 +94,69 @@ type PeopleSessionFact struct {
 
 type PeopleFactsSnapshot struct {
 	Sessions map[string]PeopleSessionFact
+}
+
+type PostFilters struct {
+	Search, TopicID, ProjectID, Kind string
+	CreatedFrom, CreatedTo           *time.Time
+}
+
+type PostBrowseQuery struct {
+	Filters PostFilters
+	After   *BrowseCursor
+	Limit   int
+}
+
+type PostAuthor struct {
+	SessionID, Handle, Purpose string
+}
+
+type PostTopic struct {
+	ID, Name string
+}
+
+type PostProject struct {
+	ID, Name string
+}
+
+type PostBrowseItem struct {
+	ID, Kind, Title, Preview, State, SupersededBy string
+	Topic                                         PostTopic
+	Project                                       *PostProject
+	Author                                        PostAuthor
+	CreatedAt                                     time.Time
+	CommentCount                                  int
+	Attachments                                   []PostAttachment
+	PerspectiveScope                              PerspectiveScope
+}
+
+type PostBrowseSnapshot struct {
+	Total int
+	Items []PostBrowseItem
+}
+
+type PostComment struct {
+	ID, Body, Intent string
+	Author           PostAuthor
+	CreatedAt        time.Time
+	Mentions         []PostAuthor
+}
+
+type PostThreadQuery struct {
+	PostID string
+	After  *BrowseCursor
+	Limit  int
+}
+
+type PostThread struct {
+	Post             Object
+	Topic            PostTopic
+	Project          *PostProject
+	Author           PostAuthor
+	State            string
+	SupersededBy     string
+	Attachments      []PostAttachment
+	CommentCount     int
+	Comments         []PostComment
+	PerspectiveScope PerspectiveScope
 }

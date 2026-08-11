@@ -141,7 +141,7 @@ func tasks(ctx context.Context, q queryer, projectID string, limit int) ([]domai
 	if limit < 1 || limit > 100 {
 		return nil, domain.ErrInvalid
 	}
-	rows, err := q.QueryContext(ctx, `SELECT id,state,title,priority,COALESCE(owner_session_id,''),accept_text FROM tasks WHERE project_id=? ORDER BY priority,id LIMIT ?`, projectID, limit)
+	rows, err := q.QueryContext(ctx, `SELECT id,state,title,priority,COALESCE(owner_session_id,''),accept_text FROM active_tasks WHERE project_id=? ORDER BY priority,id LIMIT ?`, projectID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -217,6 +217,26 @@ WHERE (?='' OR s.project_id=?) ORDER BY p.observed_at DESC,s.id LIMIT ?`, projec
 func (s *Store) Inbox(ctx context.Context, projectID, recipient string, limit int) ([]domain.InboxItem, error) {
 	if recipient == "" || limit < 1 || limit > 100 {
 		return nil, domain.ErrInvalid
+	}
+	if projectID == domain.TopicGeneral {
+		rows, err := s.db.QueryContext(ctx, `SELECT 'CM-'||c.id||'-'||m.position,'mention',c.session_id,c.post_id,substr(c.body,1,200),1,m.created_at FROM comment_mentions m JOIN comments c ON c.id=m.comment_id JOIN posts p ON p.id=c.post_id WHERE m.recipient_session_id=? AND p.project_id IS NULL ORDER BY m.created_at DESC,c.id DESC LIMIT ?`, recipient, limit)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		out := []domain.InboxItem{}
+		for rows.Next() {
+			var v domain.InboxItem
+			var unread int
+			var at string
+			if err := rows.Scan(&v.ID, &v.Kind, &v.FromSessionID, &v.Ref, &v.Snippet, &unread, &at); err != nil {
+				return nil, err
+			}
+			v.Unread = unread == 1
+			v.CreatedAt = parseStamp(at)
+			out = append(out, v)
+		}
+		return out, rows.Err()
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT id,kind,from_session_id,ref,snippet,unread,created_at FROM inbox_items WHERE recipient_session_id=? AND (?='' OR project_id=?) ORDER BY created_at DESC,id LIMIT ?`, recipient, projectID, projectID, limit)
 	if err != nil {
@@ -333,7 +353,7 @@ func (s *Store) Next(ctx context.Context, projectID string, limit int) ([]domain
 		return nil, domain.ErrInvalid
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT t.id,t.state,t.title,t.priority,COALESCE(t.owner_session_id,''),t.accept_text
-FROM tasks t WHERE t.project_id=? AND t.state='ready' AND NOT EXISTS(
+FROM active_tasks t WHERE t.project_id=? AND t.state='ready' AND NOT EXISTS(
  SELECT 1 FROM task_dependencies d JOIN tasks b ON b.id=d.depends_on_task_id WHERE d.task_id=t.id AND b.state<>'done')
 ORDER BY t.priority,t.id LIMIT ?`, projectID, limit)
 	if err != nil {

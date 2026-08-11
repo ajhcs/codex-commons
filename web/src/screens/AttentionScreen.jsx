@@ -3,7 +3,7 @@ import { PageHeader, Notice } from "../components/AppShell.jsx";
 import { ActionButton, CursorPager, DateFilter, SearchField, Select, SeverityIndicator, Timestamp } from "../components/Controls.jsx";
 import { DataTable } from "../components/DataTable.jsx";
 import { TaskPreviewDialog } from "../components/TaskPreviewDialog.jsx";
-import { fixtureAdapter } from "../data/adapter.js";
+import { commonsAdapter } from "../data/adapter.js";
 import { useCursorPager } from "../hooks/useCursorPager.js";
 import { useResource } from "../hooks/useResource.js";
 
@@ -12,9 +12,9 @@ export function AttentionScreen() {
   const [notice, setNotice] = useState("");
   const [selectedTask, setSelectedTask] = useState(null);
   const pager = useCursorPager(10);
-  const updatedFrom = filters.dateRange ? new Date(Date.parse("2026-08-09T12:00:00Z") - (filters.dateRange === "7d" ? 7 : 30) * 86400000).toISOString() : "";
+  const updatedFrom = filters.dateRange ? new Date(Date.now() - (filters.dateRange === "7d" ? 7 : 30) * 86400000).toISOString() : "";
   const resource = useResource(
-    (signal) => fixtureAdapter.readAttention({
+    (signal) => commonsAdapter.readAttention({
       q: filters.search,
       source: filters.source,
       owner: filters.owner,

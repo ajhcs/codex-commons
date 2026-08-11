@@ -1,0 +1,195 @@
+package server_test
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"codex-commons/internal/demodata"
+	"codex-commons/internal/httpapi"
+	"codex-commons/internal/server"
+)
+
+const runtimeAdminSecret = "slice-10-disposable-human-secret"
+
+func TestShortHumanSecretRequiresExplicitInsecureLANMode(t *testing.T) {
+	config := server.DefaultConfig()
+	config.DatabasePath = filepath.Join(t.TempDir(), "commons.sqlite")
+	config.HumanAuth = &httpapi.HumanAuthConfig{
+		AdminSecret: "shortkey", DisplayName: "Local admin", Actor: "local-admin",
+		Session: "human-local-admin", Host: "browser", SessionTTL: time.Hour,
+	}
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "24..1024") {
+		t.Fatalf("short secret accepted without explicit insecure mode: %v", err)
+	}
+	config.AllowInsecureHumanLAN = true
+	if err := config.Validate(); err != nil {
+		t.Fatalf("explicit trusted-LAN evaluation secret rejected: %v", err)
+	}
+	config.HumanAuth.AdminSecret = "shorter"
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "8..1024") {
+		t.Fatalf("sub-eight-byte secret accepted in insecure mode: %v", err)
+	}
+}
+
+func TestHumanConfigSecretSourcesAndLANAcknowledgement(t *testing.T) {
+	env := map[string]string{
+		"COMMONS_DB":                 filepath.Join(t.TempDir(), "commons.sqlite"),
+		"COMMONS_LISTEN":             "192.168.1.60:8088",
+		"COMMONS_HUMAN_ADMIN_SECRET": runtimeAdminSecret,
+	}
+	getenv := func(key string) string { return env[key] }
+	if _, err := server.ParseConfig(nil, getenv, io.Discard); err == nil || !strings.Contains(err.Error(), "allow-insecure-human-lan") {
+		t.Fatalf("plaintext LAN auth did not fail closed: %v", err)
+	}
+	env["COMMONS_ALLOW_INSECURE_HUMAN_LAN"] = "true"
+	config, err := server.ParseConfig(nil, getenv, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.HumanAuth == nil || config.HumanAuth.DisplayName != "Local admin" || config.HumanAuth.AdminSecret != runtimeAdminSecret {
+		t.Fatalf("human config=%+v", config.HumanAuth)
+	}
+	if _, err := server.ParseConfig([]string{"--human-admin-secret", "must-not-be-argv"}, getenv, io.Discard); err == nil {
+		t.Fatal("secret-bearing command-line flag was accepted")
+	}
+
+	secretFile := filepath.Join(t.TempDir(), "admin-secret")
+	if err := os.WriteFile(secretFile, []byte(runtimeAdminSecret+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(secretFile, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fileEnv := map[string]string{"COMMONS_DB": filepath.Join(t.TempDir(), "file.sqlite"), "COMMONS_HUMAN_ADMIN_SECRET_FILE": secretFile}
+	if _, err := server.ParseConfig(nil, func(key string) string { return fileEnv[key] }, io.Discard); err == nil || !strings.Contains(err.Error(), "group or other") {
+		t.Fatalf("permissive secret file accepted: %v", err)
+	}
+	if err := os.Chmod(secretFile, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := server.ParseConfig(nil, func(key string) string { return fileEnv[key] }, io.Discard)
+	if err != nil || parsed.HumanAuth == nil || parsed.HumanAuth.AdminSecret != runtimeAdminSecret {
+		t.Fatalf("mode-0600 secret file config=%+v err=%v", parsed.HumanAuth, err)
+	}
+	fileEnv["COMMONS_HUMAN_ADMIN_SECRET"] = runtimeAdminSecret
+	if _, err := server.ParseConfig(nil, func(key string) string { return fileEnv[key] }, io.Discard); err == nil || !strings.Contains(err.Error(), "only one") {
+		t.Fatalf("dual secret sources accepted: %v", err)
+	}
+}
+
+type authData struct {
+	Authenticated bool   `json:"authenticated"`
+	CSRFToken     string `json:"csrf_token"`
+}
+
+func runtimeRequest(handler http.Handler, method, target, body string, cookie *http.Cookie, csrf, key string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if method == http.MethodPost {
+		req.Header.Set("Origin", "http://commons.test")
+	}
+	if cookie != nil {
+		req.AddCookie(cookie)
+	}
+	if csrf != "" {
+		req.Header.Set("X-Commons-CSRF", csrf)
+	}
+	if key != "" {
+		req.Header.Set("Idempotency-Key", key)
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	return recorder
+}
+
+func runtimeLogin(t *testing.T, handler http.Handler) (*http.Cookie, string) {
+	t.Helper()
+	recorder := runtimeRequest(handler, http.MethodPost, "http://commons.test/v1/auth/login", `{"secret":"`+runtimeAdminSecret+`"}`, nil, "", "")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("login code=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Data authData `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	cookies := recorder.Result().Cookies()
+	if len(cookies) != 1 || response.Data.CSRFToken == "" {
+		t.Fatalf("login cookies=%v data=%+v", cookies, response.Data)
+	}
+	return cookies[0], response.Data.CSRFToken
+}
+
+func TestHumanPostCommentStateDurabilityAndSessionRestart(t *testing.T) {
+	database := filepath.Join(t.TempDir(), "commons.sqlite")
+	config := server.DefaultConfig()
+	config.DatabasePath = database
+	config.WebDir = testWeb(t)
+	config.DemoSeed = true
+	config.HumanAuth = &httpapi.HumanAuthConfig{
+		AdminSecret: runtimeAdminSecret, DisplayName: "Cole", Actor: "local-admin",
+		Session: "human-local-admin", Host: "browser", SessionTTL: time.Hour,
+	}
+	first, err := server.New(context.Background(), config, demodata.Seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie, csrf := runtimeLogin(t, first.Handler())
+	post := runtimeRequest(first.Handler(), http.MethodPost, "http://commons.test/v1/posts",
+		`{"topic":"demo-billing-orchestrator","kind":"finding","title":"Human durable write","body":"Post survives restart","basis":"Slice 10 E2E"}`,
+		cookie, csrf, "human-e2e-post")
+	if post.Code != http.StatusOK {
+		t.Fatalf("post code=%d body=%s", post.Code, post.Body.String())
+	}
+	var postResponse struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(post.Body.Bytes(), &postResponse); err != nil || postResponse.Data.ID == "" {
+		t.Fatalf("post response=%s err=%v", post.Body.String(), err)
+	}
+	postID := postResponse.Data.ID
+	comment := runtimeRequest(first.Handler(), http.MethodPost, "http://commons.test/v1/comments",
+		`{"ref":"`+postID+`","body":"This adds reproducible evidence.","intent":"add_evidence"}`,
+		cookie, csrf, "human-e2e-comment")
+	if comment.Code != http.StatusOK {
+		t.Fatalf("comment code=%d body=%s", comment.Code, comment.Body.String())
+	}
+	state := runtimeRequest(first.Handler(), http.MethodPost, "http://commons.test/v1/post-states",
+		`{"ref":"`+postID+`","state":"resolved"}`, cookie, csrf, "human-e2e-state")
+	if state.Code != http.StatusOK {
+		t.Fatalf("state code=%d body=%s", state.Code, state.Body.String())
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	config.DemoSeed = false
+	second, err := server.New(context.Background(), config, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	oldStatus := runtimeRequest(second.Handler(), http.MethodGet, "http://commons.test/v1/auth/session", "", cookie, "", "")
+	if oldStatus.Code != http.StatusOK || !strings.Contains(oldStatus.Body.String(), `"authenticated":false`) {
+		t.Fatalf("old process session survived restart: %s", oldStatus.Body.String())
+	}
+	newCookie, _ := runtimeLogin(t, second.Handler())
+	opened := runtimeRequest(second.Handler(), http.MethodGet, "http://commons.test/v1/posts/"+postID+"?comments_limit=20", "", newCookie, "", "")
+	if opened.Code != http.StatusOK || !strings.Contains(opened.Body.String(), `"state":"resolved"`) ||
+		!strings.Contains(opened.Body.String(), `"intent":"add_evidence"`) || !strings.Contains(opened.Body.String(), `"Human durable write"`) {
+		t.Fatalf("durable thread code=%d body=%s", opened.Code, opened.Body.String())
+	}
+}

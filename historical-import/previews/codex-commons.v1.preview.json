@@ -1,0 +1,229 @@
+{
+  "mode": "dry-run",
+  "status": "ready_for_review",
+  "schema_version": 1,
+  "batch_id": "codex-commons-history-v1",
+  "project_id": "codex-commons",
+  "source_digest": "sha256:e3963c695b631aa1cfedb0489da94b6245fb397327e5ffecc9f2bb65c55b5c2a",
+  "manifest_digest": "sha256:ea711605aae0e20fc1dcf3310e51e45aabf52e2d565e29fc016109bef829adfd",
+  "collision_policy": "current_wins",
+  "apply_endpoint": "/v1/projects/{project}/historical-imports/apply",
+  "apply_eligible": true,
+  "network_calls": 0,
+  "counts": {
+    "tasks": 20,
+    "project_thread_aliases": 4,
+    "task_sessions": 37,
+    "accounted_sessions": 41,
+    "attribution_links": 37,
+    "events": 13,
+    "planned": 20,
+    "skipped_current": 0,
+    "ambiguous": 0
+  },
+  "tasks": [
+    {
+      "key": "history-product-model",
+      "title": "Research and adjudicate the Codex Commons product model",
+      "disposition": "create",
+      "idempotency_key": "historical-import:codex-commons-history-v1:task:history-product-model:e3963c695b631aa1",
+      "source_occurred_at": "2026-08-09T02:47:52Z",
+      "recorded_at": null,
+      "attributions": 5,
+      "events": 1
+    },
+    {
+      "key": "history-agent-contract",
+      "title": "Build the low-context agent contract and stub CLI",
+      "disposition": "create",
+      "idempotency_key": "historical-import:codex-commons-history-v1:task:history-agent-contract:e3963c695b631aa1",
+      "source_occurred_at": "2026-08-09T03:29:12Z",
+      "recorded_at": null,
+      "attributions": 2,
+      "events": 1
+    },
+    {
+      "key": "history-slice-0-evaluation",
+      "title": "Evaluate Slice 0 blindly",
+      "disposition": "create",
+      "idempotency_key": "historical-import:codex-commons-history-v1:task:history-slice-0-evaluation:e3963c695b631aa1",
+      "source_occurred_at": "2026-08-09T03:57:18Z",
+      "recorded_at": null,
+      "attributions": 5,
+      "events": 1
+    },
+    {
+      "key": "history-slice-1-persistence",
+      "title": "Implement Slice 1 local persistence",
+      "disposition": "create",
+      "idempotency_key": "historical-import:codex-commons-history-v1:task:history-slice-1-persistence:e3963c695b631aa1",
+      "source_occurred_at": "2026-08-09T16:44:16Z",
+      "recorded_at": null,
+      "attributions": 1,
+      "events": 0
+    },
+    {
+      "key": "history-slice-2-transport",
+      "title": "Implement Slice 2 LAN transport",
+      "disposition": "create",
+      "idempotency_key": "historical-import:codex-commons-history-v1:task:history-slice-2-transport:e3963c695b631aa1",
+      "source_occurred_at": "2026-08-09T16:38:24Z",
+      "recorded_at": null,
+      "attributions": 1,
+      "events": 0
+    },
+    {
+      "key": "history-senior-hardening",
+      "title": "Review and harden the early backend",
+      "disposition": "create",
+      "idempotency_key": "historical-import:codex-commons-history-v1:task:history-senior-hardening:e3963c695b631aa1",
+      "source_occurred_at": "2026-08-09T17:25:58Z",
+      "recorded_at": null,
+      "attributions": 1,
+      "events": 1
+    },
+    {
+      "key": "history-slice-4-forum-search",
+      "title": "Implement forum kinds and bounded search",
+      "disposition": "create",
+      "idempotency_key": "historical-import:codex-commons-history-v1:task:history-slice-4-forum-search:e3963c695b631aa1",
+      "source_occurred_at": "2026-08-09T17:44:50Z",
+      "recorded_at": null,
+      "attributions": 1,
+      "events": 1
+    },
+    {
+      "key": "history-slice-5-github",
+      "title": "Implement conditional read-only GitHub synchronization",
+      "disposition": "create",
+      "idempotency_key": "historical-import:codex-commons-history-v1:task:history-slice-5-github:e3963c695b631aa1",
+      "source_occurred_at": "2026-08-09T17:39:22Z",
+      "recorded_at": null,
+      "attributions": 1,
+      "events": 0
+    },
+    {
+      "key": "history-slice-6-background",
+      "title": "Implement bounded background work",
+      "disposition": "create",
+      "idempotency_key": "historical-import:codex-commons-history-v1:task:history-slice-6-background:e3963c695b631aa1",
+      "source_occurred_at": "2026-08-09T17:44:14Z",
+      "recorded_at": null,
+      "attributions": 1,
+      "events": 1
+    },
+    {
+      "key": "history-general-home",
+      "title": "Implement General and Home backend projections",
+      "disposition": "create",
+      "idempotency_key": "historical-import:codex-commons-history-v1:task:history-general-home:e3963c695b631aa1",
+      "source_occurred_at": "2026-08-09T18:53:54Z",
+      "recorded_at": null,
+      "attributions": 1,
+      "events": 0
+    },
+    {
+      "key": "history-design-reference",
+      "title": "Build a rights-aware OpenAI design reference library",
+      "disposition": "create",
+      "idempotency_key": "historical-import:codex-commons-history-v1:task:history-design-reference:e3963c695b631aa1",
+      "source_occurred_at": "2026-08-09T18:52:25Z",
+      "recorded_at": null,
+      "attributions": 1,
+      "events": 0
+    },
+    {
+      "key": "history-slice-7-backend",
+      "title": "Implement Slice 7 browse backend",
+      "disposition": "create",
+      "idempotency_key": "historical-import:codex-commons-history-v1:task:history-slice-7-backend:e3963c695b631aa1",
+      "source_occurred_at": "2026-08-09T20:16:23Z",
+      "recorded_at": null,
+      "attributions": 1,
+      "events": 1
+    },
+    {
+      "key": "history-slice-7-8-frontend",
+      "title": "Implement Slice 7 and 8 frontend surfaces",
+      "disposition": "create",
+      "idempotency_key": "historical-import:codex-commons-history-v1:task:history-slice-7-8-frontend:e3963c695b631aa1",
+      "source_occurred_at": "2026-08-09T20:15:35Z",
+      "recorded_at": null,
+      "attributions": 1,
+      "events": 0
+    },
+    {
+      "key": "history-slice-8-overview",
+      "title": "Implement and review the Slice 8 project overview",
+      "disposition": "create",
+      "idempotency_key": "historical-import:codex-commons-history-v1:task:history-slice-8-overview:e3963c695b631aa1",
+      "source_occurred_at": "2026-08-09T19:47:12Z",
+      "recorded_at": null,
+      "attributions": 2,
+      "events": 1
+    },
+    {
+      "key": "history-slice-8-5-integration",
+      "title": "Integrate Slice 8.5 with the LAN runtime",
+      "disposition": "create",
+      "idempotency_key": "historical-import:codex-commons-history-v1:task:history-slice-8-5-integration:e3963c695b631aa1",
+      "source_occurred_at": "2026-08-09T21:19:11Z",
+      "recorded_at": null,
+      "attributions": 3,
+      "events": 0
+    },
+    {
+      "key": "history-slice-9-posts-home",
+      "title": "Make Posts the human home in Slice 9",
+      "disposition": "create",
+      "idempotency_key": "historical-import:codex-commons-history-v1:task:history-slice-9-posts-home:e3963c695b631aa1",
+      "source_occurred_at": "2026-08-09T22:29:06Z",
+      "recorded_at": null,
+      "attributions": 2,
+      "events": 1
+    },
+    {
+      "key": "history-feed-directions",
+      "title": "Produce and evaluate feed design directions",
+      "disposition": "create",
+      "idempotency_key": "historical-import:codex-commons-history-v1:task:history-feed-directions:e3963c695b631aa1",
+      "source_occurred_at": "2026-08-09T23:06:13Z",
+      "recorded_at": null,
+      "attributions": 3,
+      "events": 1
+    },
+    {
+      "key": "history-slice-10-human-writes",
+      "title": "Implement safe human writes in Slice 10",
+      "disposition": "create",
+      "idempotency_key": "historical-import:codex-commons-history-v1:task:history-slice-10-human-writes:e3963c695b631aa1",
+      "source_occurred_at": "2026-08-10T15:53:56Z",
+      "recorded_at": null,
+      "attributions": 2,
+      "events": 1
+    },
+    {
+      "key": "history-project-core",
+      "title": "Implement Project Core",
+      "disposition": "create",
+      "idempotency_key": "historical-import:codex-commons-history-v1:task:history-project-core:e3963c695b631aa1",
+      "source_occurred_at": "2026-08-10T19:15:41Z",
+      "recorded_at": null,
+      "attributions": 2,
+      "events": 1
+    },
+    {
+      "key": "history-dogfood-corpus",
+      "title": "Build the Codex Commons dogfood corpus",
+      "disposition": "create",
+      "idempotency_key": "historical-import:codex-commons-history-v1:task:history-dogfood-corpus:e3963c695b631aa1",
+      "source_occurred_at": "2026-08-10T19:57:01Z",
+      "recorded_at": null,
+      "attributions": 1,
+      "events": 1
+    }
+  ],
+  "collisions": [],
+  "redaction_findings": [],
+  "blockers": []
+}

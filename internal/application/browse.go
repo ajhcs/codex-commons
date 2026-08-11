@@ -158,16 +158,34 @@ type ProjectWork struct {
 	Priority int    `json:"priority"`
 }
 
+type ProjectBrowseMilestone struct {
+	ID         string `json:"id"`
+	Title      string `json:"title"`
+	Status     string `json:"status"`
+	Position   int    `json:"position"`
+	TargetDate string `json:"target_date,omitempty"`
+}
+
+type ProjectDurableActivity struct {
+	Kind       string    `json:"kind"`
+	Ref        string    `json:"ref"`
+	Title      string    `json:"title"`
+	OccurredAt time.Time `json:"occurred_at"`
+}
+
 type ProjectBrowseItem struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
-	Status         string            `json:"status,omitempty"`
-	Purpose        string            `json:"purpose"`
-	CurrentWork    *ProjectWork      `json:"current_work,omitempty"`
-	OpenTasks      int               `json:"open_tasks"`
-	ActiveSessions int               `json:"active_sessions"`
-	LastActivity   *time.Time        `json:"last_activity,omitempty"`
-	Destination    BrowseDestination `json:"destination"`
+	ID                  string                  `json:"id"`
+	Name                string                  `json:"name"`
+	Status              string                  `json:"status,omitempty"`
+	Purpose             string                  `json:"purpose"`
+	CurrentWork         *ProjectWork            `json:"current_work,omitempty"`
+	OpenTasks           int                     `json:"open_tasks"`
+	ActiveSessions      int                     `json:"active_sessions"`
+	LastActivity        *time.Time              `json:"last_activity,omitempty"`
+	ActiveMilestone     *ProjectBrowseMilestone `json:"active_milestone,omitempty"`
+	TaskCounts          TaskStateCounts         `json:"task_counts"`
+	LastDurableActivity *ProjectDurableActivity `json:"last_durable_activity,omitempty"`
+	Destination         BrowseDestination       `json:"destination"`
 }
 
 type ProjectsBrowseResult struct {
@@ -227,6 +245,13 @@ func (s *Service) BrowseProjects(ctx context.Context, request ProjectsBrowseRequ
 		view := ProjectBrowseItem{ID: item.ID, Name: item.Name, Status: item.Status,
 			Purpose: item.Purpose, OpenTasks: item.OpenTasks, ActiveSessions: active[item.ID],
 			LastActivity: item.LatestActivity, Destination: BrowseDestination{Kind: "project", Ref: item.ID}}
+		view.TaskCounts = taskCountsView(item.TaskCounts)
+		if item.ActiveMilestone != nil {
+			view.ActiveMilestone = &ProjectBrowseMilestone{ID: item.ActiveMilestone.ID, Title: item.ActiveMilestone.Title, Status: item.ActiveMilestone.Status, Position: item.ActiveMilestone.Position, TargetDate: item.ActiveMilestone.TargetDate}
+		}
+		if item.LastDurableActivity != nil {
+			view.LastDurableActivity = &ProjectDurableActivity{Kind: item.LastDurableActivity.Kind, Ref: item.LastDurableActivity.Ref, Title: item.LastDurableActivity.Title, OccurredAt: item.LastDurableActivity.OccurredAt}
+		}
 		if item.CurrentWork != nil {
 			view.CurrentWork = &ProjectWork{ID: item.CurrentWork.ID, Title: item.CurrentWork.Title,
 				State: item.CurrentWork.State, Priority: item.CurrentWork.Priority}
