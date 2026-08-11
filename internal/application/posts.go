@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"codex-commons/internal/domain"
+	"codex-commons/internal/presence"
 )
 
 const (
@@ -21,6 +22,12 @@ type PostRepository interface {
 	SetPostState(context.Context, domain.PostStateRequest) (domain.WriteResult, error)
 }
 
+type AddressabilityRepository interface {
+	Contributors(context.Context, domain.ContributorQuery) ([]domain.Contributor, error)
+	SetPerspectiveScope(context.Context, domain.PerspectiveScopeRequest) (domain.WriteResult, error)
+	Comment(context.Context, domain.CommentRequest) (domain.WriteResult, error)
+}
+
 type PostFeedRequest struct {
 	Cursor, Search, Topic, Project, Kind string
 	CreatedFrom, CreatedTo               *time.Time
@@ -34,6 +41,7 @@ type PostAttachment struct {
 }
 
 type PostAuthor struct {
+	Handle     string      `json:"handle,omitempty"`
 	Session    string      `json:"session"`
 	Purpose    string      `json:"purpose,omitempty"`
 	Provenance *Provenance `json:"provenance,omitempty"`
@@ -49,20 +57,26 @@ type PostProject struct {
 	Name string `json:"name"`
 }
 
+type PerspectiveScope struct {
+	Value    string `json:"value"`
+	Revision int64  `json:"revision"`
+}
+
 type PostFeedItem struct {
-	ID           string            `json:"id"`
-	Kind         string            `json:"kind"`
-	Title        string            `json:"title"`
-	Preview      string            `json:"preview"`
-	Topic        PostTopic         `json:"topic"`
-	Project      *PostProject      `json:"project,omitempty"`
-	Author       PostAuthor        `json:"author"`
-	CreatedAt    time.Time         `json:"created_at"`
-	CommentCount int               `json:"comment_count"`
-	State        string            `json:"state"`
-	SupersededBy string            `json:"superseded_by,omitempty"`
-	Attachments  []PostAttachment  `json:"attachments"`
-	Destination  BrowseDestination `json:"destination"`
+	ID               string            `json:"id"`
+	Kind             string            `json:"kind"`
+	Title            string            `json:"title"`
+	Preview          string            `json:"preview"`
+	Topic            PostTopic         `json:"topic"`
+	Project          *PostProject      `json:"project,omitempty"`
+	Author           PostAuthor        `json:"author"`
+	CreatedAt        time.Time         `json:"created_at"`
+	CommentCount     int               `json:"comment_count"`
+	State            string            `json:"state"`
+	SupersededBy     string            `json:"superseded_by,omitempty"`
+	Attachments      []PostAttachment  `json:"attachments"`
+	Destination      BrowseDestination `json:"destination"`
+	PerspectiveScope PerspectiveScope  `json:"perspective_scope"`
 }
 
 type PostFeedResult struct {
@@ -78,30 +92,32 @@ type PostOpenRequest struct {
 }
 
 type PostFull struct {
-	ID           string            `json:"id"`
-	Kind         string            `json:"kind"`
-	Title        string            `json:"title"`
-	Body         string            `json:"body"`
-	Basis        string            `json:"basis"`
-	RelatedRef   string            `json:"related_ref,omitempty"`
-	Revision     int64             `json:"revision"`
-	Topic        PostTopic         `json:"topic"`
-	Project      *PostProject      `json:"project,omitempty"`
-	Author       PostAuthor        `json:"author"`
-	CreatedAt    time.Time         `json:"created_at"`
-	State        string            `json:"state"`
-	SupersededBy string            `json:"superseded_by,omitempty"`
-	Attachments  []PostAttachment  `json:"attachments"`
-	CommentCount int               `json:"comment_count"`
-	Destination  BrowseDestination `json:"destination"`
+	ID               string            `json:"id"`
+	Kind             string            `json:"kind"`
+	Title            string            `json:"title"`
+	Body             string            `json:"body"`
+	Basis            string            `json:"basis"`
+	RelatedRef       string            `json:"related_ref,omitempty"`
+	Revision         int64             `json:"revision"`
+	Topic            PostTopic         `json:"topic"`
+	Project          *PostProject      `json:"project,omitempty"`
+	Author           PostAuthor        `json:"author"`
+	CreatedAt        time.Time         `json:"created_at"`
+	State            string            `json:"state"`
+	SupersededBy     string            `json:"superseded_by,omitempty"`
+	Attachments      []PostAttachment  `json:"attachments"`
+	CommentCount     int               `json:"comment_count"`
+	Destination      BrowseDestination `json:"destination"`
+	PerspectiveScope PerspectiveScope  `json:"perspective_scope"`
 }
 
 type PostComment struct {
-	ID        string     `json:"id"`
-	Body      string     `json:"body"`
-	Intent    string     `json:"intent"`
-	Author    PostAuthor `json:"author"`
-	CreatedAt time.Time  `json:"created_at"`
+	ID        string       `json:"id"`
+	Body      string       `json:"body"`
+	Intent    string       `json:"intent"`
+	Author    PostAuthor   `json:"author"`
+	CreatedAt time.Time    `json:"created_at"`
+	Mentions  []PostAuthor `json:"mentions"`
 }
 
 type PostCommentPage struct {
@@ -118,6 +134,16 @@ type PostOpenResult struct {
 type PostStateRequest struct {
 	Ref, State, SupersededBy  string
 	Actor, Session, RequestID string
+}
+
+type PerspectiveScopeRequest struct {
+	Ref, Scope, Actor, Session, RequestID string
+	BaseRevision                          int64
+}
+
+type CommentRequest struct {
+	Ref, Body, Intent, Actor, Session, RequestID string
+	MentionSessionIDs                            []string
 }
 
 func postFeedLimit(value int) (int, bool) {
@@ -158,8 +184,16 @@ func appProject(item *domain.PostProject) *PostProject {
 }
 
 func appAuthor(item domain.PostAuthor) PostAuthor {
-	return PostAuthor{Session: item.SessionID, Purpose: item.Purpose,
+	return PostAuthor{Handle: item.Handle, Session: item.SessionID, Purpose: item.Purpose,
 		Provenance: attestedProvenance("", item.SessionID, item.Purpose)}
+}
+
+func appAuthors(items []domain.PostAuthor) []PostAuthor {
+	out := make([]PostAuthor, 0, len(items))
+	for _, item := range items {
+		out = append(out, appAuthor(item))
+	}
+	return out
 }
 
 func (s *Service) BrowsePosts(ctx context.Context, request PostFeedRequest) (PostFeedResult, error) {
@@ -200,7 +234,8 @@ func (s *Service) BrowsePosts(ctx context.Context, request PostFeedRequest) (Pos
 			Topic: appTopic(item.Topic), Project: appProject(item.Project), Author: appAuthor(item.Author),
 			CreatedAt: item.CreatedAt, CommentCount: item.CommentCount, State: item.State,
 			SupersededBy: item.SupersededBy, Attachments: appAttachments(item.Attachments),
-			Destination: BrowseDestination{Kind: "post", Ref: item.ID},
+			Destination:      BrowseDestination{Kind: "post", Ref: item.ID},
+			PerspectiveScope: PerspectiveScope{Value: item.PerspectiveScope.Scope, Revision: item.PerspectiveScope.Revision},
 		})
 	}
 	if hasMore && len(snapshot.Items) > 0 {
@@ -241,13 +276,15 @@ func (s *Service) OpenPost(ctx context.Context, request PostOpenRequest) (PostOp
 			Revision: thread.Post.Revision, Topic: appTopic(thread.Topic), Project: appProject(thread.Project),
 			Author: appAuthor(thread.Author), CreatedAt: thread.Post.CreatedAt, State: thread.State,
 			SupersededBy: thread.SupersededBy, Attachments: appAttachments(thread.Attachments),
-			CommentCount: thread.CommentCount,
-			Destination:  BrowseDestination{Kind: "post", Ref: thread.Post.Ref}},
+			CommentCount:     thread.CommentCount,
+			Destination:      BrowseDestination{Kind: "post", Ref: thread.Post.Ref},
+			PerspectiveScope: PerspectiveScope{Value: thread.PerspectiveScope.Scope, Revision: thread.PerspectiveScope.Revision}},
 		Comments: PostCommentPage{Limit: limit, Items: make([]PostComment, 0, len(thread.Comments))},
 	}
 	for _, item := range thread.Comments {
 		out.Comments.Items = append(out.Comments.Items, PostComment{
 			ID: item.ID, Body: item.Body, Intent: item.Intent, Author: appAuthor(item.Author), CreatedAt: item.CreatedAt,
+			Mentions: appAuthors(item.Mentions),
 		})
 	}
 	if hasMore && len(thread.Comments) > 0 {
@@ -269,4 +306,109 @@ func (s *Service) SetPostState(ctx context.Context, request PostStateRequest) (d
 		PostID: request.Ref, State: request.State, SupersededBy: request.SupersededBy,
 		ActorID: request.Actor, SessionID: request.Session, RequestID: request.RequestID,
 	})
+}
+
+type ContributorLookupRequest struct {
+	Cursor, Search, Project string
+	Limit                   int
+}
+type ContributorProject struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+type ContributorItem struct {
+	Handle              string              `json:"handle"`
+	Session             string              `json:"session"`
+	Purpose             string              `json:"purpose,omitempty"`
+	Host                string              `json:"host"`
+	Project             *ContributorProject `json:"project,omitempty"`
+	ProjectRelationship string              `json:"project_relationship"`
+	Addressable         bool                `json:"addressable"`
+	Reachable           bool                `json:"reachable"`
+	Interpretation      string              `json:"interpretation"`
+	HostConnected       bool                `json:"host_connected"`
+	Execution           string              `json:"execution"`
+	LastActivity        *time.Time          `json:"last_activity,omitempty"`
+}
+type ContributorLookupResult struct {
+	Limit      int               `json:"limit"`
+	Items      []ContributorItem `json:"items"`
+	NextCursor string            `json:"next_cursor,omitempty"`
+}
+
+func (s *Service) LookupContributors(ctx context.Context, request ContributorLookupRequest) (ContributorLookupResult, error) {
+	repository, ok := s.repository.(AddressabilityRepository)
+	if !ok || s.presence == nil || len(request.Search) > 100 || strings.TrimSpace(request.Search) != request.Search {
+		return ContributorLookupResult{}, domain.ErrInvalid
+	}
+	limit := request.Limit
+	if limit == 0 {
+		limit = 10
+	}
+	if limit < 1 || limit > 20 {
+		return ContributorLookupResult{}, domain.ErrInvalid
+	}
+	after, err := decodeCursor("contributors", request.Cursor)
+	if err != nil || after != nil && after.Text == "" {
+		return ContributorLookupResult{}, domain.ErrInvalid
+	}
+	q := domain.ContributorQuery{Search: request.Search, ProjectID: request.Project, Limit: limit}
+	if after != nil {
+		q.AfterHandle = after.Text
+		q.AfterSessionID = after.ID
+	}
+	rows, err := repository.Contributors(ctx, q)
+	if err != nil {
+		return ContributorLookupResult{}, err
+	}
+	more := len(rows) > limit
+	if more {
+		rows = rows[:limit]
+	}
+	live := map[string]presence.Snapshot{}
+	for _, v := range s.presence.List("") {
+		live[v.Session] = v
+	}
+	out := ContributorLookupResult{Limit: limit, Items: make([]ContributorItem, 0, len(rows))}
+	for _, v := range rows {
+		item := ContributorItem{Handle: v.Handle, Session: v.SessionID, Purpose: v.Purpose, Host: v.Host, Addressable: true, Execution: "not_running", ProjectRelationship: "none", Interpretation: "Addressable registry session; no current reachability evidence."}
+		if v.ProjectID != "" {
+			item.Project = &ContributorProject{ID: v.ProjectID, Name: v.ProjectName}
+			item.ProjectRelationship = "project"
+			if request.Project == v.ProjectID {
+				item.ProjectRelationship = "same_project"
+			}
+		}
+		if p, ok := live[v.SessionID]; ok {
+			item.HostConnected = p.HostConnected
+			item.Execution = p.Execution
+			t := p.LastActivity
+			item.LastActivity = &t
+			item.Reachable = p.HostConnected
+			if item.Reachable {
+				item.Interpretation = "Addressable and currently connected; delivery is not guaranteed."
+			}
+		}
+		out.Items = append(out.Items, item)
+	}
+	if more && len(rows) > 0 {
+		last := rows[len(rows)-1]
+		out.NextCursor = encodeCursor("contributors", domain.BrowseCursor{Text: last.Handle, ID: last.SessionID})
+	}
+	return out, nil
+}
+
+func (s *Service) SetPerspectiveScope(ctx context.Context, request PerspectiveScopeRequest) (domain.WriteResult, error) {
+	repository, ok := s.repository.(AddressabilityRepository)
+	if !ok {
+		return domain.WriteResult{}, domain.ErrInvalid
+	}
+	return repository.SetPerspectiveScope(ctx, domain.PerspectiveScopeRequest{PostID: request.Ref, Scope: request.Scope, BaseRevision: request.BaseRevision, ActorID: request.Actor, SessionID: request.Session, RequestID: request.RequestID})
+}
+func (s *Service) Comment(ctx context.Context, request CommentRequest) (domain.WriteResult, error) {
+	repository, ok := s.repository.(AddressabilityRepository)
+	if !ok {
+		return domain.WriteResult{}, domain.ErrInvalid
+	}
+	return repository.Comment(ctx, domain.CommentRequest{PostID: request.Ref, Body: request.Body, Intent: request.Intent, ActorID: request.Actor, SessionID: request.Session, RequestID: request.RequestID, MentionSessionIDs: request.MentionSessionIDs})
 }

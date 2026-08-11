@@ -215,8 +215,28 @@ func (s *Store) UpsertSession(ctx context.Context, v domain.Session) error {
 	if v.ID == "" || v.Host == "" {
 		return domain.ErrInvalid
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO sessions(id,host,project_id,purpose,created_at) VALUES(?,?,NULLIF(?,''),?,?) ON CONFLICT(id) DO UPDATE SET host=excluded.host,project_id=excluded.project_id,purpose=excluded.purpose`, v.ID, v.Host, v.ProjectID, v.Purpose, stamp(s.now()))
-	return mapErr(err)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	created := stamp(s.now())
+	if _, err = tx.ExecContext(ctx, `INSERT INTO sessions(id,host,project_id,purpose,created_at) VALUES(?,?,NULLIF(?,''),?,?) ON CONFLICT(id) DO UPDATE SET host=excluded.host,project_id=excluded.project_id,purpose=excluded.purpose`, v.ID, v.Host, v.ProjectID, v.Purpose, created); err != nil {
+		return mapErr(err)
+	}
+	var exists, next int
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM session_handles WHERE session_id=?`, v.ID).Scan(&exists); err != nil {
+		return err
+	}
+	if exists == 0 {
+		if err = tx.QueryRowContext(ctx, `SELECT COALESCE(max(CAST(substr(handle,7) AS INTEGER)),0)+1 FROM session_handles WHERE handle GLOB 'agent-[0-9]*'`).Scan(&next); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO session_handles(session_id,handle,created_at) VALUES(?,?,?)`, v.ID, fmt.Sprintf("agent-%06d", next), created); err != nil {
+			return mapErr(err)
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) ObservePresence(ctx context.Context, sessionID, hostState, turn string) error {

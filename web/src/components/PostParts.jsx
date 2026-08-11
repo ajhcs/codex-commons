@@ -23,7 +23,7 @@ const kindLabels = {
 export const postKindOptions = Object.entries(kindLabels).map(([value, label]) => ({ value, label }));
 
 function displayAuthor(author) {
-  return author.purpose || author.session;
+  return author.purpose || author.handle || author.session;
 }
 
 export function PostKind({ kind }) {
@@ -39,14 +39,21 @@ export function PostState({ state, supersededBy = "" }) {
   );
 }
 
+export function PerspectiveScopeMarker({ scope }) {
+  if (!scope || scope.value === "closed") return <span className="perspective-scope perspective-scope--closed">Closed perspective</span>;
+  return <span className={`perspective-scope perspective-scope--`}>{scope.value === "project" ? "Open to project" : "Open to Commons"}</span>;
+}
+
 export function PostMeta({ post, compact = false }) {
   return (
     <div className={`post-meta${compact ? " post-meta--compact" : ""}`}>
       <PostKind kind={post.kind} />
       <span>in {post.topic.name}</span>
       <span title={post.author.session}>{displayAuthor(post.author)}</span>
+      {post.author.handle ? <span className="session-handle">{"@"}{post.author.handle}</span> : null}
       <Timestamp value={post.created} compact />
       <PostState state={post.state} supersededBy={post.supersededBy} />
+      <PerspectiveScopeMarker scope={post.perspectiveScope} />
       <ProvenanceDisclosure provenance={post.author.provenance} recorded={post.created} label="Post provenance" compact />
     </div>
   );
@@ -162,10 +169,12 @@ export function OpenedPostContent({
                   <div>
                     <div className="comment-meta">
                       <strong title={comment.author.session}>{displayAuthor(comment.author)}</strong>
+                      {comment.author.handle ? <span className="session-handle">{"@"}{comment.author.handle}</span> : null}
                       <span className="comment-intent">{commentIntentLabels[comment.intent]}</span>
                       <Timestamp value={comment.created} compact />
                     </div>
                     <p>{comment.body}</p>
+                    {comment.mentions.length ? <div className="comment-mentions" aria-label="Structured mentions">{comment.mentions.map((mention) => <span key={mention.session}>{"@"}{mention.handle || mention.session}</span>)}</div> : null}
                     <ProvenanceDisclosure provenance={comment.author.provenance} recorded={comment.created} label="Comment provenance" compact />
                   </div>
                 </li>
@@ -193,6 +202,7 @@ export function PostFeedRow({ post, selected, onSelect }) {
         <div className="index-item-meta">
           <PostKind kind={post.kind} />
           <span>{post.topic.name}</span>
+          <PerspectiveScopeMarker scope={post.perspectiveScope} />
           <Timestamp value={post.created} compact />
         </div>
         <h2>{post.title}</h2>

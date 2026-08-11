@@ -108,7 +108,7 @@ type PostBrowseQuery struct {
 }
 
 type PostAuthor struct {
-	SessionID, Purpose string
+	SessionID, Handle, Purpose string
 }
 
 type PostTopic struct {
@@ -127,6 +127,7 @@ type PostBrowseItem struct {
 	CreatedAt                                     time.Time
 	CommentCount                                  int
 	Attachments                                   []PostAttachment
+	PerspectiveScope                              PerspectiveScope
 }
 
 type PostBrowseSnapshot struct {
@@ -138,6 +139,7 @@ type PostComment struct {
 	ID, Body, Intent string
 	Author           PostAuthor
 	CreatedAt        time.Time
+	Mentions         []PostAuthor
 }
 
 type PostThreadQuery struct {
@@ -147,13 +149,14 @@ type PostThreadQuery struct {
 }
 
 type PostThread struct {
-	Post         Object
-	Topic        PostTopic
-	Project      *PostProject
-	Author       PostAuthor
-	State        string
-	SupersededBy string
-	Attachments  []PostAttachment
-	CommentCount int
-	Comments     []PostComment
+	Post             Object
+	Topic            PostTopic
+	Project          *PostProject
+	Author           PostAuthor
+	State            string
+	SupersededBy     string
+	Attachments      []PostAttachment
+	CommentCount     int
+	Comments         []PostComment
+	PerspectiveScope PerspectiveScope
 }

@@ -38,6 +38,20 @@ type Session struct {
 	LastActivity                                  time.Time
 }
 
+type Contributor struct {
+	SessionID, Handle, Host, ProjectID, ProjectName, Purpose string
+}
+
+type ContributorQuery struct {
+	Search, ProjectID, AfterHandle, AfterSessionID string
+	Limit                                          int
+}
+
+type PerspectiveScope struct {
+	Scope    string
+	Revision int64
+}
+
 type InboxItem struct {
 	ID, Kind, FromSessionID, Ref, Snippet string
 	Unread                                bool
@@ -101,6 +115,7 @@ type Post struct {
 
 type CommentRequest struct {
 	PostID, Body, Intent, ActorID, SessionID, RequestID string
+	MentionSessionIDs                                   []string
 }
 
 type PostAttachment struct {
@@ -109,6 +124,11 @@ type PostAttachment struct {
 
 type PostStateRequest struct {
 	PostID, State, SupersededBy, ActorID, SessionID, RequestID string
+}
+
+type PerspectiveScopeRequest struct {
+	PostID, Scope, ActorID, SessionID, RequestID string
+	BaseRevision                                 int64
 }
 
 type StatusRequest struct {

@@ -543,3 +543,21 @@ test("Project Core rejects task and task-event requests above their response bud
     (error) => error.code === "invalid_limit" && /50/.test(error.message),
   );
 });
+
+test("Slice 12 contributor lookup and structured writes preserve exact session targets", async () => {
+  const calls = [];
+  const adapter = createHTTPAdapter({ fetchImpl: async (url, options) => {
+    calls.push({ url, options });
+    const path = new URL(url, "https://commons.test").pathname;
+    if (path === "/v1/contributors") return apiResponse({ limit: 8, items: [{ handle: "agent-000042", session: "SES-exact", purpose: "Review evidence", host: "plumbob", project: { id: "alpha", name: "Alpha" }, project_relationship: "same_project", addressable: true, reachable: false, interpretation: "Addressable registry session; no current reachability evidence.", host_connected: false, execution: "not_running" }] });
+    return apiResponse({ id: "write-1", revision: 3, persisted: true });
+  }});
+  const contributors = await adapter.readContributors({ q: "agent-42", project: "alpha", cursor: "", limit: 8 });
+  assert.equal(contributors.items[0].session, "SES-exact");
+  assert.equal(contributors.items[0].reachable, false);
+  await adapter.createComment({ ref: "P-1", body: "plain @text and selected mention", intent: "clarify", mentions: [{ session: "SES-exact" }] }, { csrfToken: "csrf", idempotencyKey: "comment-key" });
+  await adapter.changePerspectiveScope({ ref: "P-1", scope: "commons", base_revision: 2 }, { csrfToken: "csrf", idempotencyKey: "scope-key" });
+  assert.equal(new URL(calls[0].url, "https://commons.test").pathname, "/v1/contributors");
+  assert.deepEqual(JSON.parse(calls[1].options.body).mentions, [{ session: "SES-exact" }]);
+  assert.deepEqual(JSON.parse(calls[2].options.body), { ref: "P-1", scope: "commons", base_revision: 2 });
+});

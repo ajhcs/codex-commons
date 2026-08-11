@@ -43,3 +43,18 @@ func (c *Client) SetPostState(ctx context.Context, in httpapi.PostStateWriteRequ
 	err := c.post(ctx, "/v1/post-states", in, key, &out)
 	return out, err
 }
+
+func (c *Client) LookupContributors(ctx context.Context, q httpapi.ContributorLookupQuery) (httpapi.ContributorLookupResult, error) {
+	values := url.Values{}
+	setBrowsePage(values, q.Cursor, q.Limit)
+	setIfPresent(values, "q", q.Search)
+	setIfPresent(values, "project", q.Project)
+	var out httpapi.ContributorLookupResult
+	err := c.get(ctx, "/v1/contributors", values, "", &out)
+	return out, err
+}
+func (c *Client) SetPerspectiveScope(ctx context.Context, in httpapi.PerspectiveScopeWriteRequest, key string) (httpapi.WriteResult, error) {
+	var out httpapi.WriteResult
+	err := c.post(ctx, "/v1/post-perspective-scopes", in, key, &out)
+	return out, err
+}

@@ -1449,3 +1449,28 @@ html[data-theme="dark"] .comment-avatar { background: var(--surface-soft); color
   .detail-command-row > div { width: 100%; flex-wrap: wrap; }
   .detail-command-row > div button { flex: 1; justify-content: center; }
 }
+
+/* Slice 12 extends the accepted Posts workspace without changing its geometry. */
+.perspective-scope { color: var(--text-tertiary); font-size: 9px; white-space: nowrap; }
+.perspective-scope--project, .perspective-scope--commons { color: var(--blue); font-weight: 600; }
+.session-handle { color: var(--text-tertiary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9px; }
+.comment-composer { position: relative; }
+.mention-chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 0 0 7px; }
+.mention-chips > button { min-height: 27px; display: inline-flex; align-items: center; gap: 5px; padding: 0 7px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-subtle); color: var(--text); font: inherit; font-size: 9px; }
+.mention-chips > button small { max-width: 160px; overflow: hidden; color: var(--text-tertiary); text-overflow: ellipsis; white-space: nowrap; }
+.mention-autocomplete { position: absolute; z-index: 16; right: 0; left: 0; margin-top: 4px; padding: 5px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg); box-shadow: var(--shadow-overlay); }
+.mention-autocomplete > button { width: 100%; min-height: 44px; display: grid; grid-template-columns: minmax(100px, .8fr) minmax(0, 1.2fr); gap: 2px 10px; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text); text-align: left; }
+.mention-autocomplete > button.is-active, .mention-autocomplete > button:hover:not(:disabled) { background: var(--surface-soft); }
+.mention-autocomplete > button:disabled { opacity: .45; cursor: not-allowed; }
+.mention-autocomplete strong { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
+.mention-autocomplete span { min-width: 0; overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.mention-autocomplete small { grid-column: 1 / -1; color: var(--text-tertiary); font-size: 9px; }
+.mention-autocomplete > p { margin: 0; padding: 8px; color: var(--text-tertiary); font-size: 10px; }
+.comment-mentions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.comment-mentions span { color: var(--blue); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9px; }
+html[data-theme="dark"] :is(.comment-body-field textarea, .mention-autocomplete, .mention-chips > button) { background: var(--bg); color: var(--text); }
+@media (max-width: 640px) {
+  .mention-autocomplete > button { grid-template-columns: 1fr; }
+  .mention-autocomplete small { grid-column: 1; }
+  .comment-composer-footer { align-items: flex-end; }
+}

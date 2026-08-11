@@ -229,6 +229,9 @@ func (s *Store) Post(ctx context.Context, req domain.PostRequest) (domain.Post, 
 		if _, err := tx.ExecContext(ctx, `INSERT INTO posts(id,topic_id,project_id,project_revision,kind,title,body,basis,ref,session_id,request_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,NULLIF(?,''),?)`, id, req.TopicID, project, rev, req.Kind, req.Title, req.Body, req.Basis, req.Ref, req.SessionID, storageKey, stamp(created)); err != nil {
 			return err
 		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO post_perspective_scopes(post_id,scope,revision,event_id,updated_at) VALUES(?,'closed',0,NULL,?)`, id, stamp(created)); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO search_documents(project_id,ref,kind,revision,title,body) VALUES(?,?,?,?,?,?)`, project, id, req.Kind, valueRev(rev), req.Title, req.Body+" "+req.Basis); err != nil {
 			return err
 		}
@@ -284,14 +287,31 @@ func (s *Store) commentByRequest(ctx context.Context, storageKey string) (domain
 	if rev.Valid {
 		result.Revision = rev.Int64
 	}
+	prior.MentionSessionIDs, err = readCommentMentionIDs(ctx, s.db, result.ID)
+	if err != nil {
+		return prior, result, err
+	}
 	return prior, result, nil
 }
 
 func sameComment(a, b domain.CommentRequest) bool {
-	return a.PostID == b.PostID && a.Body == b.Body && a.Intent == b.Intent && a.SessionID == b.SessionID
+	if a.PostID != b.PostID || a.Body != b.Body || a.Intent != b.Intent || a.SessionID != b.SessionID || len(a.MentionSessionIDs) != len(b.MentionSessionIDs) {
+		return false
+	}
+	for i := range a.MentionSessionIDs {
+		if a.MentionSessionIDs[i] != b.MentionSessionIDs[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) Comment(ctx context.Context, req domain.CommentRequest) (domain.WriteResult, error) {
+	mentions, valid := normalizeMentionIDs(req.MentionSessionIDs)
+	if !valid {
+		return domain.WriteResult{}, domain.ErrInvalid
+	}
+	req.MentionSessionIDs = mentions
 	if req.PostID == "" || req.Body == "" || !domain.CommentIntents[req.Intent] || req.SessionID == "" {
 		return domain.WriteResult{}, domain.ErrInvalid
 	}
@@ -315,8 +335,27 @@ func (s *Store) Comment(ctx context.Context, req domain.CommentRequest) (domain.
 	id := newID("R-")
 	created := stamp(s.now())
 	insert := func(tx *sql.Tx, rev any) error {
-		_, err := tx.ExecContext(ctx, `INSERT INTO comments(id,post_id,project_id,project_revision,body,intent,session_id,request_id,created_at) VALUES(?,?,?,?,?,?,?,NULLIF(?,''),?)`, id, req.PostID, project, rev, req.Body, req.Intent, req.SessionID, storageKey, created)
-		return err
+		if _, err := tx.ExecContext(ctx, `INSERT INTO comments(id,post_id,project_id,project_revision,body,intent,session_id,request_id,created_at) VALUES(?,?,?,?,?,?,?,NULLIF(?,''),?)`, id, req.PostID, project, rev, req.Body, req.Intent, req.SessionID, storageKey, created); err != nil {
+			return err
+		}
+		for position, recipient := range req.MentionSessionIDs {
+			var exists int
+			if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM session_handles WHERE session_id=?`, recipient).Scan(&exists); err != nil {
+				return err
+			}
+			if exists != 1 {
+				return domain.ErrInvalid
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO comment_mentions(comment_id,recipient_session_id,position,created_at) VALUES(?,?,?,?)`, id, recipient, position, created); err != nil {
+				return err
+			}
+			if project.Valid {
+				if _, err := tx.ExecContext(ctx, `INSERT INTO inbox_items(id,project_id,recipient_session_id,kind,from_session_id,ref,snippet,unread,created_at) VALUES(?,?,?,?,?,?,?,1,?)`, newID("M-"), project.String, recipient, "mention", req.SessionID, req.PostID, boundedUTF8(req.Body, 200), created); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 	}
 	var result domain.WriteResult
 	var err error

@@ -234,7 +234,11 @@ func (b *Backend) Post(ctx context.Context, request httpapi.PostRequest, meta ht
 }
 
 func (b *Backend) Comment(ctx context.Context, request httpapi.CommentRequest, meta httpapi.RequestMeta) (httpapi.WriteResult, error) {
-	result, err := b.store.Comment(ctx, domain.CommentRequest{PostID: request.Ref, Body: request.Body, Intent: request.Intent, ActorID: meta.Actor, SessionID: meta.Session, RequestID: meta.IdempotencyKey})
+	mentions := make([]string, 0, len(request.Mentions))
+	for _, m := range request.Mentions {
+		mentions = append(mentions, m.Session)
+	}
+	result, err := b.store.Comment(ctx, domain.CommentRequest{PostID: request.Ref, Body: request.Body, Intent: request.Intent, ActorID: meta.Actor, SessionID: meta.Session, RequestID: meta.IdempotencyKey, MentionSessionIDs: mentions})
 	if err != nil {
 		return httpapi.WriteResult{}, mapError(err, "comment")
 	}

@@ -21,6 +21,11 @@ type Backend interface {
 	ProjectOverview(context.Context, ProjectOverviewQuery, RequestMeta) (ProjectOverviewResult, error)
 }
 
+type AddressabilityBackend interface {
+	LookupContributors(context.Context, ContributorLookupQuery, RequestMeta) (ContributorLookupResult, error)
+	SetPerspectiveScope(context.Context, PerspectiveScopeWriteRequest, RequestMeta) (WriteResult, error)
+}
+
 type LegacyBackend interface {
 	Health(context.Context, RequestMeta) (HealthResult, error)
 	Context(context.Context, ContextQuery, RequestMeta) (ContextResult, error)
@@ -60,6 +65,8 @@ type PostFeedQuery = application.PostFeedRequest
 type PostFeedResult = application.PostFeedResult
 type PostOpenQuery = application.PostOpenRequest
 type PostOpenResult = application.PostOpenResult
+type ContributorLookupQuery = application.ContributorLookupRequest
+type ContributorLookupResult = application.ContributorLookupResult
 type PostAttachment = application.PostAttachment
 type ProjectOverviewQuery = application.ProjectOverviewQuery
 type ProjectOverviewResult = application.ProjectOverview
@@ -207,11 +214,22 @@ type PostStateWriteRequest struct {
 	SupersededBy string `json:"superseded_by,omitempty"`
 }
 
+type PerspectiveScopeWriteRequest struct {
+	Ref          string `json:"ref"`
+	Scope        string `json:"scope"`
+	BaseRevision int64  `json:"base_revision"`
+}
+
+type CommentMentionRequest struct {
+	Session string `json:"session"`
+}
+
 type CommentRequest struct {
-	Ref    string `json:"ref"`
-	Body   string `json:"body"`
-	Intent string `json:"intent"`
-	Basis  string `json:"basis,omitempty"`
+	Ref      string                  `json:"ref"`
+	Body     string                  `json:"body"`
+	Intent   string                  `json:"intent"`
+	Basis    string                  `json:"basis,omitempty"`
+	Mentions []CommentMentionRequest `json:"mentions,omitempty"`
 }
 
 type StatusRequest struct {

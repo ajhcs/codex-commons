@@ -1,4 +1,4 @@
-import { ATTACHMENT_KINDS, ATTENTION_SEVERITIES, COMMENT_INTENTS, EXECUTION_STATES, MAX_BROWSE_LIMIT, MAX_OVERVIEW_LIMIT, POST_KINDS, POST_STATES } from "../contracts/commons.js";
+import { ATTACHMENT_KINDS, ATTENTION_SEVERITIES, COMMENT_INTENTS, EXECUTION_STATES, PERSPECTIVE_SCOPES, MAX_BROWSE_LIMIT, MAX_OVERVIEW_LIMIT, POST_KINDS, POST_STATES } from "../contracts/commons.js";
 import { contractFixtures } from "./fixtures.js";
 import { postFixtures } from "./postFixtures.js";
 import { createProjectCoreHTTPMethods, projectCoreFixtureMethods } from "./projectCoreAdapter.js";
@@ -287,6 +287,7 @@ function normalizeTopics(data) {
 function normalizeAuthor(value) {
   value = requireRecord(value);
   return {
+    handle: typeof value.handle === "string" ? value.handle : "",
     session: requireString(value.session),
     purpose: typeof value.purpose === "string" ? value.purpose : "",
     actor: typeof value.actor === "string" ? value.actor : "",
@@ -324,6 +325,8 @@ function normalizePostSummary(value, bodyFallback = "") {
   if (!POST_KINDS.includes(value.kind) || !POST_STATES.includes(value.state)) throw invalidPayload();
   if (!Array.isArray(value.attachments) || value.attachments.length > 8) throw invalidPayload();
   const destination = requireRecord(value.destination);
+  const scope = value.perspective_scope == null ? { value: "closed", revision: 0 } : requireRecord(value.perspective_scope);
+  if (!PERSPECTIVE_SCOPES.includes(scope.value)) throw invalidPayload();
   return {
     id: requireString(value.id),
     title: requireString(value.title),
@@ -338,6 +341,7 @@ function normalizePostSummary(value, bodyFallback = "") {
     supersededBy: typeof value.superseded_by === "string" ? value.superseded_by : "",
     attachments: value.attachments.map(normalizeAttachment),
     destination: { kind: requireString(destination.kind), ref: requireString(destination.ref) },
+    perspectiveScope: { value: scope.value, revision: requireInteger(scope.revision) },
   };
 }
 
@@ -375,10 +379,19 @@ function normalizeOpenedPost(data) {
           intent: value.intent,
           author: normalizeAuthor(value.author),
           created: timestampLabel(value.created_at),
+          mentions: Array.isArray(value.mentions) ? value.mentions.map(normalizeAuthor) : [],
         };
       }),
     },
   };
+}
+
+function normalizeContributors(data) {
+  data = requirePage(data, 20);
+  return { limit: data.limit, nextCursor: typeof data.next_cursor === "string" ? data.next_cursor : "", items: data.items.map((value) => {
+    value = requireRecord(value);
+    return { handle: requireString(value.handle), session: requireString(value.session), purpose: typeof value.purpose === "string" ? value.purpose : "", host: requireString(value.host), project: value.project == null ? null : normalizeTopic(value.project), projectRelationship: requireString(value.project_relationship), addressable: Boolean(value.addressable), reachable: Boolean(value.reachable), interpretation: requireString(value.interpretation), connected: Boolean(value.host_connected), execution: requireString(value.execution), lastActivity: value.last_activity ? timestampLabel(value.last_activity) : null };
+  }) };
 }
 
 function safelyNormalize(normalize, data) {
@@ -405,6 +418,8 @@ export function createHTTPAdapter(options) {
     async readPosts(query, signal) {
       return safelyNormalize(normalizePostsPage, await transport.readPosts(query, signal));
     },
+    async readContributors(query, signal) { return safelyNormalize(normalizeContributors, await transport.readContributors(query, signal)); },
+
     async readTopics(limit, signal) {
       return safelyNormalize(normalizeTopics, await transport.readTopics(limit, signal));
     },
@@ -420,6 +435,7 @@ export function createHTTPAdapter(options) {
     async changePostState(input, writeOptions, signal) {
       return safelyNormalize(normalizeMutation, await transport.changePostState(input, writeOptions, signal));
     },
+    async changePerspectiveScope(input, writeOptions, signal) { return safelyNormalize(normalizeMutation, await transport.changePerspectiveScope(input, writeOptions, signal)); },
     async readAttention(query, signal) {
       return safelyNormalize(normalizeAttentionPage, await transport.readAttention(query, signal));
     },
@@ -437,6 +453,13 @@ export function createHTTPAdapter(options) {
 }
 
 export const fixtureAdapter = {
+  async readContributors(query, signal) {
+    let records = contractFixtures.people.items.map((item, index) => ({ handle: "agent-" + String(index + 1).padStart(6, "0"), session: item.session, purpose: item.purpose || "", host: item.host, project: item.project ? { id: item.project, name: item.project_name || item.project } : null, project_relationship: query.project === item.project ? "same_project" : "project", addressable: true, reachable: Boolean(item.host_connected), interpretation: item.host_connected ? "Addressable and currently connected; delivery is not guaranteed." : "Addressable registry session; no current reachability evidence.", host_connected: Boolean(item.host_connected), execution: item.execution, last_activity: item.last_activity }));
+    if (query.q) { const term = query.q.toLowerCase(); records = records.filter((item) => (item.handle + " " + item.purpose).toLowerCase().includes(term)); }
+    if (query.project) records = records.filter((item) => item.project?.id === query.project);
+    const result = page(records, query.cursor, query.limit);
+    return wait(normalizeContributors({ limit: query.limit, items: result.items, next_cursor: result.nextCursor }), signal);
+  },
   async readSession(signal) {
     return wait({ authenticated: true, principal: { kind: "human", displayName: "Alex Lee" }, csrfToken: "fixture-csrf" }, signal);
   },
@@ -492,6 +515,7 @@ export const fixtureAdapter = {
   async changePostState(input, _writeOptions, signal) {
     return wait({ id: input.ref, revision: 0, persisted: true }, signal);
   },
+  async changePerspectiveScope(input, _writeOptions, signal) { return wait({ id: input.ref, revision: input.base_revision + 1, persisted: true }, signal); },
 
   async readAttention(query, signal) {
     let records = contractFixtures.attention.items;

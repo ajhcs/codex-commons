@@ -115,14 +115,17 @@ func (s *Store) PostBrowseSnapshot(ctx context.Context, query domain.PostBrowseQ
 	}
 	pageArgs = append(pageArgs, query.Limit+1)
 	rows, err := tx.QueryContext(ctx, `SELECT p.id,p.kind,p.title,p.body,p.created_at,t.id,t.name,
-COALESCE(pr.id,''),COALESCE(pr.name,''),p.session_id,COALESCE(s.purpose,''),
+COALESCE(pr.id,''),COALESCE(pr.name,''),p.session_id,COALESCE(h.handle,''),COALESCE(s.purpose,''),
 (SELECT count(*) FROM comments c WHERE c.post_id=p.id),
 COALESCE((SELECT e.state FROM post_state_events e WHERE e.post_id=p.id ORDER BY e.sequence DESC LIMIT 1),'open'),
-COALESCE((SELECT e.superseded_by FROM post_state_events e WHERE e.post_id=p.id ORDER BY e.sequence DESC LIMIT 1),'')
+COALESCE((SELECT e.superseded_by FROM post_state_events e WHERE e.post_id=p.id ORDER BY e.sequence DESC LIMIT 1),''),
+COALESCE(psc.scope,'closed'),COALESCE(psc.revision,0)
 FROM `+postFrom(query.Filters)+`
 JOIN topics t ON t.id=p.topic_id
 LEFT JOIN projects pr ON pr.id=p.project_id
 LEFT JOIN sessions s ON s.id=p.session_id
+LEFT JOIN session_handles h ON h.session_id=p.session_id
+LEFT JOIN post_perspective_scopes psc ON psc.post_id=p.id
 WHERE `+pageWhere+`
 ORDER BY julianday(p.created_at) DESC,p.id
 LIMIT ?`, pageArgs...)
@@ -134,8 +137,8 @@ LIMIT ?`, pageArgs...)
 		var body, created, projectID, projectName string
 		if err := rows.Scan(&item.ID, &item.Kind, &item.Title, &body, &created,
 			&item.Topic.ID, &item.Topic.Name, &projectID, &projectName,
-			&item.Author.SessionID, &item.Author.Purpose, &item.CommentCount,
-			&item.State, &item.SupersededBy); err != nil {
+			&item.Author.SessionID, &item.Author.Handle, &item.Author.Purpose, &item.CommentCount,
+			&item.State, &item.SupersededBy, &item.PerspectiveScope.Scope, &item.PerspectiveScope.Revision); err != nil {
 			rows.Close()
 			return out, err
 		}
@@ -196,16 +199,18 @@ func (s *Store) PostThread(ctx context.Context, query domain.PostThreadQuery) (d
 	var created, projectID, projectName string
 	err = tx.QueryRowContext(ctx, `SELECT p.id,COALESCE(p.project_id,''),p.topic_id,p.kind,
 COALESCE(p.project_revision,0),p.title,p.body,p.basis,p.ref,p.session_id,p.created_at,
-t.id,t.name,COALESCE(pr.id,''),COALESCE(pr.name,''),COALESCE(s.purpose,''),
+t.id,t.name,COALESCE(pr.id,''),COALESCE(pr.name,''),COALESCE(h.handle,''),COALESCE(s.purpose,''),
 COALESCE((SELECT e.state FROM post_state_events e WHERE e.post_id=p.id ORDER BY e.sequence DESC LIMIT 1),'open'),
 COALESCE((SELECT e.superseded_by FROM post_state_events e WHERE e.post_id=p.id ORDER BY e.sequence DESC LIMIT 1),''),
-(SELECT count(*) FROM comments c WHERE c.post_id=p.id)
+(SELECT count(*) FROM comments c WHERE c.post_id=p.id),
+COALESCE(psc.scope,'closed'),COALESCE(psc.revision,0)
 FROM posts p JOIN topics t ON t.id=p.topic_id
 LEFT JOIN projects pr ON pr.id=p.project_id LEFT JOIN sessions s ON s.id=p.session_id
+LEFT JOIN session_handles h ON h.session_id=p.session_id LEFT JOIN post_perspective_scopes psc ON psc.post_id=p.id
 WHERE p.id=?`, query.PostID).Scan(&out.Post.Ref, &out.Post.ProjectID, &out.Post.TopicID,
 		&out.Post.Kind, &out.Post.Revision, &out.Post.Title, &out.Post.Body, &out.Post.Basis,
 		&out.Post.RelatedRef, &out.Post.SessionID, &created, &out.Topic.ID, &out.Topic.Name,
-		&projectID, &projectName, &out.Author.Purpose, &out.State, &out.SupersededBy, &out.CommentCount)
+		&projectID, &projectName, &out.Author.Handle, &out.Author.Purpose, &out.State, &out.SupersededBy, &out.CommentCount, &out.PerspectiveScope.Scope, &out.PerspectiveScope.Revision)
 	if err != nil {
 		return out, mapErr(err)
 	}
@@ -224,8 +229,8 @@ WHERE p.id=?`, query.PostID).Scan(&out.Post.Ref, &out.Post.ProjectID, &out.Post.
 		args = append(args, stamp(query.After.Time.UTC()), stamp(query.After.Time.UTC()), query.After.ID)
 	}
 	args = append(args, query.Limit+1)
-	rows, err := tx.QueryContext(ctx, `SELECT c.id,c.body,c.intent,c.session_id,COALESCE(s.purpose,''),c.created_at
-FROM comments c LEFT JOIN sessions s ON s.id=c.session_id WHERE `+where+`
+	rows, err := tx.QueryContext(ctx, `SELECT c.id,c.body,c.intent,c.session_id,COALESCE(h.handle,''),COALESCE(s.purpose,''),c.created_at
+FROM comments c LEFT JOIN sessions s ON s.id=c.session_id LEFT JOIN session_handles h ON h.session_id=c.session_id WHERE `+where+`
 ORDER BY julianday(c.created_at),c.id LIMIT ?`, args...)
 	if err != nil {
 		return out, err
@@ -233,7 +238,7 @@ ORDER BY julianday(c.created_at),c.id LIMIT ?`, args...)
 	for rows.Next() {
 		var item domain.PostComment
 		var stampValue string
-		if err := rows.Scan(&item.ID, &item.Body, &item.Intent, &item.Author.SessionID, &item.Author.Purpose, &stampValue); err != nil {
+		if err := rows.Scan(&item.ID, &item.Body, &item.Intent, &item.Author.SessionID, &item.Author.Handle, &item.Author.Purpose, &stampValue); err != nil {
 			rows.Close()
 			return out, err
 		}
@@ -246,6 +251,17 @@ ORDER BY julianday(c.created_at),c.id LIMIT ?`, args...)
 	}
 	if err := rows.Close(); err != nil {
 		return out, err
+	}
+	commentIDs := make([]string, 0, len(out.Comments))
+	for _, item := range out.Comments {
+		commentIDs = append(commentIDs, item.ID)
+	}
+	mentions, err := mentionAuthorsForComments(ctx, tx, commentIDs)
+	if err != nil {
+		return out, err
+	}
+	for i := range out.Comments {
+		out.Comments[i].Mentions = mentions[out.Comments[i].ID]
 	}
 	if err := tx.Commit(); err != nil {
 		return domain.PostThread{}, err

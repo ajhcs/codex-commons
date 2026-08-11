@@ -246,7 +246,7 @@ func isHumanWritePath(path string) bool {
 		return true
 	}
 	switch path {
-	case "/v1/posts", "/v1/comments", "/v1/post-states", "/v1/topic-requests":
+	case "/v1/posts", "/v1/comments", "/v1/post-states", "/v1/post-perspective-scopes", "/v1/topic-requests":
 		return true
 	default:
 		return false

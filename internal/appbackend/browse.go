@@ -84,3 +84,32 @@ func (a *Adapter) SetPostState(ctx context.Context, request httpapi.PostStateWri
 	}
 	return httpapi.WriteResult{ID: result.ID, Revision: result.Revision, Persisted: true}, nil
 }
+
+func (a *Adapter) LookupContributors(ctx context.Context, query httpapi.ContributorLookupQuery, meta httpapi.RequestMeta) (httpapi.ContributorLookupResult, error) {
+	if err := validateBrowseIdentity(meta); err != nil {
+		return httpapi.ContributorLookupResult{}, err
+	}
+	out, err := a.home.LookupContributors(ctx, query)
+	return out, mapBrowseError(err, "contributors")
+}
+func (a *Adapter) SetPerspectiveScope(ctx context.Context, request httpapi.PerspectiveScopeWriteRequest, meta httpapi.RequestMeta) (httpapi.WriteResult, error) {
+	if meta.PrincipalKind != "human" {
+		return httpapi.WriteResult{}, httpapi.NewError(httpapi.CodeForbidden, "only the local human may change perspective scope")
+	}
+	result, err := a.home.SetPerspectiveScope(ctx, application.PerspectiveScopeRequest{Ref: request.Ref, Scope: request.Scope, BaseRevision: request.BaseRevision, Actor: meta.Actor, Session: meta.Session, RequestID: meta.IdempotencyKey})
+	if err != nil {
+		return httpapi.WriteResult{}, mapBrowseError(err, "perspective scope")
+	}
+	return httpapi.WriteResult{ID: result.ID, Revision: result.Revision, Persisted: true}, nil
+}
+func (a *Adapter) Comment(ctx context.Context, request httpapi.CommentRequest, meta httpapi.RequestMeta) (httpapi.WriteResult, error) {
+	ids := make([]string, 0, len(request.Mentions))
+	for _, m := range request.Mentions {
+		ids = append(ids, m.Session)
+	}
+	result, err := a.home.Comment(ctx, application.CommentRequest{Ref: request.Ref, Body: request.Body, Intent: request.Intent, Actor: meta.Actor, Session: meta.Session, RequestID: meta.IdempotencyKey, MentionSessionIDs: ids})
+	if err != nil {
+		return httpapi.WriteResult{}, mapBrowseError(err, "comment")
+	}
+	return httpapi.WriteResult{ID: result.ID, Revision: result.Revision, Persisted: true}, nil
+}

@@ -193,6 +193,10 @@ export function createHTTPTransport({
         cursor: query.cursor, limit: boundedLimit(query.limit, 50),
       }, signal);
     },
+    readContributors(query, signal) {
+      return read("/v1/contributors", { q: boundedText(query.q), project: query.project, cursor: query.cursor, limit: boundedLimit(query.limit, 20) }, signal);
+    },
+
     readTopics(limit = 100, signal) {
       return read("/v1/topics", { limit: boundedLimit(limit, 100) }, signal);
     },
@@ -211,6 +215,9 @@ export function createHTTPTransport({
     },
     changePostState(input, writeOptions, signal) {
       return write("/v1/post-states", input, writeOptions, signal);
+    },
+    changePerspectiveScope(input, writeOptions, signal) {
+      return write("/v1/post-perspective-scopes", input, writeOptions, signal);
     },
     readAttention(query, signal) {
       return read("/v1/attention", {

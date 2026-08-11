@@ -155,6 +155,24 @@ func (h *handler) route(w http.ResponseWriter, r *http.Request, meta RequestMeta
 		}
 		out, err := h.backend.BrowsePeople(r.Context(), query, meta)
 		h.finish(w, meta, out, err, false)
+	case r.Method == http.MethodGet && path == "/v1/contributors":
+		limit, err := intParam(r.URL.Query().Get("limit"), 10, 1, 20)
+		if err != nil {
+			h.badQuery(w, meta, err)
+			return
+		}
+		search := strings.TrimSpace(r.URL.Query().Get("q"))
+		if len(search) > 100 {
+			h.badQuery(w, meta, errors.New("q maximum length is 100"))
+			return
+		}
+		backend, ok := h.backend.(AddressabilityBackend)
+		if !ok {
+			h.finish(w, meta, nil, NewError(CodeUnavailable, "contributors unavailable"), true)
+			return
+		}
+		out, err := backend.LookupContributors(r.Context(), ContributorLookupQuery{Cursor: r.URL.Query().Get("cursor"), Search: search, Project: r.URL.Query().Get("project"), Limit: limit}, meta)
+		h.finish(w, meta, out, err, true)
 	case r.Method == http.MethodGet && path == "/v1/topics":
 		limit, err := intParam(r.URL.Query().Get("limit"), 100, 1, 100)
 		if err != nil {
@@ -348,9 +366,29 @@ func (h *handler) route(w http.ResponseWriter, r *http.Request, meta RequestMeta
 		}
 		out, err := h.backend.SetPostState(r.Context(), in, meta)
 		h.finishWrite(w, meta, out, err, true)
+	case r.Method == http.MethodPost && path == "/v1/post-perspective-scopes":
+		var in PerspectiveScopeWriteRequest
+		if !h.decode(w, r, meta, &in) {
+			return
+		}
+		if in.Ref == "" || (in.Scope != "closed" && in.Scope != "project" && in.Scope != "commons") || in.BaseRevision < 0 {
+			h.badBody(w, meta, "valid ref, scope, and base_revision are required")
+			return
+		}
+		backend, ok := h.backend.(AddressabilityBackend)
+		if !ok {
+			h.finishWrite(w, meta, WriteResult{}, NewError(CodeUnavailable, "perspective scope unavailable"), true)
+			return
+		}
+		out, err := backend.SetPerspectiveScope(r.Context(), in, meta)
+		h.finishWrite(w, meta, out, err, true)
 	case r.Method == http.MethodPost && path == "/v1/comments":
 		var in CommentRequest
 		if !h.decode(w, r, meta, &in) {
+			return
+		}
+		if len(in.Mentions) > 5 {
+			h.badBody(w, meta, "at most 5 mentions are allowed")
 			return
 		}
 		if in.Ref == "" || in.Body == "" || !validCommentIntent(in.Intent) {
