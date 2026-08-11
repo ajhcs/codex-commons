@@ -1,10 +1,16 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
-import { App } from "./App.jsx";
+import { AppCore } from "./AppCore.jsx";
+import { AuthSessionProvider } from "./hooks/AuthSessionContext.jsx";
+import { PreferencesProvider } from "./hooks/usePreferences.jsx";
 import "./styles.css";
 
 createRoot(document.getElementById("root")).render(
   <React.StrictMode>
-    <App />
+    <PreferencesProvider>
+      <AuthSessionProvider>
+        <AppCore />
+      </AuthSessionProvider>
+    </PreferencesProvider>
   </React.StrictMode>,
 );

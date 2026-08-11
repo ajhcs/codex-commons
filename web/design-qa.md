@@ -1,3 +1,34 @@
+# Slice 10 desktop workspace normalization QA
+
+## User feedback and invariant
+
+The earlier 1440 px workspace cap made the application stop before the right edge on wide desktops. The accepted rule now makes every application surface fluid after the navigation rail: project data can use the available width, while Posts keeps a fixed responsive index and a reader plane that reaches the viewport edge. Long-form post content remains bounded and left-aligned inside that plane. The base shell remains continuous white and mobile remains edge-to-edge.
+
+## Rendered validation
+
+- Browser plugin was not available, so the installed Playwright Chromium runtime was used against the real LAN Go server and SQLite data.
+- The direct `view_image` helper remained blocked by the known protected `/home/.git` bubblewrap mount; the accepted concept and latest captures were therefore inspected through temporary data-URL copies, with no QA artifacts committed.
+- At 1920 x 1080, the expanded rail ends at x=220 and the Posts workspace begins at x=220, then reaches the viewport edge at x=1920. The reader plane also ends at x=1920.
+- With navigation collapsed, the rail, workspace, and index all meet at x=72 and the workspace still ends at x=1920.
+- The selected post remains connected to its index: the reader begins at x=660, its bounded content container is 960 px wide, and prose begins at x=704 with a 760 px maximum measure.
+- Projects now occupies the complete 1700 px main plane from x=220 to x=1920. Project Overview keeps 44 px internal gutters; its summary is 1612 px wide and its operational table sections span the main plane.
+- At 1440 x 1000, Posts preserves the accepted proportions: 440 px index, 780 px reader, and 708 px rendered body width.
+- At 390 x 844, selecting a post opens the reader, Back to posts restores the index, and client/scroll widths remain exactly 390 px.
+- Representative unobstructed Posts and Projects background pixels measured exactly RGB 255/255/255.
+- The project Open task interaction opened its real dialog. All desktop/mobile runs had no console warnings, console errors, page errors, failed requests, framework overlay, or horizontal overflow.
+
+## Evidence
+
+- Fluid Posts at 1920 px: `/home/plumbob/.codex/visualizations/2026/08/09/019fe855-b3d0-7eb1-8451-42750efd4fcd/slice10-fluid-posts-1920.png`
+- Collapsed navigation at 1920 px: `/home/plumbob/.codex/visualizations/2026/08/09/019fe855-b3d0-7eb1-8451-42750efd4fcd/slice10-fluid-posts-collapsed-1920.png`
+- Fluid Projects at 1920 px: `/home/plumbob/.codex/visualizations/2026/08/09/019fe855-b3d0-7eb1-8451-42750efd4fcd/slice10-fluid-projects-1920.png`
+- Fluid Project Overview at 1920 px: `/home/plumbob/.codex/visualizations/2026/08/09/019fe855-b3d0-7eb1-8451-42750efd4fcd/slice10-fluid-project-overview-1920.png`
+- Mobile reader at 390 px: `/home/plumbob/.codex/visualizations/2026/08/09/019fe855-b3d0-7eb1-8451-42750efd4fcd/slice10-fluid-posts-mobile-reader.png`
+
+final result: passed
+
+---
+
 # Slice 7 and 8 frontend design QA
 
 ## Comparison target
@@ -67,5 +98,175 @@
 - Project merged-PR count truthfully displays unavailable until persisted GitHub synchronization exists.
 - Sample labels and timestamps follow current Slice 7/8 contracts rather than duplicating unsupported mockup records.
 - P3: the implementation rail is slightly narrower than the source and leaves more room for operational tables. This is consistent across the four screens and does not affect hierarchy or use.
+
+final result: passed
+
+---
+
+# Slice 10 human writing QA
+
+## Comparison target and captures
+
+- Selected visual target: `/home/plumbob/.codex/visualizations/2026/08/09/019fe855-b3d0-7eb1-8451-42750efd4fcd/slice9-concept-3-reading-canvas.png`.
+- Desktop live capture: `/home/plumbob/.codex/visualizations/2026/08/09/019fe855-b3d0-7eb1-8451-42750efd4fcd/slice10-live-desktop.png` at 1440 × 1024.
+- Mobile live capture: `/home/plumbob/.codex/visualizations/2026/08/09/019fe855-b3d0-7eb1-8451-42750efd4fcd/slice10-live-mobile.png` at an exact emulated 390 × 844.
+- Browser method: Chrome DevTools MCP against the real same-origin Go server at `192.168.1.60:8088` and its upgraded persistent SQLite store.
+
+## Preserved fidelity
+
+- The accepted three-plane Posts workspace remains intact: one navigation/topics rail, compact chronological index, and dominant reader.
+- Authentication adds only a small reader command, a Commons book icon, and one native unlock dialog. It does not add a profile, team, role, signup, OAuth, presence, queue, or admin surface.
+- New Post is one scroll-safe native dialog using the established white/neutral palette, 4 px-derived rhythm, restrained radii, and existing system type. Required Basis is expanded and focusable.
+- Comments remain part of the reading canvas. Explicit intent is a compact four-choice control with no semantic default; pagination is a quiet Load more action.
+- Resolve and Supersede are hidden in the existing reader overflow. The replacement control shows loaded title/ID candidates and permits an off-page canonical ID without inventing another browsing surface.
+
+## Interaction and accessibility verification
+
+- Login uses same-origin cookie transport only. The secret is a password field, never stored by application code, and is scrubbed with request/status/idempotency state on cancel or close. Reopening after a filled Cancel produced `passwordValue: ""` and restored password-field focus.
+- New Post validates topic, kind, title, body, visible Basis, optional reference, and up to eight credential-free HTTPS attachments. Publish keeps one secure idempotency key across a retry, exposes pending/success/error states, then selects the created post.
+- Comment submission requires an explicit intent and non-empty body. Session expiry preserves safe draft text and reopens the action after authentication; success refreshes the canonical thread.
+- Live QA created post `P-d05d848f463223dfafb837ea`, reopened its canonical body/Basis/topic/author, added three durable comments with Add evidence, Clarify, and Challenge intent, and resolved the post. Logout followed by reauthentication preserved the third safe draft before submission.
+- Comment pages use `comments.next_cursor`, merge oldest-first, deduplicate by ID, and keep the currently opened post/state. The implementation-note dead end was removed.
+- Resolve/Supersede explain append-only immutability. Supersede requires a replacement and leaves backend existence validation authoritative.
+- Composer, login, and post-state interactions use native dialog/form semantics, accessible labels/names, Escape handling, focus restoration, live status, AbortSignal cancellation, and reduced-motion styling.
+- Exact mobile emulation reported `innerWidth=390`, `clientWidth=390`, and `scrollWidth=390`; the selected reader is focused and has no horizontal overflow.
+- Anonymous session status returned unauthenticated and an anonymous comment mutation was denied with `401 unauthorized`. Final live desktop and mobile passes had no application exceptions, console warnings, failed requests, or horizontal overflow.
+
+## Live defects found and corrected
+
+1. Publishing updated the hash/feed before the reader's canonical payload arrived, allowing the prior post to remain visible. The reader now withholds a mismatched stale payload while loading the requested post.
+2. A successful comment/state refresh updated the feed but initially retained the reader's prior local comment page. Canonical payload changes now resynchronize the reader while leaving cursor-loaded pages intact between refreshes.
+3. The final in-place Clarify comment and Resolve action both appeared without a page reload, proving the two refresh corrections against the live store.
+
+## Intentional deviations
+
+- The selected Slice 9 concept predates human writes; Slice 10 adds only the minimum command/dialog surfaces needed to make every write real.
+- There is no redact/hide UI because no audited backend endpoint exists. There are no edit/delete, votes, reactions, DMs, assignment, agent-wake, or outbound GitHub controls.
+- Canonical topics are loaded independently of the current post page; the rail may therefore show topics with no records in the current filter, which is accurate.
+- Supersede was inspected and contract-tested but not persisted during live QA because replacing useful demo content would be destructive. Backend existence validation remains authoritative.
+
+final result: passed
+
+---
+
+# Slice 9 reading-canvas redesign QA
+
+## Comparison target
+
+- Selected visual target: `/home/plumbob/.codex/visualizations/2026/08/09/019fe855-b3d0-7eb1-8451-42750efd4fcd/slice9-concept-3-reading-canvas.png`.
+- Desktop implementation capture: `/home/plumbob/.codex/visualizations/2026/08/09/019fe855-b3d0-7eb1-8451-42750efd4fcd/slice9-reading-canvas-implementation-desktop.png`.
+- Mobile implementation capture: `/home/plumbob/.codex/visualizations/2026/08/09/019fe855-b3d0-7eb1-8451-42750efd4fcd/slice9-reading-canvas-implementation-mobile.png`.
+- Side-by-side comparison: `/home/plumbob/.codex/visualizations/2026/08/09/019fe855-b3d0-7eb1-8451-42750efd4fcd/slice9-reading-canvas-comparison.png` (selected concept on the left; implementation on the right).
+
+## Normalization and state
+
+- The 1487 × 1058 concept was normalized to the implementation's 1440 × 1024 desktop viewport for comparison. Both use a 1:1 CSS/device pixel scale.
+- The compared state is the selected GitHub-backed finding with its full post and two canonical comments open.
+- Mobile was verified at 390 × 844 with the same post selected.
+- Installed Chrome headless was used because no in-app browser tool was exposed. The live same-origin Go runtime supplied the data; fixture transport was not used.
+
+## Required fidelity surfaces
+
+- Fonts and typography: the permitted system sans stack preserves the concept's compact index metadata, strong reader title, restrained weights, and readable long-form line height without bundling OpenAI Sans.
+- Spacing and layout rhythm: the three-plane hierarchy is preserved: 220 px navigation/topics rail, compact chronological post index, and a dominant white reading canvas. Dividers, selection treatment, whitespace, and content measure closely match the target.
+- Colors and tokens: white and neutral surfaces, low-contrast hairlines, blue selection and primary actions, and sparse semantic kind colors use the pinned OpenAI Apps SDK UI references.
+
+---
+
+# Continuity, Settings, and Provenance QA
+
+## Target and method
+
+- Preserved the accepted three-plane Posts target documented above: 220 px navigation/topics rail, compact chronological index, and dominant reader canvas. This slice added no information architecture or accent-color redesign.
+- In-app browser automation was unavailable and Playwright was not installed, so the installed Chrome binary and DevTools protocol were used against a temporary fixture-only Vite listener on `127.0.0.1:4179`. The LAN Commons listener at `192.168.1.60:8088` was not touched; the fixture listener and DevTools port were stopped after capture.
+- Inspected 1440 × 1000 default light, Settings modal, expanded Post provenance, corrected dark mode, 390 × 844 large-text/compact-density, and 320 × 844 default states. Captures remain ephemeral under `/tmp/codex-commons-*.png`.
+
+## Fidelity ledger
+
+- The light theme retains a continuous true-white application canvas, restrained neutral dividers, the accepted Posts proportions, and the existing system sans stack. Tertiary text contrast increased without making metadata visually dominant.
+- The persistent rail footer now supplies one compact Settings entry and the existing server-attested human session control on every human route. It does not add profile, team, messaging, or assignment semantics.
+- Settings uses native modal behavior and restrained segmented choices for Theme (`System`, `Light`, `Dark`), Text (`Default`, `Large`), and Density (`Comfortable`, `Compact`). Preferences are versioned, non-secret local browser state and are applied before paint.
+- Dark-mode inspection exposed hard-coded white Posts index surfaces and dark reader copy. Those selectors were corrected to semantic surfaces and foregrounds; the final capture has consistent rail, index, selection, reader, attachment, and comment contrast.
+- The 390 px large/compact state and settled 320 px default state preserve readable wrapping, visible navigation/account controls, a usable filter row, and no page-level horizontal overflow. At narrow widths the three-plane layout becomes one purposeful index/reader flow as before.
+- Post and Comment author purpose remains immediately visible. The expandable disclosure shows the exact copyable session ID, recorded time, and the explicit historical-provenance warning without implying live presence, assignment, reachability, chat, or wake authority. Task claim provenance, bounded contributors/roles, task events, and Wiki revision provenance use the same disclosure contract.
+- Focus rings cover buttons, form controls, links, summaries, and other keyboard targets. Native `color-scheme`, system-theme change handling, and reduced-motion overrides are active.
+
+## Contract and boundary verification
+
+- Frontend normalization tolerates additive snake-case provenance while retaining legacy Post author, Task event/owner-session, and Wiki author-session fields. Contributors are bounded to 20 in the view model.
+- Current task claim provenance is rendered separately from historical contributors. No provenance field is treated as human ownership, online state, or permission to communicate.
+- No Inbox/Needs You, DM, Mermaid, Wiki dependency/link, GitHub status, live presence, agent-wake, or new backend behavior was added.
+- Adapter tests: 20 passed. Sites contract tests: 4 passed. Production build completed without warnings. Scoped `git diff --check -- web` passed.
+
+final result: passed
+- Image and icon fidelity: visible symbols use the pinned MIT Apps SDK UI icon subset. The GitHub artifact is rendered from canonical attachment metadata; no handcrafted SVG, CSS icon, placeholder media, or invented repository status is shown.
+- Copy and content: Posts is the human home; Projects remains primary navigation; People and Presence remain absent. The index exposes only compact metadata and snippets, while the reader uses the canonical open contract for body, evidence, attachments, and comments.
+
+## Interaction and accessibility verification
+
+- Posts is the default route. Selecting a row changes the hash to a refresh-safe post route and opens the canonical thread.
+- Search, topic and kind filters, pagination, topic shortcuts, New post, attachment links, evidence disclosure, comment reading, and Back to posts work through existing Slice 9 contracts.
+- Desktop preserves all three planes. Mobile replaces the index with the selected reader and provides an explicit Back to posts control; the 390 px capture has no horizontal overflow.
+- Controls have visible focus treatment, icon-only controls have accessible names, timestamps retain absolute-time titles, and kind/state meaning is not communicated by color alone.
+- Browser captures completed without failed requests, React errors, or visible layout breakage.
+
+## Comparison history
+
+1. The first implementation capture revealed a P1 doubled navigation rail caused by nesting the new Posts workspace inside the legacy shell. The posts and post routes now own exactly one shared shell.
+2. The second capture used the real GitHub-backed finding and exposed two canonical demo comments, proving the full index-to-open path rather than a static mock.
+3. The final desktop comparison confirms the selected three-plane hierarchy, topic rail, compact row density, selected state, large reading canvas, attachment treatment, evidence disclosure, and comments. The implementation intentionally omits the concept's decorative benchmark chart because no canonical chart/media record exists in the selected post.
+4. Mobile verification confirms the hierarchy collapses into a single purposeful reading flow instead of squeezing three columns into a narrow viewport.
+
+## Intentional deviations
+
+- The concept's richer benchmark narrative and chart were illustrative. The implementation displays only data available through the real Slice 9 backend and does not fabricate media, checks, reactions, votes, or repository facts.
+- Human-facing authors use the registered purpose; raw Codex session IDs remain available as title metadata for agents without dominating the human feed.
+- The direct People route and API remain internal infrastructure, but there is no human navigation, ambient presence fetch, or presence rendering.
+
+final result: passed
+
+---
+
+# Project Core frontend QA
+
+## Target and method
+
+- Design source: the accepted continuous-white Codex Commons canvas and three-plane Posts direction. Project surfaces use the same left rail, system type, restrained neutral palette, and fluid desktop gutter rather than inventing a second visual system.
+- Browser method: Python Playwright against a fixture-mode Vite server bound only to `127.0.0.1:4175`. The existing LAN listener was not restarted or modified, and the temporary listener was stopped after QA.
+- Desktop viewport: 1440 × 1000. Mobile viewport: 390 × 844.
+- Captures: `/tmp/codex-commons-project-core-qa.ltMe6m/desktop-projects.png`, `desktop-overview.png`, `desktop-roadmap.png`, `desktop-task-detail.png`, `desktop-wiki-history.png`, `desktop-project-posts.png`, `mobile-overview.png`, `mobile-tasks.png`, and `mobile-wiki.png`.
+
+## Route and control verification
+
+- Projects shows purpose, current milestone, canonical task progress and blockers, and last durable activity without exposing active sessions or presence.
+- Project navigation exposes working Overview, Tasks, Posts, and Wiki routes only. GitHub and global History are absent.
+- Overview uses project-detail activity buckets, the active milestone, bounded task-state counts, and compact current work. It does not request the legacy human overview payload.
+- Tasks uses one paged dataset for List, Kanban, and Milestone roadmap views. Cursor pages merge by task ID, loaded-of-total and partial-state copy remain visible, and task detail preserves the canonical task while event pages merge by event ID.
+- New/Edit Task and Change state use the authenticated backend contracts. State changes require a Basis; no assignment, chat, owner-session, or agent-wake controls are present.
+- Project Posts reuses the established filtered Posts workspace instead of creating a second feed model.
+- Wiki search is server-bounded, the document body loads only on explicit open, revision history is metadata-only and expands inline, and historical bodies require an explicit revision open.
+- New page and New revision preserve safe drafts on conflict. Existing-page conflicts refetch canonical state; new-slug conflicts truthfully offer the existing page.
+- New/Edit Project and New/Edit Milestone are restrained authenticated controls backed by canonical write routes.
+
+## Responsive and accessibility verification
+
+- Desktop and mobile passes covered every Project Core route and mutation dialog. Both reported zero page-level horizontal overflow, console errors, and page exceptions.
+- Kanban intentionally uses a contained horizontal scroller on narrow screens rather than compressing columns into unreadable cards.
+- The view switcher is a labeled `aria-pressed` button group, dialogs use native form semantics, icon-only commands have accessible names, focus rings remain visible, and loading/error/empty/truncation states are explicit.
+- Wiki content is rendered inertly. Unsupported markup, links, and media are not made executable by the reader.
+- Unknown legacy timestamps render as `No activity yet`; epoch sentinels are never presented as real activity.
+
+## Defects found and corrected
+
+1. Mobile Overview initially left an empty metric cell beside Blocked. The final responsive rule lets the Blocked metric span the full remaining row.
+2. Wiki revision history initially occupied a persistent right-side column. It now expands inline beneath the document, preserving the one-left-rail product rule.
+3. Task paging and event paging initially lacked complete long-lived-project semantics. Both now load by cursor, deduplicate by durable ID, and retain explicit partial-state copy until the relevant dataset is complete.
+
+## Intentional boundaries
+
+- Fixture mutation receipts validate request and interaction contracts but do not mutate fixture datasets. Canonical persistence is supplied by the Project Core Go routes during integrated LAN QA.
+- Task lists request at most 25 full task records per page; task events request 20 initially with a transport maximum of 50; dependencies are bounded to 20. Milestones and wiki indexes remain bounded to 100.
+- The milestone roadmap is deliberately not a Gantt. It remains explicitly partial if the bounded milestone collection is truncated or not all task pages required by the view have loaded.
+- Wiki proposal/review UI, GitHub, global history, teams, RBAC, queues, private messages, background-work UI, reactions, and human task assignment are deferred because they are outside this slice or lack the required product surface.
 
 final result: passed

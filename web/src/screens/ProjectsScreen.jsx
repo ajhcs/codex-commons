@@ -3,7 +3,7 @@ import Folder from "../icons/Folder.tsx";
 import { PageHeader } from "../components/AppShell.jsx";
 import { CursorPager, SearchField, Timestamp } from "../components/Controls.jsx";
 import { DataTable } from "../components/DataTable.jsx";
-import { fixtureAdapter } from "../data/adapter.js";
+import { commonsAdapter } from "../data/adapter.js";
 import { useCursorPager } from "../hooks/useCursorPager.js";
 import { useResource } from "../hooks/useResource.js";
 
@@ -11,12 +11,12 @@ export function ProjectsScreen({ onNavigate }) {
   const [search, setSearch] = useState("");
   const pager = useCursorPager(10);
   const resource = useResource(
-    (signal) => fixtureAdapter.readProjects({ q: search, cursor: pager.cursor, limit: pager.limit }, signal),
+    (signal) => commonsAdapter.readProjects({ q: search, cursor: pager.cursor, limit: pager.limit }, signal),
     [search, pager.cursor, pager.limit],
   );
   const data = resource.data;
   const columns = useMemo(() => [
-    { key: "name", label: "Name", className: "cell-project-name", render: (item) => <button className="project-link" type="button" onClick={() => onNavigate("project")}><Folder aria-hidden="true" /><span>{item.name}</span></button> },
+    { key: "name", label: "Name", className: "cell-project-name", render: (item) => <button className="project-link" type="button" onClick={() => onNavigate("project", item.id)}><Folder aria-hidden="true" /><span>{item.name}</span></button> },
     { key: "purpose", label: "Purpose", className: "cell-copy", render: (item) => item.purpose },
     { key: "current", label: "Current work", className: "cell-copy", render: (item) => <div className="primary-cell"><strong>{item.currentWork}</strong><span>{item.openTasks} open work items</span></div> },
     { key: "sessions", label: "Active sessions", render: (item) => <span className="count-with-label"><strong>{item.activeSessions}</strong><span>{item.activeSessions === 1 ? "session" : "sessions"}</span></span> },

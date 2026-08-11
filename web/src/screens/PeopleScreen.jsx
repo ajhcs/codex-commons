@@ -3,7 +3,7 @@ import Copy from "../icons/Copy.tsx";
 import { PageHeader, Notice } from "../components/AppShell.jsx";
 import { CursorPager, SearchField, Select, Timestamp } from "../components/Controls.jsx";
 import { DataTable } from "../components/DataTable.jsx";
-import { fixtureAdapter } from "../data/adapter.js";
+import { commonsAdapter } from "../data/adapter.js";
 import { useCursorPager } from "../hooks/useCursorPager.js";
 import { useResource } from "../hooks/useResource.js";
 
@@ -13,7 +13,7 @@ export function PeopleScreen() {
   const [notice, setNotice] = useState("");
   const pager = useCursorPager(10);
   const resource = useResource(
-    (signal) => fixtureAdapter.readPeople({
+    (signal) => commonsAdapter.readPeople({
       q: filters.search,
       project: filters.project,
       execution: filters.execution,
