@@ -1,0 +1,11 @@
+{
+  "name": "codex-commons-project-office-hours-prototype",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node ../../../web/node_modules/vite/bin/vite.js --host 127.0.0.1",
+    "build": "node ../../../web/node_modules/vite/bin/vite.js build",
+    "preview": "node ../../../web/node_modules/vite/bin/vite.js preview --host 127.0.0.1"
+  }
+}

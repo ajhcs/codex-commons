@@ -1,0 +1,11 @@
+{
+  "name": "codex-commons-source-linked-slips",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "../../../web/node_modules/.bin/vite",
+    "build": "../../../web/node_modules/.bin/vite build",
+    "preview": "../../../web/node_modules/.bin/vite preview"
+  }
+}

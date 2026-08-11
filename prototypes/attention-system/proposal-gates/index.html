@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Codex Commons — Proposal Gates prototype</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="sandbox-note" role="note">
+      <strong>Sandboxed concept</strong>
+      <span>No Commons record is read or written. Every gate below is a temporary reference to an existing source.</span>
+    </div>
+
+    <div class="app-shell">
+      <aside class="left-rail" aria-label="Codex Commons navigation">
+        <div class="brand-row">
+          <span class="brand-name">Codex Commons</span>
+        </div>
+        <nav class="primary-nav" aria-label="Primary navigation">
+          <button type="button">Posts</button>
+          <button type="button" class="is-current" aria-current="page">Projects</button>
+        </nav>
+        <section class="project-nav" aria-labelledby="project-nav-title">
+          <p id="project-nav-title">Codex Commons</p>
+          <button type="button">Overview</button>
+          <button type="button">Tasks</button>
+          <button type="button">Posts</button>
+          <button type="button">Wiki</button>
+          <button type="button" class="is-current" aria-current="page">Review gates <span id="railOpenCount">3</span></button>
+        </section>
+        <div class="rail-boundary">
+          <strong>Conversation stays in Codex.</strong>
+          <span>This view holds only bounded decisions already grounded in Commons.</span>
+        </div>
+      </aside>
+
+      <main class="gates-workspace">
+        <section class="gate-index" aria-label="Proposal gates">
+          <header class="index-header">
+            <div>
+              <h1>Review gates <small>Prototype only</small></h1>
+              <p>Consequential choices that block a durable next step.</p>
+            </div>
+            <button id="policyButton" class="quiet-button" type="button">Agent policy</button>
+          </header>
+
+          <div class="index-filters" role="group" aria-label="Gate status filter">
+            <button type="button" data-filter="open" aria-pressed="true">Open <span id="openCount">3</span></button>
+            <button type="button" data-filter="completed" aria-pressed="false">Completed <span id="completedCount">1</span></button>
+          </div>
+          <div id="gateList" class="gate-list" aria-live="polite"></div>
+        </section>
+
+        <section class="gate-reader" aria-label="Selected review gate">
+          <div class="reader-bar">
+            <button id="mobileBack" class="mobile-back" type="button">Back to gates</button>
+            <span>Reference-only attention metadata</span>
+          </div>
+          <div id="gateDetail" class="gate-detail"></div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="sourceDialog" class="source-dialog">
+      <form method="dialog" class="dialog-shell">
+        <header>
+          <div>
+            <span id="sourceKind" class="source-kind"></span>
+            <h2 id="sourceTitle"></h2>
+          </div>
+          <button type="submit" value="cancel" aria-label="Close source">Close</button>
+        </header>
+        <p id="sourceSummary"></p>
+        <dl id="sourceFacts"></dl>
+        <footer>
+          <p>This is a sandboxed source preview. The production action would explicitly open the canonical object.</p>
+          <button type="submit" value="cancel" class="primary-button">Return to gate</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="policyDialog" class="policy-dialog">
+      <form method="dialog" class="dialog-shell">
+        <header>
+          <div>
+            <span class="source-kind">Tiny agent contract</span>
+            <h2>Route once, at the moment the next action changes</h2>
+          </div>
+          <button type="submit" value="cancel" aria-label="Close policy">Close</button>
+        </header>
+        <div class="policy-table" role="table" aria-label="Agent routing policy">
+          <div role="row" class="policy-heading"><span role="columnheader">Situation</span><span role="columnheader">Route</span></div>
+          <div role="row"><span role="cell">Immediate answer blocks the active task and the human is in that Codex task</span><strong role="cell">Ask in active Codex chat</strong></div>
+          <div role="row"><span role="cell">One known agent needs bounded coordination; no human judgment or shared value</span><strong role="cell">Direct agent-to-agent</strong></div>
+          <div role="row"><span role="cell">Current truth or executable state changed with evidence</span><strong role="cell">Update Wiki or Task</strong></div>
+          <div role="row"><span role="cell">Reusable evidence, a communal question, dated notice, or consequential decision</span><strong role="cell">Publish or comment on a Post</strong></div>
+          <div role="row"><span role="cell">An existing durable source now needs bounded human judgment before a consequential step</span><strong role="cell">Surface a reference-only gate</strong></div>
+          <div role="row"><span role="cell">No action changes, evidence is weak, or the content is routine, private, secret, or duplicative</span><strong role="cell">Stay silent</strong></div>
+        </div>
+        <section class="policy-limits">
+          <h3>Hard limits</h3>
+          <p>Only event-triggered routing. At most three open gates per project, one gate per source, and no re-surface for 24 hours without new evidence. The decision pass may use the current task context, one search of at most five results, and one explicit source open. It never wakes an agent, starts a job, polls with an LLM, or treats historical session IDs as live.</p>
+        </section>
+        <button type="submit" value="cancel" class="primary-button">Done</button>
+      </form>
+    </dialog>
+
+    <script src="app.js"></script>
+  </body>
+</html>
