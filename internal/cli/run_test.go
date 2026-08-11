@@ -9,7 +9,7 @@ import (
 
 func invoke(args ...string) (int, string, string) {
 	var out, err bytes.Buffer
-	code := Run(args, &out, &err)
+	code := Run(append([]string{"--fixture"}, args...), &out, &err)
 	return code, out.String(), err.String()
 }
 

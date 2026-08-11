@@ -36,6 +36,14 @@ type App struct {
 }
 
 func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
+	if config.HumanAuth != nil {
+		if config.HumanAuth.Principal == "" {
+			config.HumanAuth.Principal = domain.HumanLocalPrincipal
+		}
+		if config.HumanAuth.Handle == "" {
+			config.HumanAuth.Handle = "local-admin"
+		}
+	}
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
@@ -70,6 +78,9 @@ func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
 		return nil, err
 	}
 	service := application.New(store, live, nil)
+	if config.HumanAuth != nil {
+		service.ConfigureHumanIdentity(config.HumanAuth.DisplayName, config.HumanAuth.Handle)
+	}
 	backend, err := appbackend.New(legacy, service)
 	if err != nil {
 		return nil, err

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"codex-commons/internal/domain"
 	"codex-commons/internal/httpapi"
 )
 
@@ -68,6 +69,7 @@ func ParseConfig(args []string, getenv func(string) string, stderr io.Writer) (C
 	credentialsFile := strings.TrimSpace(getenv("COMMONS_CREDENTIALS_FILE"))
 	humanSecretFile := strings.TrimSpace(getenv("COMMONS_HUMAN_ADMIN_SECRET_FILE"))
 	humanName := envOr(getenv, "COMMONS_HUMAN_ADMIN_NAME", "Local admin")
+	humanHandle := envOr(getenv, "COMMONS_HUMAN_ADMIN_HANDLE", "local-admin")
 	flags := flag.NewFlagSet("commons-server", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.StringVar(&config.Listen, "listen", config.Listen, "literal listen address (host:port)")
@@ -104,7 +106,7 @@ func ParseConfig(args []string, getenv func(string) string, stderr io.Writer) (C
 	}
 	if humanSecret != "" {
 		config.HumanAuth = &httpapi.HumanAuthConfig{
-			AdminSecret: humanSecret, DisplayName: humanName,
+			AdminSecret: humanSecret, DisplayName: humanName, Handle: humanHandle, Principal: domain.HumanLocalPrincipal,
 			Actor: "local-admin", Session: "human-local-admin", Host: "browser",
 			SessionTTL: 12 * time.Hour,
 		}
@@ -145,6 +147,8 @@ func (c Config) Validate() error {
 			return fmt.Errorf("human admin secret must be %d..1024 bytes", minimumSecretBytes)
 		}
 		if strings.TrimSpace(c.HumanAuth.DisplayName) == "" || len(c.HumanAuth.DisplayName) > 200 ||
+			(c.HumanAuth.Handle != "" && (strings.TrimSpace(c.HumanAuth.Handle) == "" || len(c.HumanAuth.Handle) > 64)) ||
+			(c.HumanAuth.Principal != "" && c.HumanAuth.Principal != domain.HumanLocalPrincipal) ||
 			c.HumanAuth.Actor == "" || c.HumanAuth.Session == "" || c.HumanAuth.Host == "" || c.HumanAuth.SessionTTL <= 0 {
 			return errors.New("valid human admin identity, display name, and session TTL required")
 		}

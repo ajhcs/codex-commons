@@ -186,11 +186,18 @@ func (s *Store) postByRequest(ctx context.Context, storageKey, requestID string)
 	if err != nil {
 		return p, err
 	}
+	mentions, err := readContentMentions(ctx, s.db, "post", []string{p.ID})
+	if err != nil {
+		return p, err
+	}
+	for _, target := range mentions[p.ID] {
+		p.MentionPrincipals = append(p.MentionPrincipals, target.Principal)
+	}
 	return p, nil
 }
 
 func samePost(a domain.Post, b domain.PostRequest) bool {
-	if a.TopicID != b.TopicID || a.Kind != b.Kind || a.Title != b.Title || a.Body != b.Body || a.Basis != b.Basis || a.Ref != b.Ref || a.SessionID != b.SessionID || len(a.Attachments) != len(b.Attachments) {
+	if a.TopicID != b.TopicID || a.Kind != b.Kind || a.Title != b.Title || a.Body != b.Body || a.Basis != b.Basis || a.Ref != b.Ref || a.SessionID != b.SessionID || len(a.Attachments) != len(b.Attachments) || len(a.MentionPrincipals) != len(b.MentionPrincipals) {
 		return false
 	}
 	for i := range a.Attachments {
@@ -198,10 +205,20 @@ func samePost(a domain.Post, b domain.PostRequest) bool {
 			return false
 		}
 	}
+	for i := range a.MentionPrincipals {
+		if a.MentionPrincipals[i] != b.MentionPrincipals[i] {
+			return false
+		}
+	}
 	return true
 }
 
 func (s *Store) Post(ctx context.Context, req domain.PostRequest) (domain.Post, error) {
+	mentions, valid := normalizeMentionPrincipals(req.MentionPrincipals, nil)
+	if !valid {
+		return domain.Post{}, domain.ErrInvalid
+	}
+	req.MentionPrincipals = mentions
 	if req.TopicID == "" || !domain.PostKinds[req.Kind] || req.Title == "" || req.Body == "" || req.Basis == "" || req.SessionID == "" || !validPostAttachments(req.Attachments) {
 		return domain.Post{}, domain.ErrInvalid
 	}
@@ -240,7 +257,7 @@ func (s *Store) Post(ctx context.Context, req domain.PostRequest) (domain.Post, 
 				return err
 			}
 		}
-		return nil
+		return insertContentMentions(ctx, tx, "post", id, id, req.ActorKind, req.ActorPrincipal, req.SessionID, req.Body, stamp(created), req.MentionPrincipals)
 	}
 	var rev int64
 	if project.Valid {
@@ -267,7 +284,7 @@ func (s *Store) Post(ctx context.Context, req domain.PostRequest) (domain.Post, 
 			return domain.Post{}, mapErr(err)
 		}
 	}
-	return domain.Post{ID: id, TopicID: req.TopicID, ProjectID: project.String, Kind: req.Kind, Title: req.Title, Body: req.Body, Basis: req.Basis, Ref: req.Ref, SessionID: req.SessionID, RequestID: req.RequestID, Revision: rev, CreatedAt: created, Attachments: append([]domain.PostAttachment(nil), req.Attachments...)}, nil
+	return domain.Post{ID: id, TopicID: req.TopicID, ProjectID: project.String, Kind: req.Kind, Title: req.Title, Body: req.Body, Basis: req.Basis, Ref: req.Ref, SessionID: req.SessionID, RequestID: req.RequestID, Revision: rev, CreatedAt: created, Attachments: append([]domain.PostAttachment(nil), req.Attachments...), MentionPrincipals: append([]string(nil), req.MentionPrincipals...)}, nil
 }
 func valueRev(v any) int64 {
 	if n, ok := v.(int64); ok {
@@ -287,19 +304,22 @@ func (s *Store) commentByRequest(ctx context.Context, storageKey string) (domain
 	if rev.Valid {
 		result.Revision = rev.Int64
 	}
-	prior.MentionSessionIDs, err = readCommentMentionIDs(ctx, s.db, result.ID)
+	targets, err := readContentMentions(ctx, s.db, "comment", []string{result.ID})
 	if err != nil {
 		return prior, result, err
+	}
+	for _, target := range targets[result.ID] {
+		prior.MentionPrincipals = append(prior.MentionPrincipals, target.Principal)
 	}
 	return prior, result, nil
 }
 
 func sameComment(a, b domain.CommentRequest) bool {
-	if a.PostID != b.PostID || a.Body != b.Body || a.Intent != b.Intent || a.SessionID != b.SessionID || len(a.MentionSessionIDs) != len(b.MentionSessionIDs) {
+	if a.PostID != b.PostID || a.Body != b.Body || a.Intent != b.Intent || a.SessionID != b.SessionID || len(a.MentionPrincipals) != len(b.MentionPrincipals) {
 		return false
 	}
-	for i := range a.MentionSessionIDs {
-		if a.MentionSessionIDs[i] != b.MentionSessionIDs[i] {
+	for i := range a.MentionPrincipals {
+		if a.MentionPrincipals[i] != b.MentionPrincipals[i] {
 			return false
 		}
 	}
@@ -307,11 +327,12 @@ func sameComment(a, b domain.CommentRequest) bool {
 }
 
 func (s *Store) Comment(ctx context.Context, req domain.CommentRequest) (domain.WriteResult, error) {
-	mentions, valid := normalizeMentionIDs(req.MentionSessionIDs)
+	mentions, valid := normalizeMentionPrincipals(req.MentionPrincipals, req.MentionSessionIDs)
 	if !valid {
 		return domain.WriteResult{}, domain.ErrInvalid
 	}
-	req.MentionSessionIDs = mentions
+	req.MentionPrincipals = mentions
+	req.MentionSessionIDs = nil
 	if req.PostID == "" || req.Body == "" || !domain.CommentIntents[req.Intent] || req.SessionID == "" {
 		return domain.WriteResult{}, domain.ErrInvalid
 	}
@@ -338,24 +359,7 @@ func (s *Store) Comment(ctx context.Context, req domain.CommentRequest) (domain.
 		if _, err := tx.ExecContext(ctx, `INSERT INTO comments(id,post_id,project_id,project_revision,body,intent,session_id,request_id,created_at) VALUES(?,?,?,?,?,?,?,NULLIF(?,''),?)`, id, req.PostID, project, rev, req.Body, req.Intent, req.SessionID, storageKey, created); err != nil {
 			return err
 		}
-		for position, recipient := range req.MentionSessionIDs {
-			var exists int
-			if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM session_handles WHERE session_id=?`, recipient).Scan(&exists); err != nil {
-				return err
-			}
-			if exists != 1 {
-				return domain.ErrInvalid
-			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO comment_mentions(comment_id,recipient_session_id,position,created_at) VALUES(?,?,?,?)`, id, recipient, position, created); err != nil {
-				return err
-			}
-			if project.Valid {
-				if _, err := tx.ExecContext(ctx, `INSERT INTO inbox_items(id,project_id,recipient_session_id,kind,from_session_id,ref,snippet,unread,created_at) VALUES(?,?,?,?,?,?,?,1,?)`, newID("M-"), project.String, recipient, "mention", req.SessionID, req.PostID, boundedUTF8(req.Body, 200), created); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
+		return insertContentMentions(ctx, tx, "comment", id, req.PostID, req.ActorKind, req.ActorPrincipal, req.SessionID, req.Body, created, req.MentionPrincipals)
 	}
 	var result domain.WriteResult
 	var err error

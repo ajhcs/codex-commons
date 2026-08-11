@@ -3,8 +3,13 @@ package domain
 import "time"
 
 const (
-	TopicGeneral = "general"
+	TopicGeneral        = "general"
+	HumanLocalPrincipal = "human:local-admin"
 )
+
+type MentionTarget struct {
+	Kind, Principal, SessionID, Handle, Purpose string
+}
 
 type Project struct {
 	ID, Name, Status, Purpose, Milestone, Now string
@@ -102,8 +107,9 @@ type Claim struct {
 }
 
 type PostRequest struct {
-	TopicID, Kind, Title, Body, Basis, Ref, ActorID, SessionID, RequestID string
-	Attachments                                                           []PostAttachment
+	TopicID, Kind, Title, Body, Basis, Ref, ActorID, ActorKind, ActorPrincipal, SessionID, RequestID string
+	Attachments                                                                                      []PostAttachment
+	MentionPrincipals                                                                                []string
 }
 
 type Post struct {
@@ -111,11 +117,36 @@ type Post struct {
 	Revision                                                                    int64
 	CreatedAt                                                                   time.Time
 	Attachments                                                                 []PostAttachment
+	MentionPrincipals                                                           []string
 }
 
 type CommentRequest struct {
-	PostID, Body, Intent, ActorID, SessionID, RequestID string
-	MentionSessionIDs                                   []string
+	PostID, Body, Intent, ActorID, ActorKind, ActorPrincipal, SessionID, RequestID string
+	MentionSessionIDs                                                              []string
+	MentionPrincipals                                                              []string
+}
+
+type NotificationQuery struct {
+	RecipientPrincipal string
+	UnreadOnly         bool
+	After              *BrowseCursor
+	Limit              int
+}
+
+type HumanNotification struct {
+	ID, RecipientPrincipal, SourceKind, PostID, CommentID                         string
+	ActorKind, ActorPrincipal, ActorSessionID, ActorHandle, ActorPurpose, Snippet string
+	CreatedAt                                                                     time.Time
+	ReadAt                                                                        *time.Time
+}
+
+type NotificationPage struct {
+	Items       []HumanNotification
+	UnreadCount int
+}
+
+type MarkNotificationReadRequest struct {
+	NotificationID, RecipientPrincipal, ActorID, RequestID string
 }
 
 type PostAttachment struct {

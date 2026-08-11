@@ -17,7 +17,9 @@ const humanSessionCookie = "commons_session"
 type HumanAuthConfig struct {
 	AdminSecret string
 	DisplayName string
+	Handle      string
 	Actor       string
+	Principal   string
 	Session     string
 	Host        string
 	SessionTTL  time.Duration
@@ -33,6 +35,8 @@ type humanAuth struct {
 	mu           sync.Mutex
 	secretDigest [sha256.Size]byte
 	displayName  string
+	principalID  string
+	handle       string
 	actor        string
 	session      string
 	host         string
@@ -45,6 +49,7 @@ type humanAuth struct {
 type authPrincipal struct {
 	Credential
 	Kind      string
+	Principal string
 	csrfToken string
 	cookie    string
 }
@@ -57,6 +62,8 @@ type authSessionResult struct {
 
 type authPrincipalView struct {
 	Kind        string `json:"kind"`
+	Principal   string `json:"principal"`
+	Handle      string `json:"handle,omitempty"`
 	DisplayName string `json:"display_name"`
 }
 
@@ -68,6 +75,13 @@ func newHumanAuth(config *HumanAuthConfig) *humanAuth {
 	if config == nil || config.AdminSecret == "" {
 		return nil
 	}
+	principal, handle := config.Principal, config.Handle
+	if principal == "" {
+		principal = "human:local-admin"
+	}
+	if handle == "" {
+		handle = "local-admin"
+	}
 	ttl := config.SessionTTL
 	if ttl <= 0 {
 		ttl = 12 * time.Hour
@@ -76,6 +90,8 @@ func newHumanAuth(config *HumanAuthConfig) *humanAuth {
 		secretDigest: sha256.Sum256([]byte(config.AdminSecret)),
 		displayName:  config.DisplayName,
 		actor:        config.Actor,
+		principalID:  principal,
+		handle:       handle,
 		session:      config.Session,
 		host:         config.Host,
 		ttl:          ttl,
@@ -197,7 +213,7 @@ func randomAuthToken() (string, bool) {
 }
 
 func (a *humanAuth) principal() authPrincipal {
-	return authPrincipal{Kind: "human", Credential: Credential{
+	return authPrincipal{Kind: "human", Principal: a.principalID, Credential: Credential{
 		Actor: a.actor, Session: a.session, Host: a.host,
 	}}
 }
@@ -208,7 +224,7 @@ func (a *humanAuth) result(session *humanSession) authSessionResult {
 	}
 	return authSessionResult{
 		Authenticated: true,
-		Principal:     &authPrincipalView{Kind: "human", DisplayName: a.displayName},
+		Principal:     &authPrincipalView{Kind: "human", Principal: a.principalID, Handle: a.handle, DisplayName: a.displayName},
 		CSRFToken:     session.csrf,
 	}
 }
@@ -246,7 +262,7 @@ func isHumanWritePath(path string) bool {
 		return true
 	}
 	switch path {
-	case "/v1/posts", "/v1/comments", "/v1/post-states", "/v1/post-perspective-scopes", "/v1/topic-requests":
+	case "/v1/notification-reads", "/v1/posts", "/v1/comments", "/v1/post-states", "/v1/post-perspective-scopes", "/v1/topic-requests":
 		return true
 	default:
 		return false

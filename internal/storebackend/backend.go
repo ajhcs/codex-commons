@@ -48,6 +48,11 @@ func (b *Backend) Context(ctx context.Context, query httpapi.ContextQuery, meta 
 	if err != nil {
 		return httpapi.ContextResult{}, mapError(err, "context")
 	}
+	filtered, filterErr := b.filterPostChanges(ctx, packet.Changes, meta)
+	if filterErr != nil {
+		return httpapi.ContextResult{}, filterErr
+	}
+	packet.Changes = filtered
 	result := httpapi.ContextResult{
 		Project: query.Project, Revision: packet.Project.Revision, Cursor: packet.Project.Revision,
 		Unchanged: packet.Unchanged,
@@ -61,6 +66,34 @@ func (b *Backend) Context(ctx context.Context, query httpapi.ContextQuery, meta 
 		return httpapi.ContextResult{}, httpapi.NewError(httpapi.CodeInvalid, "context exceeds requested budget; use since cursor")
 	}
 	return result, nil
+}
+
+func (b *Backend) filterPostChanges(ctx context.Context, changes []domain.Change, meta httpapi.RequestMeta) ([]domain.Change, error) {
+	out := make([]domain.Change, 0, len(changes))
+	for _, change := range changes {
+		postID := ""
+		switch change.Kind {
+		case "post":
+			postID = change.Ref
+		case "comment":
+			var err error
+			postID, err = b.store.PostForComment(ctx, change.Ref)
+			if err != nil {
+				return nil, mapError(err, "context")
+			}
+		}
+		if postID != "" {
+			allowed, err := b.store.CanDiscoverPost(ctx, meta.PrincipalKind, meta.Session, postID)
+			if err != nil {
+				return nil, mapError(err, "context")
+			}
+			if !allowed {
+				continue
+			}
+		}
+		out = append(out, change)
+	}
+	return out, nil
 }
 
 func contextMap(packet domain.ContextPacket) map[string]any {
@@ -151,22 +184,40 @@ func (b *Backend) Inbox(ctx context.Context, query httpapi.InboxQuery, meta http
 	return out, nil
 }
 
-func (b *Backend) Search(ctx context.Context, query httpapi.SearchQuery, _ httpapi.RequestMeta) (httpapi.SearchResult, error) {
+func (b *Backend) Search(ctx context.Context, query httpapi.SearchQuery, meta httpapi.RequestMeta) (httpapi.SearchResult, error) {
 	items, err := b.store.Search(ctx, query.Project, query.Query, query.Limit)
 	if err != nil {
 		return httpapi.SearchResult{}, mapError(err, "search")
 	}
 	out := httpapi.SearchResult{Project: query.Project, Hits: make([]httpapi.SearchHit, 0, len(items))}
 	for _, item := range items {
+		if domain.PostKinds[item.Kind] {
+			allowed, checkErr := b.store.CanDiscoverPost(ctx, meta.PrincipalKind, meta.Session, item.Ref)
+			if checkErr != nil {
+				return httpapi.SearchResult{}, mapError(checkErr, "search")
+			}
+			if !allowed {
+				continue
+			}
+		}
 		out.Hits = append(out.Hits, httpapi.SearchHit{Ref: item.Ref, Revision: item.Revision, Kind: item.Kind, Title: item.Title, Timestamp: item.CreatedAt.UTC().Format(time.RFC3339Nano), Snippet: item.Snippet})
 	}
 	return out, nil
 }
 
-func (b *Backend) Open(ctx context.Context, query httpapi.OpenQuery, _ httpapi.RequestMeta) (httpapi.OpenResult, error) {
+func (b *Backend) Open(ctx context.Context, query httpapi.OpenQuery, meta httpapi.RequestMeta) (httpapi.OpenResult, error) {
 	object, err := b.store.Open(ctx, query.Ref)
 	if err != nil {
 		return httpapi.OpenResult{}, mapError(err, "object")
+	}
+	if domain.PostKinds[object.Kind] {
+		allowed, checkErr := b.store.CanDiscoverPost(ctx, meta.PrincipalKind, meta.Session, object.Ref)
+		if checkErr != nil {
+			return httpapi.OpenResult{}, mapError(checkErr, "object")
+		}
+		if !allowed {
+			return httpapi.OpenResult{}, httpapi.NewError(httpapi.CodeNotFound, "object not found")
+		}
 	}
 	value := objectMap(object)
 	used := estimatedTokens(value)
@@ -220,13 +271,21 @@ func (b *Backend) Claim(ctx context.Context, request httpapi.ClaimRequest, meta 
 }
 
 func (b *Backend) Post(ctx context.Context, request httpapi.PostRequest, meta httpapi.RequestMeta) (httpapi.WriteResult, error) {
+	mentions := make([]string, 0, len(request.Mentions))
+	for _, item := range request.Mentions {
+		principal := item.Principal
+		if principal == "" {
+			principal = item.Session
+		}
+		mentions = append(mentions, principal)
+	}
 	attachments := make([]domain.PostAttachment, 0, len(request.Attachments))
 	for _, item := range request.Attachments {
 		attachments = append(attachments, domain.PostAttachment{Kind: item.Kind, URL: item.URL, Title: item.Title})
 	}
 	result, err := b.store.Post(ctx, domain.PostRequest{TopicID: request.Topic, Kind: request.Kind, Title: request.Title,
 		Body: request.Body, Basis: request.Basis, Ref: request.Ref, Attachments: attachments,
-		ActorID: meta.Actor, SessionID: meta.Session, RequestID: meta.IdempotencyKey})
+		ActorID: meta.Actor, ActorKind: meta.PrincipalKind, ActorPrincipal: meta.Principal, SessionID: meta.Session, RequestID: meta.IdempotencyKey, MentionPrincipals: mentions})
 	if err != nil {
 		return httpapi.WriteResult{}, mapError(err, "post")
 	}
@@ -236,9 +295,13 @@ func (b *Backend) Post(ctx context.Context, request httpapi.PostRequest, meta ht
 func (b *Backend) Comment(ctx context.Context, request httpapi.CommentRequest, meta httpapi.RequestMeta) (httpapi.WriteResult, error) {
 	mentions := make([]string, 0, len(request.Mentions))
 	for _, m := range request.Mentions {
-		mentions = append(mentions, m.Session)
+		principal := m.Principal
+		if principal == "" {
+			principal = m.Session
+		}
+		mentions = append(mentions, principal)
 	}
-	result, err := b.store.Comment(ctx, domain.CommentRequest{PostID: request.Ref, Body: request.Body, Intent: request.Intent, ActorID: meta.Actor, SessionID: meta.Session, RequestID: meta.IdempotencyKey, MentionSessionIDs: mentions})
+	result, err := b.store.Comment(ctx, domain.CommentRequest{PostID: request.Ref, Body: request.Body, Intent: request.Intent, ActorID: meta.Actor, ActorKind: meta.PrincipalKind, ActorPrincipal: meta.Principal, SessionID: meta.Session, RequestID: meta.IdempotencyKey, MentionPrincipals: mentions})
 	if err != nil {
 		return httpapi.WriteResult{}, mapError(err, "comment")
 	}

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 
@@ -111,8 +112,12 @@ func (s *Store) SetPerspectiveScope(ctx context.Context, req domain.PerspectiveS
 	defer tx.Rollback()
 	var current string
 	var revision int64
-	if err = tx.QueryRowContext(ctx, `SELECT scope,revision FROM post_perspective_scopes WHERE post_id=?`, req.PostID).Scan(&current, &revision); err != nil {
+	var project sql.NullString
+	if err = tx.QueryRowContext(ctx, `SELECT ps.scope,ps.revision,p.project_id FROM post_perspective_scopes ps JOIN posts p ON p.id=ps.post_id WHERE ps.post_id=?`, req.PostID).Scan(&current, &revision, &project); err != nil {
 		return domain.WriteResult{}, mapErr(err)
+	}
+	if req.Scope == "project" && !project.Valid {
+		return domain.WriteResult{}, domain.ErrInvalid
 	}
 	if revision != req.BaseRevision {
 		return domain.WriteResult{}, domain.ErrConflict

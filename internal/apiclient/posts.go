@@ -27,6 +27,12 @@ func (c *Client) BrowsePosts(ctx context.Context, q httpapi.PostFeedQuery) (http
 	return out, err
 }
 
+func (c *Client) OpenComment(ctx context.Context, id string) (httpapi.CommentOpenResult, error) {
+	var out httpapi.CommentOpenResult
+	err := c.get(ctx, "/v1/comments/"+url.PathEscape(id), nil, "", &out)
+	return out, err
+}
+
 func (c *Client) OpenPost(ctx context.Context, q httpapi.PostOpenQuery) (httpapi.PostOpenResult, error) {
 	values := url.Values{}
 	setIfPresent(values, "comments_cursor", q.CommentsCursor)

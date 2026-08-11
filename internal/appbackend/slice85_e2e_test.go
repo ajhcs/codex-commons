@@ -46,7 +46,7 @@ func TestSlice85SeedStorePresenceApplicationAndHTTPFullPath(t *testing.T) {
 		{"/v1/projects?limit=10", []string{`"total":4`, `"id":"demo-billing-orchestrator"`, `"current_work"`, `"active_sessions":2`}},
 		{"/v1/people?limit=10", []string{`"total":6`, `"session":"DEMO-SES-4179"`, `"execution":"executing"`, `"host_connected":false`}},
 		{"/v1/projects/demo-billing-orchestrator/overview?attention_limit=5&work_limit=5", []string{`"status":"demo"`, `"attention_total":2`, `"open_work":4`, `"active_sessions":2`, `"available":false`}},
-		{"/v1/posts?limit=10", []string{`"total":5`, `"kind":"finding"`, `"kind":"topic_request"`, `"comment_count":0`, `"attachments"`}},
+		{"/v1/posts?limit=10", []string{`"total":0`, `"items":[]`}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.path, func(t *testing.T) {
@@ -72,29 +72,6 @@ func TestSlice85SeedStorePresenceApplicationAndHTTPFullPath(t *testing.T) {
 				t.Fatalf("unsafe or out-of-scope payload: %s", body)
 			}
 		})
-	}
-
-	feedReq := httptest.NewRequest(http.MethodGet, "/v1/posts?limit=1", nil)
-	feedReq.Header.Set("Authorization", "Bearer slice85-secret")
-	feedRec := httptest.NewRecorder()
-	handler.ServeHTTP(feedRec, feedReq)
-	var feedEnvelope struct {
-		Data struct {
-			Items []struct {
-				ID string `json:"id"`
-			} `json:"items"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(feedRec.Body.Bytes(), &feedEnvelope); err != nil || len(feedEnvelope.Data.Items) != 1 {
-		t.Fatalf("decode feed for explicit open: err=%v body=%s", err, feedRec.Body.String())
-	}
-	openReq := httptest.NewRequest(http.MethodGet, "/v1/posts/"+feedEnvelope.Data.Items[0].ID, nil)
-	openReq.Header.Set("Authorization", "Bearer slice85-secret")
-	openRec := httptest.NewRecorder()
-	handler.ServeHTTP(openRec, openReq)
-	if openRec.Code != http.StatusOK || !strings.Contains(openRec.Body.String(), `"body"`) ||
-		!strings.Contains(openRec.Body.String(), `"basis"`) || !strings.Contains(openRec.Body.String(), `"comments"`) {
-		t.Fatalf("explicit post open code=%d body=%s", openRec.Code, openRec.Body.String())
 	}
 
 	for _, target := range []string{"/v1/posts", "/v1/projects", "/v1/people", "/v1/projects/demo-billing-orchestrator/overview"} {

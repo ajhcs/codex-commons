@@ -83,7 +83,7 @@ func TestBundledSQLiteCapabilitiesAndMigrations(t *testing.T) {
 	}
 	var n int
 	must(t, s.DB().QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations").Scan(&n))
-	if n != 7 {
+	if n != 8 {
 		t.Fatalf("migrations=%d", n)
 	}
 	must(t, s.Close())
@@ -91,7 +91,7 @@ func TestBundledSQLiteCapabilitiesAndMigrations(t *testing.T) {
 	must(t, err)
 	defer reopened.Close()
 	must(t, reopened.DB().QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations").Scan(&n))
-	if n != 7 {
+	if n != 8 {
 		t.Fatalf("reopen migrations=%d", n)
 	}
 	_, err = reopened.DB().ExecContext(ctx, "CREATE VIRTUAL TABLE temp.probe_fts USING fts5(body)")

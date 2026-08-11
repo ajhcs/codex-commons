@@ -91,7 +91,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, rid, http.StatusUnauthorized, "unauthorized", "valid configured credential required")
 		return
 	}
-	meta := RequestMeta{PrincipalKind: identity.Kind, Actor: identity.Actor, Session: identity.Session, Host: identity.Host, RequestID: rid, IdempotencyKey: r.Header.Get("Idempotency-Key")}
+	meta := RequestMeta{PrincipalKind: identity.Kind, Principal: identity.Principal, Actor: identity.Actor, Session: identity.Session, Host: identity.Host, RequestID: rid, IdempotencyKey: r.Header.Get("Idempotency-Key")}
 	if len(meta.IdempotencyKey) > 200 {
 		h.writeError(w, rid, http.StatusBadRequest, "bad_idempotency_key", "maximum length is 200")
 		return
@@ -123,6 +123,53 @@ func (h *handler) route(w http.ResponseWriter, r *http.Request, meta RequestMeta
 	}
 	path := r.URL.Path
 	switch {
+	case r.Method == http.MethodGet && path == "/v1/notifications":
+		limit, err := intParam(r.URL.Query().Get("limit"), 20, 1, 50)
+		if err != nil {
+			h.badQuery(w, meta, err)
+			return
+		}
+		unread := r.URL.Query().Get("unread")
+		if unread != "" && unread != "true" && unread != "false" {
+			h.badQuery(w, meta, errors.New("unread must be true or false"))
+			return
+		}
+		notificationBackend, ok := h.backend.(NotificationBackend)
+		if !ok {
+			h.finish(w, meta, nil, NewError(CodeUnavailable, "notifications unavailable"), false)
+			return
+		}
+		out, err := notificationBackend.Notifications(r.Context(), NotificationListQuery{Cursor: r.URL.Query().Get("cursor"), UnreadOnly: unread == "true", Limit: limit}, meta)
+		h.finish(w, meta, out, err, false)
+	case r.Method == http.MethodPost && path == "/v1/notification-reads":
+		var in NotificationReadRequest
+		if !h.decode(w, r, meta, &in) {
+			return
+		}
+		if blank(in.ID) {
+			h.badBody(w, meta, "id is required")
+			return
+		}
+		notificationBackend, ok := h.backend.(NotificationBackend)
+		if !ok {
+			h.finish(w, meta, nil, NewError(CodeUnavailable, "notifications unavailable"), false)
+			return
+		}
+		out, err := notificationBackend.MarkNotificationRead(r.Context(), in, meta)
+		h.finishWrite(w, meta, out, err, true)
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/v1/comments/"):
+		id, ok := pathPart(r.URL, "/v1/comments/")
+		if !ok {
+			h.notFound(w, meta)
+			return
+		}
+		commentBackend, ok := h.backend.(CommentReadBackend)
+		if !ok {
+			h.finish(w, meta, nil, NewError(CodeUnavailable, "comment open unavailable"), true)
+			return
+		}
+		out, err := commentBackend.OpenComment(r.Context(), CommentOpenQuery{ID: id}, meta)
+		h.finish(w, meta, out, err, true)
 	case r.Method == http.MethodGet && path == "/v1/home/general":
 		query, err := parseHomeQuery(r.URL.Query())
 		if err != nil {
@@ -333,6 +380,10 @@ func (h *handler) route(w http.ResponseWriter, r *http.Request, meta RequestMeta
 			h.badBody(w, meta, "topic, kind, title, body, and basis are required")
 			return
 		}
+		if !validMentionRequests(in.Mentions) {
+			h.badBody(w, meta, "mentions require at most 5 deduplicated structured principals")
+			return
+		}
 		if len(in.Attachments) > 8 {
 			h.badBody(w, meta, "at most 8 attachments are allowed")
 			return
@@ -387,8 +438,8 @@ func (h *handler) route(w http.ResponseWriter, r *http.Request, meta RequestMeta
 		if !h.decode(w, r, meta, &in) {
 			return
 		}
-		if len(in.Mentions) > 5 {
-			h.badBody(w, meta, "at most 5 mentions are allowed")
+		if !validMentionRequests(in.Mentions) {
+			h.badBody(w, meta, "mentions require at most 5 deduplicated structured principals")
 			return
 		}
 		if in.Ref == "" || in.Body == "" || !validCommentIntent(in.Intent) {
@@ -449,7 +500,7 @@ func (h *handler) authenticate(r *http.Request) (authPrincipal, bool) {
 	for _, c := range h.config.Credentials {
 		if (c.BearerToken != "" && secureEqual(bearer, c.BearerToken)) || (c.HostCredential != "" && secureEqual(host, c.HostCredential)) {
 			if c.Actor != "" && c.Session != "" && c.Host != "" {
-				return authPrincipal{Credential: c, Kind: "agent"}, true
+				return authPrincipal{Credential: c, Kind: "agent", Principal: c.Session}, true
 			}
 		}
 	}
@@ -533,6 +584,30 @@ func validPostKind(kind string) bool {
 	default:
 		return false
 	}
+}
+
+func validMentionRequests(items []MentionRequest) bool {
+	if len(items) > 20 {
+		return false
+	}
+	seen := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		if (item.Principal == "") == (item.Session == "") {
+			return false
+		}
+		value := item.Principal
+		if value == "" {
+			value = item.Session
+		}
+		if len(value) > 200 || strings.TrimSpace(value) != value {
+			return false
+		}
+		seen[value] = struct{}{}
+		if len(seen) > 5 {
+			return false
+		}
+	}
+	return true
 }
 
 func validCommentIntent(intent string) bool {

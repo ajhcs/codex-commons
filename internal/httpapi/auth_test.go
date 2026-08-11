@@ -16,7 +16,7 @@ func humanTestHandler(backend Backend) http.Handler {
 	return NewHandler(backend, Config{
 		Credentials: []Credential{{BearerToken: "agent-secret", Actor: "agent", Session: "S-agent", Host: "plumbob"}},
 		HumanAuth: &HumanAuthConfig{
-			AdminSecret: testAdminSecret, DisplayName: "Cole", Actor: "local-admin",
+			AdminSecret: testAdminSecret, DisplayName: "Test Admin", Actor: "local-admin",
 			Session: "human-local-admin", Host: "browser", SessionTTL: time.Hour,
 		},
 	})
@@ -66,7 +66,7 @@ func loginHuman(t *testing.T, handler http.Handler) (*http.Cookie, string) {
 		t.Fatal(err)
 	}
 	if !response.Data.Authenticated || response.Data.Principal == nil || response.Data.Principal.Kind != "human" ||
-		response.Data.Principal.DisplayName != "Cole" || response.Data.CSRFToken == "" {
+		response.Data.Principal.DisplayName != "Test Admin" || response.Data.CSRFToken == "" {
 		t.Fatalf("login response=%+v", response.Data)
 	}
 	return cookie, response.Data.CSRFToken
@@ -162,7 +162,7 @@ func TestHumanLoginRateLimitAndSecureTLSCookie(t *testing.T) {
 }
 
 func TestHumanSessionsAreBoundedWithoutSingleDeviceLogout(t *testing.T) {
-	auth := newHumanAuth(&HumanAuthConfig{AdminSecret: testAdminSecret, DisplayName: "Cole", Actor: "admin", Session: "human", Host: "browser", SessionTTL: time.Hour})
+	auth := newHumanAuth(&HumanAuthConfig{AdminSecret: testAdminSecret, DisplayName: "Test Admin", Actor: "admin", Session: "human", Host: "browser", SessionTTL: time.Hour})
 	now := time.Date(2026, 8, 10, 1, 0, 0, 0, time.UTC)
 	auth.now = func() time.Time { return now }
 	first, _, ok := auth.create()

@@ -138,7 +138,7 @@ func TestHumanPostCommentStateDurabilityAndSessionRestart(t *testing.T) {
 	config.WebDir = testWeb(t)
 	config.DemoSeed = true
 	config.HumanAuth = &httpapi.HumanAuthConfig{
-		AdminSecret: runtimeAdminSecret, DisplayName: "Cole", Actor: "local-admin",
+		AdminSecret: runtimeAdminSecret, DisplayName: "Test Admin", Actor: "local-admin",
 		Session: "human-local-admin", Host: "browser", SessionTTL: time.Hour,
 	}
 	first, err := server.New(context.Background(), config, demodata.Seed)

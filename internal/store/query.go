@@ -218,42 +218,29 @@ func (s *Store) Inbox(ctx context.Context, projectID, recipient string, limit in
 	if recipient == "" || limit < 1 || limit > 100 {
 		return nil, domain.ErrInvalid
 	}
-	if projectID == domain.TopicGeneral {
-		rows, err := s.db.QueryContext(ctx, `SELECT 'CM-'||c.id||'-'||m.position,'mention',c.session_id,c.post_id,substr(c.body,1,200),1,m.created_at FROM comment_mentions m JOIN comments c ON c.id=m.comment_id JOIN posts p ON p.id=c.post_id WHERE m.recipient_session_id=? AND p.project_id IS NULL ORDER BY m.created_at DESC,c.id DESC LIMIT ?`, recipient, limit)
-		if err != nil {
-			return nil, err
-		}
-		defer rows.Close()
-		out := []domain.InboxItem{}
-		for rows.Next() {
-			var v domain.InboxItem
-			var unread int
-			var at string
-			if err := rows.Scan(&v.ID, &v.Kind, &v.FromSessionID, &v.Ref, &v.Snippet, &unread, &at); err != nil {
-				return nil, err
-			}
-			v.Unread = unread == 1
-			v.CreatedAt = parseStamp(at)
-			out = append(out, v)
-		}
-		return out, rows.Err()
-	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,kind,from_session_id,ref,snippet,unread,created_at FROM inbox_items WHERE recipient_session_id=? AND (?='' OR project_id=?) ORDER BY created_at DESC,id LIMIT ?`, recipient, projectID, projectID, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT 'AM-'||m.source_kind||"-"||m.source_id,"mention",COALESCE(pp.session_id,c.session_id),p.id,substr(COALESCE(pp.body,c.body),1,200),1,m.created_at
+FROM content_mentions m
+LEFT JOIN posts pp ON m.source_kind='post' AND pp.id=m.source_id
+LEFT JOIN comments c ON m.source_kind='comment' AND c.id=m.source_id
+JOIN posts p ON p.id=COALESCE(pp.id,c.post_id)
+WHERE m.recipient_kind='agent' AND m.recipient_principal=?
+AND ((?='general' AND p.project_id IS NULL) OR (?<>'general' AND (?='' OR p.project_id=?)))
+ORDER BY julianday(m.created_at) DESC,m.source_kind,m.source_id DESC LIMIT ?`, recipient, projectID, projectID, projectID, projectID, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []domain.InboxItem
+	out := []domain.InboxItem{}
 	for rows.Next() {
-		var v domain.InboxItem
+		var item domain.InboxItem
 		var unread int
-		var at string
-		if err := rows.Scan(&v.ID, &v.Kind, &v.FromSessionID, &v.Ref, &v.Snippet, &unread, &at); err != nil {
+		var created string
+		if err := rows.Scan(&item.ID, &item.Kind, &item.FromSessionID, &item.Ref, &item.Snippet, &unread, &created); err != nil {
 			return nil, err
 		}
-		v.Unread = unread == 1
-		v.CreatedAt = parseStamp(at)
-		out = append(out, v)
+		item.Unread = unread == 1
+		item.CreatedAt = parseStamp(created)
+		out = append(out, item)
 	}
 	return out, rows.Err()
 }

@@ -25,6 +25,9 @@ func (r *postsRepositoryStub) PostBrowseSnapshot(context.Context, domain.PostBro
 func (r *postsRepositoryStub) PostThread(context.Context, domain.PostThreadQuery) (domain.PostThread, error) {
 	return r.thread, nil
 }
+func (r *postsRepositoryStub) PostCommentByID(context.Context, string, string, string) (string, domain.PostComment, error) {
+	return "", domain.PostComment{}, domain.ErrNotFound
+}
 func (r *postsRepositoryStub) SetPostState(context.Context, domain.PostStateRequest) (domain.WriteResult, error) {
 	return domain.WriteResult{ID: "PS-1", Revision: 4}, nil
 }

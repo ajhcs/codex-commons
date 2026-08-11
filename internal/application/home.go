@@ -33,16 +33,25 @@ type realClock struct{}
 func (realClock) Now() time.Time { return time.Now() }
 
 type Service struct {
-	repository HomeRepository
-	presence   PresenceRegistry
-	clock      Clock
+	repository       HomeRepository
+	presence         PresenceRegistry
+	clock            Clock
+	humanDisplayName string
+	humanHandle      string
 }
 
 func New(repository HomeRepository, live PresenceRegistry, clock Clock) *Service {
 	if clock == nil {
 		clock = realClock{}
 	}
-	return &Service{repository: repository, presence: live, clock: clock}
+	return &Service{repository: repository, presence: live, clock: clock, humanDisplayName: "Local admin", humanHandle: "local-admin"}
+}
+
+func (s *Service) ConfigureHumanIdentity(displayName, handle string) {
+	if s != nil && displayName != "" && handle != "" {
+		s.humanDisplayName = displayName
+		s.humanHandle = handle
+	}
 }
 
 type HomeQuery struct {
