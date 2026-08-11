@@ -12,7 +12,8 @@ import (
 	"time"
 )
 
-const humanSessionCookie = "commons_session"
+const HumanSessionCookieName = "commons_session"
+const humanSessionCookie = HumanSessionCookieName
 
 type HumanAuthConfig struct {
 	AdminSecret string

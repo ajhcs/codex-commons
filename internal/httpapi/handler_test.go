@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -135,6 +136,33 @@ func TestHealthIsMinimalAndUnauthenticated(t *testing.T) {
 	rec := request(testHandler(&fakeBackend{}, 0), http.MethodGet, "/v1/health", "", "")
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"version":"slice-2-test"`) {
 		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHeadMirrorsGetWithoutResponseBody(t *testing.T) {
+	h := testHandler(&fakeBackend{}, 0)
+	for _, target := range []string{
+		"/v1/health",
+		"/v1/projects?limit=10",
+		"/v1/posts?limit=10",
+		"/v1/projects/commons-lab/overview",
+	} {
+		t.Run(target, func(t *testing.T) {
+			get := request(h, http.MethodGet, target, "", "bearer-secret")
+			head := request(h, http.MethodHead, target, "", "bearer-secret")
+			if head.Code != get.Code {
+				t.Fatalf("HEAD code=%d, GET code=%d", head.Code, get.Code)
+			}
+			if !reflect.DeepEqual(head.Header(), get.Header()) {
+				t.Fatalf("HEAD headers=%v, GET headers=%v", head.Header(), get.Header())
+			}
+			if head.Body.Len() != 0 {
+				t.Fatalf("HEAD body=%q, want empty", head.Body.String())
+			}
+			if get.Body.Len() == 0 {
+				t.Fatal("GET body unexpectedly empty")
+			}
+		})
 	}
 }
 

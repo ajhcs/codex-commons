@@ -13,7 +13,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"codex-commons/internal/appbackend"
 	"codex-commons/internal/application"
@@ -61,6 +63,26 @@ func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
 		}
 	}()
 	live := presence.New(nil)
+	for _, credential := range config.Credentials {
+		if credential.Project != "" {
+			exists, err := store.ProjectExists(ctx, credential.Project)
+			if err != nil {
+				return nil, fmt.Errorf("verify configured agent project %q: %w", credential.Project, err)
+			}
+			if !exists {
+				return nil, fmt.Errorf("configured agent session %q references missing project %q", credential.Session, credential.Project)
+			}
+		}
+		purpose := credential.Purpose
+		if purpose == "" {
+			purpose = configuredCredentialPurpose(credential.Actor)
+		}
+		if err := store.UpsertSession(ctx, domain.Session{
+			ID: credential.Session, Host: credential.Host, ProjectID: credential.Project, Purpose: purpose,
+		}); err != nil {
+			return nil, fmt.Errorf("register configured agent session %q: %w", credential.Session, err)
+		}
+	}
 	if config.HumanAuth != nil {
 		if err := store.UpsertSession(ctx, domain.Session{
 			ID: config.HumanAuth.Session, Host: config.HumanAuth.Host, Purpose: config.HumanAuth.DisplayName,
@@ -116,6 +138,19 @@ func (a *App) Close() error {
 		return nil
 	}
 	return a.store.Close()
+}
+
+func configuredCredentialPurpose(actor string) string {
+	purpose := "Configured agent credential for " + strings.TrimSpace(actor)
+	const maximumBytes = 200
+	if len(purpose) <= maximumBytes {
+		return purpose
+	}
+	purpose = purpose[:maximumBytes]
+	for !utf8.ValidString(purpose) {
+		purpose = purpose[:len(purpose)-1]
+	}
+	return strings.TrimSpace(purpose)
 }
 
 func (a *App) Serve(ctx context.Context, logger *slog.Logger) error {

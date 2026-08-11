@@ -7,10 +7,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"codex-commons/internal/demodata"
+	"codex-commons/internal/httpapi"
 	"codex-commons/internal/server"
 )
 
@@ -123,7 +125,7 @@ func TestConfigFailsClosedForAnonymousLANAndSecrets(t *testing.T) {
 	}
 
 	credentials := filepath.Join(t.TempDir(), "credentials.json")
-	if err := os.WriteFile(credentials, []byte(`{"credentials":[{"bearer_token":"secret","actor":"agent","session":"S-1","host":"plumbob"}]}`), 0o600); err != nil {
+	if err := os.WriteFile(credentials, []byte(`{"credentials":[{"bearer_token":"secret","actor":"agent","session":"S-1","host":"plumbob","project":"alpha","purpose":"Dogfood coordination"}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	env := map[string]string{"COMMONS_DB": filepath.Join(t.TempDir(), "parsed.sqlite")}
@@ -131,10 +133,94 @@ func TestConfigFailsClosedForAnonymousLANAndSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(config.Credentials) != 1 || config.Credentials[0].BearerToken != "secret" {
+	if len(config.Credentials) != 1 || config.Credentials[0].BearerToken != "secret" ||
+		config.Credentials[0].Project != "alpha" || config.Credentials[0].Purpose != "Dogfood coordination" {
 		t.Fatalf("credential file not parsed: %+v", config.Credentials)
 	}
 	if _, err := server.ParseConfig([]string{"--bearer-token", "leak"}, func(key string) string { return env[key] }, io.Discard); err == nil {
 		t.Fatal("secret-bearing command-line flag was unexpectedly accepted")
+	}
+}
+
+func assertHeadMatchesGet(t *testing.T, handler http.Handler, target string) {
+	t.Helper()
+	get := request(t, handler, http.MethodGet, target)
+	head := request(t, handler, http.MethodHead, target)
+	if head.Code != get.Code {
+		t.Fatalf("HEAD code=%d, GET code=%d", head.Code, get.Code)
+	}
+	if !reflect.DeepEqual(head.Header(), get.Header()) {
+		t.Fatalf("HEAD headers=%v, GET headers=%v", head.Header(), get.Header())
+	}
+	if head.Body.Len() != 0 {
+		t.Fatalf("HEAD body=%q, want empty", head.Body.String())
+	}
+}
+
+func TestAnonymousHeadMirrorsDynamicGetWithoutAllowingMutation(t *testing.T) {
+	config := server.DefaultConfig()
+	config.DatabasePath = filepath.Join(t.TempDir(), "commons.sqlite")
+	config.WebDir = testWeb(t)
+	config.AnonymousRead = true
+	config.DemoSeed = true
+	app, err := server.New(context.Background(), config, demodata.Seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+
+	for _, target := range []string{
+		"/v1/health",
+		"/v1/projects?limit=10",
+		"/v1/posts?limit=10",
+		"/v1/projects/demo-billing-orchestrator",
+		"/v1/projects/demo-billing-orchestrator/overview",
+		"/v1/projects/demo-billing-orchestrator/tasks?limit=25",
+		"/v1/projects/demo-billing-orchestrator/wiki?limit=100",
+	} {
+		assertHeadMatchesGet(t, app.Handler(), target)
+	}
+
+	mutation := request(t, app.Handler(), http.MethodHead, "/v1/claims")
+	if mutation.Code != http.StatusNotFound || mutation.Body.Len() != 0 {
+		t.Fatalf("HEAD selected mutation route: code=%d body=%q", mutation.Code, mutation.Body.String())
+	}
+	post := request(t, app.Handler(), http.MethodPost, "/v1/claims")
+	if post.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous mutation auth weakened: code=%d body=%q", post.Code, post.Body.String())
+	}
+}
+
+func TestCredentialMetadataEnvironmentAndBounds(t *testing.T) {
+	env := map[string]string{
+		"COMMONS_DB":           filepath.Join(t.TempDir(), "parsed.sqlite"),
+		"COMMONS_BEARER_TOKEN": "secret",
+		"COMMONS_ACTOR":        "agent-alpha",
+		"COMMONS_SESSION":      "session-alpha",
+		"COMMONS_HOST":         "host-alpha",
+		"COMMONS_PROJECT":      "alpha",
+		"COMMONS_PURPOSE":      "Dogfood coordination",
+	}
+	config, err := server.ParseConfig(nil, func(key string) string { return env[key] }, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Credentials) != 1 || config.Credentials[0].Project != "alpha" || config.Credentials[0].Purpose != "Dogfood coordination" {
+		t.Fatalf("environment credential=%+v", config.Credentials)
+	}
+	base := server.DefaultConfig()
+	base.DatabasePath = filepath.Join(t.TempDir(), "bounds.sqlite")
+	base.Credentials = []httpapi.Credential{{BearerToken: "secret", Actor: "agent", Session: "session", Host: "host"}}
+	if err := base.Validate(); err != nil {
+		t.Fatalf("omitted optional metadata rejected: %v", err)
+	}
+	base.Credentials[0].Project = strings.Repeat("p", 101)
+	if err := base.Validate(); err == nil || !strings.Contains(err.Error(), "bounded") {
+		t.Fatalf("oversized project accepted: %v", err)
+	}
+	base.Credentials[0].Project = ""
+	base.Credentials[0].Purpose = strings.Repeat("p", 401)
+	if err := base.Validate(); err == nil || !strings.Contains(err.Error(), "bounded") {
+		t.Fatalf("oversized purpose accepted: %v", err)
 	}
 }

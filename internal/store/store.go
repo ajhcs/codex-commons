@@ -211,6 +211,15 @@ func (s *Store) AddDependency(ctx context.Context, taskID, dependsOn string) err
 	return mapErr(err)
 }
 
+func (s *Store) ProjectExists(ctx context.Context, projectID string) (bool, error) {
+	if projectID == "" {
+		return false, domain.ErrInvalid
+	}
+	var exists bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM projects WHERE id=?)`, projectID).Scan(&exists)
+	return exists, mapErr(err)
+}
+
 func (s *Store) UpsertSession(ctx context.Context, v domain.Session) error {
 	if v.ID == "" || v.Host == "" {
 		return domain.ErrInvalid

@@ -25,6 +25,8 @@ type Credential struct {
 	Actor          string
 	Session        string
 	Host           string
+	Project        string
+	Purpose        string
 }
 
 type Config struct {
@@ -68,7 +70,21 @@ func NewHandler(backend Backend, config Config) http.Handler {
 	return &handler{backend: backend, config: config, humanAuth: newHumanAuth(config.HumanAuth)}
 }
 
+type headResponseWriter struct {
+	http.ResponseWriter
+}
+
+func (w headResponseWriter) Write(body []byte) (int, error) {
+	return len(body), nil
+}
+
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodHead {
+		w = headResponseWriter{ResponseWriter: w}
+		clone := r.Clone(r.Context())
+		clone.Method = http.MethodGet
+		r = clone
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "no-store")
