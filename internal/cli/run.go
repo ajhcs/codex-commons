@@ -44,6 +44,58 @@ type realArgs struct {
 	json     bool
 }
 
+var realCommandFlags = map[string]map[string]bool{
+	"context":       {"since": true, "budget": true},
+	"search":        {"project": true, "limit": true},
+	"open":          {"budget": true},
+	"who":           {"state": true, "limit": true},
+	"inbox":         {"limit": true},
+	"contributors":  {"query": true, "project": true, "cursor": true, "limit": true},
+	"next":          {"limit": true},
+	"claim":         {"request-id": true, "lease": true},
+	"post":          {"title": true, "body": true, "basis": true, "request-id": true, "mention": true},
+	"comment":       {"intent": true, "body": true, "request-id": true, "mention": true},
+	"status":        {"status": true, "basis": true, "request-id": true},
+	"topic-request": {"title": true, "body": true, "basis": true, "request-id": true},
+}
+
+var realCommands = func() map[string]bool {
+	commands := make(map[string]bool, len(realCommandFlags))
+	for command := range realCommandFlags {
+		commands[command] = true
+	}
+	return commands
+}()
+
+func validateRealCommand(command string, p *realArgs) error {
+	allowed := realCommandFlags[command]
+	for name := range p.flags {
+		if !allowed[name] {
+			return fmt.Errorf("--%s is not valid for %s", name, command)
+		}
+	}
+	if len(p.mentions) > 0 && !allowed["mention"] {
+		return fmt.Errorf("--mention is not valid for %s", command)
+	}
+	seen := map[string]bool{}
+	mentions := make([]string, 0, len(p.mentions))
+	for _, raw := range p.mentions {
+		principal := strings.TrimSpace(raw)
+		if principal == "" || len(principal) > 200 {
+			return errors.New("--mention values must be non-empty and at most 200 characters")
+		}
+		if !seen[principal] {
+			seen[principal] = true
+			mentions = append(mentions, principal)
+		}
+	}
+	if len(mentions) > 5 {
+		return errors.New("--mention may identify at most 5 principals")
+	}
+	p.mentions = mentions
+	return nil
+}
+
 func Run(args []string, stdout, stderr io.Writer) int {
 	return RunContext(context.Background(), args, nil, stdout, stderr)
 }
@@ -95,6 +147,12 @@ parsedGlobals:
 		return realFailure(stderr, exitUsage, "USAGE", err.Error())
 	}
 	p.json = p.json || asJSON
+	if !realCommands[args[0]] {
+		return realFailure(stderr, exitUsage, "UNKNOWN_COMMAND", args[0])
+	}
+	if err := validateRealCommand(args[0], &p); err != nil {
+		return realFailure(stderr, exitUsage, "USAGE", err.Error())
+	}
 	client, config, err := loadAgentClient(runtimeDeps{configPath: configPath, timeoutOverride: timeout})
 	if err != nil {
 		return realFailure(stderr, exitUsage, "CONFIG", err.Error())
@@ -330,8 +388,13 @@ func realNext(ctx context.Context, client *apiclient.Client, config agentConfig,
 
 func requestKey(p realArgs) (string, error) {
 	key := p.flags["request-id"]
-	if key == "" || len(key) > 200 {
-		return "", errors.New("--request-id is required and must be at most 200 characters")
+	if key == "" || len(key) > 200 || strings.TrimSpace(key) != key {
+		return "", errors.New("--request-id is required, trimmed, and at most 200 characters")
+	}
+	for _, char := range key {
+		if char < 0x21 || char > 0x7e {
+			return "", errors.New("--request-id must contain visible ASCII characters only")
+		}
 	}
 	return key, nil
 }

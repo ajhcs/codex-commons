@@ -57,6 +57,12 @@ func TestPostDiscoveryUsesScopeAndExactRecipients(t *testing.T) {
 	if _, err := s.PostThread(ctx, domain.PostThreadQuery{PostID: mentioned.ID, Limit: 10, ViewerKind: "agent", ViewerSession: "agent-b"}); err != nil {
 		t.Fatalf("mentioned exact open err=%v", err)
 	}
+	if _, err := s.Comment(ctx, domain.CommentRequest{PostID: closed.ID, Body: "hidden", Intent: "clarify", ActorID: "actor-b", ActorKind: "agent", ActorPrincipal: "agent-b", SessionID: "agent-b", RequestID: "hidden-comment"}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("closed cross-project comment err=%v", err)
+	}
+	if _, err := s.Comment(ctx, domain.CommentRequest{PostID: mentioned.ID, Body: "visible", Intent: "clarify", ActorID: "actor-b", ActorKind: "agent", ActorPrincipal: "agent-b", SessionID: "agent-b", RequestID: "mentioned-comment"}); err != nil {
+		t.Fatalf("mentioned exact comment err=%v", err)
+	}
 	human, err := s.PostBrowseSnapshot(ctx, domain.PostBrowseQuery{Limit: 20, ViewerKind: "human", ViewerSession: "human-local-admin"})
 	must(t, err)
 	if len(human.Items) != 6 {

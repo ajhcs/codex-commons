@@ -219,7 +219,7 @@ func (s *Store) Post(ctx context.Context, req domain.PostRequest) (domain.Post, 
 		return domain.Post{}, domain.ErrInvalid
 	}
 	req.MentionPrincipals = mentions
-	if req.TopicID == "" || !domain.PostKinds[req.Kind] || req.Title == "" || req.Body == "" || req.Basis == "" || req.SessionID == "" || !validPostAttachments(req.Attachments) {
+	if req.TopicID == "" || !domain.PostKinds[req.Kind] || req.Title == "" || req.Body == "" || req.Basis == "" || req.SessionID == "" || req.RequestID == "" || !validPostAttachments(req.Attachments) {
 		return domain.Post{}, domain.ErrInvalid
 	}
 	if req.Kind == "topic_request" && req.TopicID != domain.TopicGeneral {
@@ -278,9 +278,16 @@ func (s *Store) Post(ctx context.Context, req domain.PostRequest) (domain.Post, 
 		}
 		defer tx.Rollback()
 		if err = insert(tx, nil); err != nil {
+			_ = tx.Rollback()
+			if prior, replayErr := s.postByRequest(ctx, storageKey, req.RequestID); replayErr == nil && samePost(prior, req) {
+				return prior, nil
+			}
 			return domain.Post{}, mapErr(err)
 		}
 		if err = tx.Commit(); err != nil {
+			if prior, replayErr := s.postByRequest(ctx, storageKey, req.RequestID); replayErr == nil && samePost(prior, req) {
+				return prior, nil
+			}
 			return domain.Post{}, mapErr(err)
 		}
 	}
@@ -333,7 +340,7 @@ func (s *Store) Comment(ctx context.Context, req domain.CommentRequest) (domain.
 	}
 	req.MentionPrincipals = mentions
 	req.MentionSessionIDs = nil
-	if req.PostID == "" || req.Body == "" || !domain.CommentIntents[req.Intent] || req.SessionID == "" {
+	if req.PostID == "" || req.Body == "" || !domain.CommentIntents[req.Intent] || req.SessionID == "" || req.RequestID == "" {
 		return domain.WriteResult{}, domain.ErrInvalid
 	}
 	storageKey := requestStorageKey(req.ActorID, req.SessionID, req.RequestID)
@@ -350,7 +357,12 @@ func (s *Store) Comment(ctx context.Context, req domain.CommentRequest) (domain.
 		}
 	}
 	var project sql.NullString
-	if err := s.db.QueryRowContext(ctx, `SELECT project_id FROM posts WHERE id=?`, req.PostID).Scan(&project); err != nil {
+	discovery, discoveryArgs, ok := postDiscoveryPredicate(req.ActorKind, req.SessionID)
+	if !ok {
+		return domain.WriteResult{}, domain.ErrInvalid
+	}
+	queryArgs := append([]any{req.PostID}, discoveryArgs...)
+	if err := s.db.QueryRowContext(ctx, `SELECT p.project_id FROM posts p WHERE p.id=? AND `+discovery, queryArgs...).Scan(&project); err != nil {
 		return domain.WriteResult{}, mapErr(err)
 	}
 	id := newID("R-")

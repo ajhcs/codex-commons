@@ -171,6 +171,9 @@ func TestCriticalReadAndWriteRoutes(t *testing.T) {
 	}
 	for _, tc := range tests {
 		rec := request(h, tc.method, tc.path, tc.body, "bearer-secret")
+		if tc.method == http.MethodPost {
+			rec = postWithKey(h, tc.path, tc.body, "critical:"+tc.path)
+		}
 		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), tc.marker) {
 			t.Errorf("%s %s code=%d body=%s", tc.method, tc.path, rec.Code, rec.Body.String())
 		}
@@ -260,12 +263,12 @@ func TestIdentitySpoofRejectedAndAttestedMetaPassed(t *testing.T) {
 func TestTopicRequestsAreGovernanceRoutedToGeneral(t *testing.T) {
 	backend := &fakeBackend{}
 	h := testHandler(backend, 0)
-	rec := request(h, http.MethodPost, "/v1/posts", `{"topic":"commons-lab","kind":"topic_request","title":"t","body":"b","basis":"e"}`, "bearer-secret")
+	rec := postWithKey(h, "/v1/posts", `{"topic":"commons-lab","kind":"topic_request","title":"t","body":"b","basis":"e"}`, "governance-project")
 	if rec.Code != http.StatusBadRequest || len(backend.calls) != 0 {
 		t.Fatalf("governance bypass reached backend: code=%d calls=%v body=%s", rec.Code, backend.calls, rec.Body.String())
 	}
 	backend.global = true
-	rec = request(h, http.MethodPost, "/v1/posts", `{"topic":"general","kind":"topic_request","title":"t","body":"b","basis":"e"}`, "bearer-secret")
+	rec = postWithKey(h, "/v1/posts", `{"topic":"general","kind":"topic_request","title":"t","body":"b","basis":"e"}`, "governance-general")
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"revision":0`) || backend.last.Actor != "agent-7" || backend.last.Session != "S-7" {
 		t.Fatalf("attested topic request code=%d meta=%+v body=%s", rec.Code, backend.last, rec.Body.String())
 	}
@@ -274,7 +277,7 @@ func TestTopicRequestsAreGovernanceRoutedToGeneral(t *testing.T) {
 func TestGeneralAcceptsNormalCommittedPostsAtGlobalRevisionZero(t *testing.T) {
 	backend := &fakeBackend{}
 	backend.global = true
-	rec := request(testHandler(backend, 0), http.MethodPost, "/v1/posts", `{"topic":"general","kind":"finding","title":"shared","body":"b","basis":"e"}`, "bearer-secret")
+	rec := postWithKey(testHandler(backend, 0), "/v1/posts", `{"topic":"general","kind":"finding","title":"shared","body":"b","basis":"e"}`, "general-finding")
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"revision":0`) {
 		t.Fatalf("General finding code=%d body=%s", rec.Code, rec.Body.String())
 	}

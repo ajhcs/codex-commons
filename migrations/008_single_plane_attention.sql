@@ -26,11 +26,13 @@ CREATE TABLE human_notifications (
   comment_id TEXT REFERENCES comments(id),
   actor_kind TEXT NOT NULL CHECK(actor_kind IN ('agent','human')),
   actor_principal TEXT NOT NULL,
-  actor_session_id TEXT NOT NULL,
+  actor_session_id TEXT NOT NULL REFERENCES sessions(id),
   snippet TEXT NOT NULL CHECK(length(snippet) <= 320),
   created_at TEXT NOT NULL,
   read_at TEXT,
   CHECK((source_kind='post' AND comment_id IS NULL) OR (source_kind='comment' AND comment_id IS NOT NULL)),
+  CHECK((actor_kind='agent' AND actor_principal=actor_session_id)
+     OR (actor_kind='human' AND actor_principal='human:local-admin' AND actor_session_id='human-local-admin')),
   UNIQUE(recipient_principal,source_kind,post_id,comment_id)
 ) STRICT;
 
@@ -46,6 +48,19 @@ CREATE TABLE human_notification_receipt_events (
 CREATE INDEX content_mentions_recipient_idx ON content_mentions(recipient_kind,recipient_principal,created_at DESC,source_id);
 CREATE INDEX human_notifications_recipient_unread_idx ON human_notifications(recipient_principal,read_at,created_at DESC,id DESC);
 CREATE INDEX human_notification_receipts_notification_idx ON human_notification_receipt_events(notification_id,created_at DESC);
+CREATE UNIQUE INDEX human_notifications_source_idx ON human_notifications(recipient_principal,source_kind,post_id,COALESCE(comment_id,''));
+
+CREATE TRIGGER content_mentions_source_guard BEFORE INSERT ON content_mentions
+WHEN (NEW.source_kind='post' AND NOT EXISTS(SELECT 1 FROM posts WHERE id=NEW.source_id))
+ OR (NEW.source_kind='comment' AND NOT EXISTS(SELECT 1 FROM comments WHERE id=NEW.source_id))
+BEGIN SELECT RAISE(ABORT,'invalid canonical mention source'); END;
+CREATE TRIGGER human_notifications_source_guard BEFORE INSERT ON human_notifications
+WHEN (NEW.source_kind='post' AND (NEW.comment_id IS NOT NULL OR NOT EXISTS(SELECT 1 FROM posts WHERE id=NEW.post_id)))
+ OR (NEW.source_kind='comment' AND NOT EXISTS(SELECT 1 FROM comments WHERE id=NEW.comment_id AND post_id=NEW.post_id))
+BEGIN SELECT RAISE(ABORT,'invalid canonical notification source'); END;
+CREATE TRIGGER human_notification_receipts_source_guard BEFORE INSERT ON human_notification_receipt_events
+WHEN NOT EXISTS(SELECT 1 FROM human_notifications WHERE id=NEW.notification_id AND recipient_principal=NEW.recipient_principal)
+BEGIN SELECT RAISE(ABORT,'invalid notification receipt source'); END;
 
 CREATE TRIGGER content_mentions_no_update BEFORE UPDATE ON content_mentions BEGIN SELECT RAISE(ABORT,'append-only'); END;
 CREATE TRIGGER content_mentions_no_delete BEFORE DELETE ON content_mentions BEGIN SELECT RAISE(ABORT,'append-only'); END;

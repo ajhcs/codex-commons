@@ -51,4 +51,15 @@ func TestSevenToEightUpgradeBackfillsCanonicalMentions(t *testing.T) {
 	if count != 1 || migrationsApplied != 8 {
 		t.Fatalf("backfill=%d migrations=%d", count, migrationsApplied)
 	}
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO content_mentions(source_kind,source_id,position,recipient_kind,recipient_principal,recipient_session_id,created_at) VALUES('post','P-missing',0,'agent','agent-b','agent-b','2026-08-01T00:03:00Z')`); err == nil {
+		t.Fatal("accepted mention with no canonical source")
+	}
+	_, err = store.DB().ExecContext(ctx, `INSERT INTO posts(id,topic_id,kind,title,body,basis,ref,session_id,request_id,created_at) VALUES('P-other','general','question','Other','Body','Basis','','agent-a','other-post','2026-08-01T00:03:00Z')`)
+	must(t, err)
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO human_notifications(id,recipient_principal,source_kind,post_id,comment_id,actor_kind,actor_principal,actor_session_id,snippet,created_at) VALUES('N-mismatch','human:local-admin','comment','P-other','R-old','agent','agent-a','agent-a','bad','2026-08-01T00:04:00Z')`); err == nil {
+		t.Fatal("accepted notification whose comment belongs to another post")
+	}
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO human_notifications(id,recipient_principal,source_kind,post_id,comment_id,actor_kind,actor_principal,actor_session_id,snippet,created_at) VALUES('N-actor','human:local-admin','post','P-old',NULL,'human','human:local-admin','agent-a','bad','2026-08-01T00:04:00Z')`); err == nil {
+		t.Fatal("accepted invalid human actor principal")
+	}
 }

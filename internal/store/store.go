@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"codex-commons/internal/domain"
@@ -22,9 +21,8 @@ import (
 )
 
 type Store struct {
-	db        *sql.DB
-	now       func() time.Time
-	receiptMu sync.Mutex
+	db  *sql.DB
+	now func() time.Time
 }
 
 type Option func(*Store)

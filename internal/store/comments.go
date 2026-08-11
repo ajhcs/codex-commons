@@ -25,6 +25,7 @@ WHERE c.id=? AND `+discovery, queryArgs...).Scan(&postID, &item.ID, &item.Body, 
 		return "", domain.PostComment{}, mapErr(err)
 	}
 	item.CreatedAt = parseStamp(created)
+	setCanonicalAuthor(&item.Author)
 	mentions, err := readContentMentions(ctx, s.db, "comment", []string{commentID})
 	if err != nil {
 		return "", domain.PostComment{}, err

@@ -25,9 +25,10 @@ func (s *Store) Contributors(ctx context.Context, q domain.ContributorQuery) ([]
 FROM session_handles h JOIN sessions s ON s.id=h.session_id LEFT JOIN projects p ON p.id=s.project_id
 WHERE (?='' OR lower(h.handle) LIKE ? ESCAPE '\' OR lower(s.purpose) LIKE ? ESCAPE '\')
 AND (?='' OR s.project_id=?)
+AND s.id<>?
 AND (?='' OR lower(h.handle)>lower(?) OR (lower(h.handle)=lower(?) AND s.id>?))
 ORDER BY lower(h.handle),s.id LIMIT ?`, q.Search, pattern, pattern, q.ProjectID, q.ProjectID,
-		q.AfterHandle, q.AfterHandle, q.AfterHandle, q.AfterSessionID, q.Limit+1)
+		domain.HumanLegacySession, q.AfterHandle, q.AfterHandle, q.AfterHandle, q.AfterSessionID, q.Limit+1)
 	if err != nil {
 		return nil, err
 	}

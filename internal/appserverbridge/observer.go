@@ -8,10 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 )
 
-const MaxLineBytes = 1 << 20
+const MaxLineBytes, maxPendingRequests, maxInventoryItems = 1 << 20, 1024, 1000
 
 var ErrInvalidMessage = errors.New("invalid app-server message")
 
@@ -26,12 +27,12 @@ type Thread struct {
 	ID        string `json:"id"`
 	SessionID string `json:"sessionId"`
 	Name      string `json:"name,omitempty"`
-	Preview   string `json:"preview,omitempty"`
+	Preview   string `json:"-"`
 	Status    Status `json:"status"`
 }
 
-// Purpose is deliberately derived only from the user-visible thread name. The
-// preview is retained for diagnostics but is never published as a purpose.
+// Purpose is deliberately derived only from the user-visible thread name.
+// App-server previews can contain prompt or transcript prose and are discarded.
 func (t Thread) Purpose() string { return t.Name }
 
 type Status struct {
@@ -48,11 +49,12 @@ type Event struct {
 }
 
 type envelope struct {
-	ID     json.RawMessage `json:"id"`
-	Method string          `json:"method"`
-	Params json.RawMessage `json:"params"`
-	Result json.RawMessage `json:"result"`
-	Error  json.RawMessage `json:"error"`
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params"`
+	Result  json.RawMessage `json:"result"`
+	Error   json.RawMessage `json:"error"`
 }
 
 type Observer struct {
@@ -71,7 +73,7 @@ func (o *Observer) Process(direction Direction, line []byte) ([]Event, error) {
 	if err := decoder.Decode(&message); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidMessage, err)
 	}
-	if decoder.Decode(&struct{}{}) == nil {
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || message.JSONRPC != "2.0" {
 		return nil, ErrInvalidMessage
 	}
 	if direction == ToServer {
@@ -86,6 +88,10 @@ func (o *Observer) Process(direction Direction, line []byte) ([]Event, error) {
 			return nil, err
 		}
 		o.mu.Lock()
+		if _, duplicate := o.pending[key]; duplicate || len(o.pending) >= maxPendingRequests {
+			o.mu.Unlock()
+			return nil, ErrInvalidMessage
+		}
 		o.pending[key] = message.Method
 		o.mu.Unlock()
 		return nil, nil
@@ -119,7 +125,7 @@ func (o *Observer) Process(direction Direction, line []byte) ([]Event, error) {
 		var value struct {
 			Data []Thread `json:"data"`
 		}
-		if err := json.Unmarshal(message.Result, &value); err != nil {
+		if err := json.Unmarshal(message.Result, &value); err != nil || len(value.Data) > maxInventoryItems {
 			return nil, ErrInvalidMessage
 		}
 		for _, thread := range value.Data {
@@ -132,7 +138,7 @@ func (o *Observer) Process(direction Direction, line []byte) ([]Event, error) {
 		var value struct {
 			Data []string `json:"data"`
 		}
-		if err := json.Unmarshal(message.Result, &value); err != nil {
+		if err := json.Unmarshal(message.Result, &value); err != nil || len(value.Data) > maxInventoryItems {
 			return nil, ErrInvalidMessage
 		}
 		for _, id := range value.Data {
@@ -161,6 +167,9 @@ func requestKey(raw json.RawMessage) (string, error) {
 }
 
 func validStatus(status Status) bool {
+	if len(status.ActiveFlags) > 32 {
+		return false
+	}
 	switch status.Type {
 	case "notLoaded", "idle", "systemError":
 		return len(status.ActiveFlags) == 0

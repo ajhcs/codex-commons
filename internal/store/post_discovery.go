@@ -7,6 +7,19 @@ import (
 	"codex-commons/internal/domain"
 )
 
+func setCanonicalAuthor(author *domain.PostAuthor) {
+	if author == nil {
+		return
+	}
+	if author.SessionID == domain.HumanLegacySession {
+		author.Kind = "human"
+		author.Principal = domain.HumanLocalPrincipal
+		return
+	}
+	author.Kind = "agent"
+	author.Principal = author.SessionID
+}
+
 func postDiscoveryPredicate(viewerKind, viewerSession string) (string, []any, bool) {
 	// Empty is retained only for direct repository callers and migration-era
 	// tests. HTTP always supplies an authenticated, server-attested viewer.

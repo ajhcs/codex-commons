@@ -28,7 +28,7 @@ func (s *Service) OpenComment(ctx context.Context, request CommentOpenRequest) (
 		return CommentOpenResult{}, err
 	}
 	return CommentOpenResult{PostRef: postID, Comment: PostComment{
-		ID: item.ID, Body: item.Body, Intent: item.Intent, Author: appAuthor(item.Author),
+		ID: item.ID, Body: item.Body, Intent: item.Intent, Author: s.appAuthor(item.Author),
 		CreatedAt: item.CreatedAt, Mentions: s.appMentions(item.Mentions),
 	}}, nil
 }

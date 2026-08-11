@@ -25,7 +25,7 @@ func TestObservesDocumentedInventoryLoadedAndStatusWithoutThreadActions(t *testi
 		if tc.kind != "" && (len(events) != 1 || events[0].Kind != tc.kind) {
 			t.Fatalf("events=%+v", events)
 		}
-		if tc.kind == "thread_inventory" && (events[0].Threads[0].Purpose() != "Scope audit" || events[0].Threads[0].Purpose() == events[0].Threads[0].Preview) {
+		if tc.kind == "thread_inventory" && (events[0].Threads[0].Purpose() != "Scope audit" || events[0].Threads[0].Preview != "") {
 			t.Fatalf("purpose leaked preview: %+v", events[0])
 		}
 	}
@@ -43,9 +43,20 @@ func TestIgnoresWriteAndResumeMethods(t *testing.T) {
 
 func TestRejectsMalformedOrUnboundedLines(t *testing.T) {
 	o := NewObserver()
-	for _, line := range [][]byte{nil, []byte("{}\n{}"), make([]byte, MaxLineBytes+1), []byte(`{"jsonrpc":"2.0","method":"thread/status/changed","params":{"threadId":"T","status":{"type":"invented"}}}`)} {
+	for _, line := range [][]byte{nil, []byte("{}\n{}"), []byte(`{"jsonrpc":"2.0"} trailing`), []byte(`{"method":"thread/list","id":1}`), []byte(`{"jsonrpc":"1.0","method":"thread/list","id":1}`), make([]byte, MaxLineBytes+1), []byte(`{"jsonrpc":"2.0","method":"thread/status/changed","params":{"threadId":"T","status":{"type":"invented"}}}`)} {
 		if _, err := o.Process(FromServer, line); err == nil {
 			t.Fatalf("accepted malformed line len=%d", len(line))
 		}
+	}
+}
+
+func TestRejectsDuplicatePendingCorrelation(t *testing.T) {
+	o := NewObserver()
+	line := []byte(`{"jsonrpc":"2.0","id":"same","method":"thread/list","params":{}}`)
+	if _, err := o.Process(ToServer, line); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := o.Process(ToServer, line); err == nil {
+		t.Fatal("accepted duplicate pending request id")
 	}
 }

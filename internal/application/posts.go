@@ -43,10 +43,13 @@ type PostAttachment struct {
 }
 
 type PostAuthor struct {
-	Handle     string      `json:"handle,omitempty"`
-	Session    string      `json:"session,omitempty"`
-	Purpose    string      `json:"purpose,omitempty"`
-	Provenance *Provenance `json:"provenance,omitempty"`
+	Kind        string      `json:"kind"`
+	Principal   string      `json:"principal"`
+	DisplayName string      `json:"display_name,omitempty"`
+	Handle      string      `json:"handle,omitempty"`
+	Session     string      `json:"session,omitempty"`
+	Purpose     string      `json:"purpose,omitempty"`
+	Provenance  *Provenance `json:"provenance,omitempty"`
 }
 
 type MentionTarget struct {
@@ -199,9 +202,13 @@ func appProject(item *domain.PostProject) *PostProject {
 	return &PostProject{ID: item.ID, Name: item.Name}
 }
 
-func appAuthor(item domain.PostAuthor) PostAuthor {
-	return PostAuthor{Handle: item.Handle, Session: item.SessionID, Purpose: item.Purpose,
+func (s *Service) appAuthor(item domain.PostAuthor) PostAuthor {
+	out := PostAuthor{Kind: item.Kind, Principal: item.Principal, Handle: item.Handle, Session: item.SessionID, Purpose: item.Purpose,
 		Provenance: attestedProvenance("", item.SessionID, item.Purpose)}
+	if item.Kind == "human" {
+		out.Handle, out.DisplayName, out.Purpose = s.humanHandle, s.humanDisplayName, ""
+	}
+	return out
 }
 
 func (s *Service) appMentions(items []domain.MentionTarget) []MentionTarget {
@@ -254,7 +261,7 @@ func (s *Service) BrowsePosts(ctx context.Context, request PostFeedRequest) (Pos
 	for _, item := range snapshot.Items {
 		out.Items = append(out.Items, PostFeedItem{
 			ID: item.ID, Kind: item.Kind, Title: item.Title, Preview: item.Preview,
-			Topic: appTopic(item.Topic), Project: appProject(item.Project), Author: appAuthor(item.Author),
+			Topic: appTopic(item.Topic), Project: appProject(item.Project), Author: s.appAuthor(item.Author),
 			CreatedAt: item.CreatedAt, CommentCount: item.CommentCount, State: item.State,
 			SupersededBy: item.SupersededBy, Attachments: appAttachments(item.Attachments),
 			Destination:      BrowseDestination{Kind: "post", Ref: item.ID},
@@ -298,7 +305,7 @@ func (s *Service) OpenPost(ctx context.Context, request PostOpenRequest) (PostOp
 		Post: PostFull{ID: thread.Post.Ref, Kind: thread.Post.Kind, Title: thread.Post.Title,
 			Body: thread.Post.Body, Basis: thread.Post.Basis, RelatedRef: thread.Post.RelatedRef,
 			Revision: thread.Post.Revision, Topic: appTopic(thread.Topic), Project: appProject(thread.Project),
-			Author: appAuthor(thread.Author), CreatedAt: thread.Post.CreatedAt, State: thread.State,
+			Author: s.appAuthor(thread.Author), CreatedAt: thread.Post.CreatedAt, State: thread.State,
 			SupersededBy: thread.SupersededBy, Attachments: appAttachments(thread.Attachments),
 			CommentCount:     thread.CommentCount,
 			Destination:      BrowseDestination{Kind: "post", Ref: thread.Post.Ref},
@@ -308,7 +315,7 @@ func (s *Service) OpenPost(ctx context.Context, request PostOpenRequest) (PostOp
 	}
 	for _, item := range thread.Comments {
 		out.Comments.Items = append(out.Comments.Items, PostComment{
-			ID: item.ID, Body: item.Body, Intent: item.Intent, Author: appAuthor(item.Author), CreatedAt: item.CreatedAt,
+			ID: item.ID, Body: item.Body, Intent: item.Intent, Author: s.appAuthor(item.Author), CreatedAt: item.CreatedAt,
 			Mentions: s.appMentions(item.Mentions),
 		})
 	}

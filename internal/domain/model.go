@@ -5,6 +5,7 @@ import "time"
 const (
 	TopicGeneral        = "general"
 	HumanLocalPrincipal = "human:local-admin"
+	HumanLegacySession  = "human-local-admin"
 )
 
 type MentionTarget struct {

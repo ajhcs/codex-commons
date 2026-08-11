@@ -153,6 +153,7 @@ LIMIT ?`, pageArgs...)
 		item.Title = boundedUTF8(item.Title, 200)
 		item.Preview = boundedUTF8(strings.TrimSpace(body), 320)
 		item.CreatedAt = parseStamp(created)
+		setCanonicalAuthor(&item.Author)
 		if projectID != "" {
 			item.Project = &domain.PostProject{ID: projectID, Name: projectName}
 		}
@@ -239,6 +240,7 @@ WHERE p.id=? AND `+discovery, append([]any{query.PostID}, discoveryArgs...)...).
 	}
 	out.Post.CreatedAt = parseStamp(created)
 	out.Author.SessionID = out.Post.SessionID
+	setCanonicalAuthor(&out.Author)
 	if projectID != "" {
 		out.Project = &domain.PostProject{ID: projectID, Name: projectName}
 	}
@@ -266,6 +268,7 @@ ORDER BY julianday(c.created_at),c.id LIMIT ?`, args...)
 			return out, err
 		}
 		item.CreatedAt = parseStamp(stampValue)
+		setCanonicalAuthor(&item.Author)
 		out.Comments = append(out.Comments, item)
 	}
 	if err := rows.Err(); err != nil {

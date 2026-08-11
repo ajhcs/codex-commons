@@ -109,7 +109,7 @@ type PostBrowseQuery struct {
 }
 
 type PostAuthor struct {
-	SessionID, Handle, Purpose string
+	Kind, Principal, SessionID, Handle, Purpose string
 }
 
 type PostTopic struct {

@@ -92,8 +92,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	meta := RequestMeta{PrincipalKind: identity.Kind, Principal: identity.Principal, Actor: identity.Actor, Session: identity.Session, Host: identity.Host, RequestID: rid, IdempotencyKey: r.Header.Get("Idempotency-Key")}
-	if len(meta.IdempotencyKey) > 200 {
-		h.writeError(w, rid, http.StatusBadRequest, "bad_idempotency_key", "maximum length is 200")
+	if !validIdempotencyKey(meta.IdempotencyKey) {
+		h.writeError(w, rid, http.StatusBadRequest, "bad_idempotency_key", "must be at most 200 visible ASCII characters without surrounding whitespace")
 		return
 	}
 	if identity.Kind == "human" && r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -369,10 +369,18 @@ func (h *handler) route(w http.ResponseWriter, r *http.Request, meta RequestMeta
 			h.badBody(w, meta, "task is required")
 			return
 		}
+		if meta.IdempotencyKey == "" {
+			h.badBody(w, meta, "Idempotency-Key required")
+			return
+		}
 		out, err := h.backend.Claim(r.Context(), in, meta)
 		h.finishWrite(w, meta, out, err, false)
 	case r.Method == http.MethodPost && path == "/v1/posts":
 		var in PostRequest
+		if meta.IdempotencyKey == "" {
+			h.badBody(w, meta, "Idempotency-Key required")
+			return
+		}
 		if !h.decode(w, r, meta, &in) {
 			return
 		}
@@ -431,10 +439,18 @@ func (h *handler) route(w http.ResponseWriter, r *http.Request, meta RequestMeta
 			h.finishWrite(w, meta, WriteResult{}, NewError(CodeUnavailable, "perspective scope unavailable"), true)
 			return
 		}
+		if meta.IdempotencyKey == "" {
+			h.badBody(w, meta, "Idempotency-Key required")
+			return
+		}
 		out, err := backend.SetPerspectiveScope(r.Context(), in, meta)
 		h.finishWrite(w, meta, out, err, true)
 	case r.Method == http.MethodPost && path == "/v1/comments":
 		var in CommentRequest
+		if meta.IdempotencyKey == "" {
+			h.badBody(w, meta, "Idempotency-Key required")
+			return
+		}
 		if !h.decode(w, r, meta, &in) {
 			return
 		}
@@ -453,6 +469,10 @@ func (h *handler) route(w http.ResponseWriter, r *http.Request, meta RequestMeta
 		if !h.decode(w, r, meta, &in) {
 			return
 		}
+		if meta.IdempotencyKey == "" {
+			h.badBody(w, meta, "Idempotency-Key required")
+			return
+		}
 		if in.Ref == "" || in.Status == "" || in.Basis == "" {
 			h.badBody(w, meta, "ref, status, and basis are required")
 			return
@@ -461,6 +481,10 @@ func (h *handler) route(w http.ResponseWriter, r *http.Request, meta RequestMeta
 		h.finishWrite(w, meta, out, err, false)
 	case r.Method == http.MethodPost && path == "/v1/topic-requests":
 		var in TopicRequest
+		if meta.IdempotencyKey == "" {
+			h.badBody(w, meta, "Idempotency-Key required")
+			return
+		}
 		if !h.decode(w, r, meta, &in) {
 			return
 		}
@@ -620,6 +644,17 @@ func validCommentIntent(intent string) bool {
 }
 
 func blank(value string) bool { return strings.TrimSpace(value) == "" }
+func validIdempotencyKey(value string) bool {
+	if len(value) > 200 || strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, char := range value {
+		if char < 0x21 || char > 0x7e {
+			return false
+		}
+	}
+	return true
+}
 
 func (h *handler) finish(w http.ResponseWriter, meta RequestMeta, data any, err error, untrusted bool) {
 	if err == nil {

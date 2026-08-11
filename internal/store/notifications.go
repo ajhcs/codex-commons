@@ -43,6 +43,9 @@ func resolveMentionTarget(ctx context.Context, tx *sql.Tx, principal string) (do
 	if principal == domain.HumanLocalPrincipal {
 		return domain.MentionTarget{Kind: "human", Principal: principal}, nil
 	}
+	if principal == domain.HumanLegacySession {
+		return domain.MentionTarget{}, domain.ErrInvalid
+	}
 	var target domain.MentionTarget
 	target.Kind, target.Principal, target.SessionID = "agent", principal, principal
 	if err := tx.QueryRowContext(ctx, `SELECT h.handle,s.purpose FROM session_handles h JOIN sessions s ON s.id=h.session_id WHERE h.session_id=?`, principal).Scan(&target.Handle, &target.Purpose); err != nil {
@@ -170,14 +173,24 @@ func (s *Store) HumanNotifications(ctx context.Context, query domain.Notificatio
 }
 
 func (s *Store) MarkHumanNotificationRead(ctx context.Context, req domain.MarkNotificationReadRequest) (domain.WriteResult, error) {
-	s.receiptMu.Lock()
-	defer s.receiptMu.Unlock()
 	if req.NotificationID == "" || req.RecipientPrincipal != domain.HumanLocalPrincipal || req.ActorID == "" || req.RequestID == "" {
 		return domain.WriteResult{}, domain.ErrInvalid
 	}
 	storageKey := requestStorageKey(req.ActorID, req.RecipientPrincipal, req.RequestID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.WriteResult{}, err
+	}
+	defer tx.Rollback()
+	now := stamp(s.now())
+	// Acquire SQLite's writer before reading the replay key. This keeps a
+	// concurrent replay stable across separate Store instances and processes
+	// without changing the notification named by a conflicting replay.
+	if _, err := tx.ExecContext(ctx, `UPDATE schema_migrations SET name=name WHERE version=8`); err != nil {
+		return domain.WriteResult{}, mapErr(err)
+	}
 	var priorID, eventID string
-	if err := s.db.QueryRowContext(ctx, `SELECT id,notification_id FROM human_notification_receipt_events WHERE request_id=?`, storageKey).Scan(&eventID, &priorID); err == nil {
+	if err := tx.QueryRowContext(ctx, `SELECT id,notification_id FROM human_notification_receipt_events WHERE request_id=?`, storageKey).Scan(&eventID, &priorID); err == nil {
 		if priorID != req.NotificationID {
 			return domain.WriteResult{}, domain.ErrConflict
 		}
@@ -185,22 +198,12 @@ func (s *Store) MarkHumanNotificationRead(ctx context.Context, req domain.MarkNo
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return domain.WriteResult{}, err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return domain.WriteResult{}, err
-	}
-	defer tx.Rollback()
-	var existing string
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(read_at,'') FROM human_notifications WHERE id=? AND recipient_principal=?`, req.NotificationID, req.RecipientPrincipal).Scan(&existing); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE human_notifications SET read_at=? WHERE id=? AND recipient_principal=? AND read_at IS NULL`, now, req.NotificationID, req.RecipientPrincipal); err != nil {
 		return domain.WriteResult{}, mapErr(err)
 	}
-	now := stamp(s.now())
-	readAt := existing
-	if readAt == "" {
-		readAt = now
-		if _, err := tx.ExecContext(ctx, `UPDATE human_notifications SET read_at=? WHERE id=? AND read_at IS NULL`, readAt, req.NotificationID); err != nil {
-			return domain.WriteResult{}, err
-		}
+	var readAt string
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(read_at,'') FROM human_notifications WHERE id=? AND recipient_principal=?`, req.NotificationID, req.RecipientPrincipal).Scan(&readAt); err != nil {
+		return domain.WriteResult{}, mapErr(err)
 	}
 	eventID = newID("NR-")
 	if _, err := tx.ExecContext(ctx, `INSERT INTO human_notification_receipt_events(id,notification_id,recipient_principal,request_id,read_at,created_at) VALUES(?,?,?,?,?,?)`, eventID, req.NotificationID, req.RecipientPrincipal, storageKey, readAt, now); err != nil {

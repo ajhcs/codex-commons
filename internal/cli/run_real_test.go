@@ -58,7 +58,7 @@ func TestRealCLIUsesAuthenticatedHTTPAndPersistedAcknowledgement(t *testing.T) {
 		t.Fatalf("context code=%d out=%q err=%q", code, out.String(), errOut.String())
 	}
 	out.Reset()
-	code = RunContext(context.Background(), []string{"--config", config, "post", "alpha-posts", "question", "--title", "Question", "--body", "-", "--basis", "Observed", "--mention", "human:local-admin", "--request-id", "post-1"}, strings.NewReader("Body from stdin\n"), &out, &errOut)
+	code = RunContext(context.Background(), []string{"--config", config, "post", "alpha-posts", "question", "--title", "Question", "--body", "-", "--basis", "Observed", "--mention", "human:local-admin", "--mention", "human:local-admin", "--request-id", "post-1"}, strings.NewReader("Body from stdin\n"), &out, &errOut)
 	if code != 0 || !strings.Contains(out.String(), "PERSISTED id=P-real revision=8 persisted=true") {
 		t.Fatalf("post code=%d out=%q err=%q", code, out.String(), errOut.String())
 	}
@@ -90,5 +90,22 @@ func TestRealCLIStableConflictExitAndNoFixtureFallback(t *testing.T) {
 	code = RunContext(context.Background(), []string{"context", "commons-lab"}, strings.NewReader(""), &out, &errOut)
 	if code != exitUsage || strings.Contains(out.String(), "PURPOSE") || !strings.Contains(errOut.String(), "ERROR CONFIG") {
 		t.Fatalf("implicit fallback code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+}
+
+func TestRealCLIRejectsUnknownAndIrrelevantFlagsBeforeConfig(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{args: []string{"unknown"}, want: "ERROR UNKNOWN_COMMAND unknown"},
+		{args: []string{"open", "P-1", "--limit", "1"}, want: "ERROR USAGE --limit is not valid for open"},
+		{args: []string{"post", "general", "finding", "--mention", "a", "--mention", "b", "--mention", "c", "--mention", "d", "--mention", "e", "--mention", "f"}, want: "ERROR USAGE --mention may identify at most 5 principals"},
+	} {
+		var out, errOut bytes.Buffer
+		code := RunContext(context.Background(), tc.args, strings.NewReader(""), &out, &errOut)
+		if code != exitUsage || out.Len() != 0 || !strings.Contains(errOut.String(), tc.want) || strings.Contains(errOut.String(), "ERROR CONFIG") {
+			t.Fatalf("args=%v code=%d out=%q err=%q", tc.args, code, out.String(), errOut.String())
+		}
 	}
 }
