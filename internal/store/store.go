@@ -158,8 +158,23 @@ func (s *Store) CreateProject(ctx context.Context, p domain.Project) error {
 	if p.ID == "" || p.Name == "" || p.Purpose == "" {
 		return domain.ErrInvalid
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO projects(id,name,status,purpose,milestone,now_text) VALUES(?,?,?,?,?,?)`, p.ID, p.Name, p.Status, p.Purpose, p.Milestone, p.Now)
-	return mapErr(err)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := s.now().UTC()
+	if _, err = tx.ExecContext(ctx, `INSERT INTO projects(id,name,status,purpose,milestone,now_text,revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
+		p.ID, p.Name, p.Status, p.Purpose, p.Milestone, p.Now, p.Revision, stamp(now), stamp(now)); err != nil {
+		return mapErr(err)
+	}
+	if p.Milestone != "" {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO milestones(id,project_id,title,status,position,target_date,project_revision,created_at,updated_at) VALUES(?,?,?,'active',0,NULL,?,?,?)`,
+			"MS-legacy-"+p.ID, p.ID, p.Milestone, p.Revision, stamp(now), stamp(now)); err != nil {
+			return mapErr(err)
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) CreateTopic(ctx context.Context, t domain.Topic) error {
@@ -170,12 +185,25 @@ func (s *Store) CreateTopic(ctx context.Context, t domain.Topic) error {
 	return mapErr(err)
 }
 
-func (s *Store) CreateTask(ctx context.Context, t domain.Task) error {
-	if t.ID == "" || t.ProjectID == "" || t.Title == "" {
+func (s *Store) CreateTask(ctx context.Context, task domain.Task) error {
+	if task.ID == "" || task.ProjectID == "" || task.Title == "" {
 		return domain.ErrInvalid
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO tasks(id,project_id,state,title,priority,owner_session_id,accept_text) VALUES(?,?,?,?,?,NULLIF(?,''),?)`, t.ID, t.ProjectID, t.State, t.Title, t.Priority, t.OwnerSessionID, t.Accept)
-	return mapErr(err)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := s.now().UTC()
+	if _, err = tx.ExecContext(ctx, `INSERT INTO tasks(id,project_id,state,title,priority,owner_session_id,accept_text,description,milestone_id,project_revision,created_at,updated_at) VALUES(?,?,?,?,?,NULLIF(?,''),?,'',NULL,0,?,?)`,
+		task.ID, task.ProjectID, task.State, task.Title, task.Priority, task.OwnerSessionID, task.Accept, stamp(now), stamp(now)); err != nil {
+		return mapErr(err)
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO task_events(id,task_id,project_id,project_revision,kind,summary,from_state,to_state,actor_id,session_id,created_at) VALUES(?,?,?,0,'imported','Imported through compatibility API',NULL,?,'','',?)`,
+		newID("TE-"), task.ID, task.ProjectID, task.State, stamp(now)); err != nil {
+		return mapErr(err)
+	}
+	return tx.Commit()
 }
 
 func (s *Store) AddDependency(ctx context.Context, taskID, dependsOn string) error {
@@ -208,7 +236,7 @@ func (s *Store) mutate(ctx context.Context, projectID, kind, ref, summary string
 		return 0, err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `UPDATE projects SET revision=revision+1 WHERE id=?`, projectID)
+	res, err := tx.ExecContext(ctx, `UPDATE projects SET revision=revision+1,updated_at=? WHERE id=?`, stamp(s.now()), projectID)
 	if err != nil {
 		return 0, mapErr(err)
 	}

@@ -58,37 +58,111 @@ func (s *Store) Claim(ctx context.Context, req domain.ClaimRequest) (domain.Clai
 	} else if !errors.Is(err, domain.ErrNotFound) {
 		return domain.Claim{}, err
 	}
-	var projectID string
-	if err := s.db.QueryRowContext(ctx, `SELECT project_id FROM tasks WHERE id=?`, req.TaskID).Scan(&projectID); err != nil {
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.Claim{}, err
+	}
+	defer tx.Rollback()
+	// The first statement is a harmless write. It acquires SQLite's single
+	// writer before any transactional reads, so concurrent claimers observe the
+	// just-committed current-claim row rather than upgrading stale snapshots.
+	result, err := tx.ExecContext(ctx, `UPDATE tasks SET state=state WHERE id=?`, req.TaskID)
+	if err != nil {
 		return domain.Claim{}, mapErr(err)
 	}
-	id := newID("C-")
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		return domain.Claim{}, domain.ErrNotFound
+	}
+	if prior, err := claimByRequestQuery(ctx, tx, storageKey, req.RequestID); err == nil {
+		if prior.TaskID != req.TaskID || prior.SessionID != req.SessionID || !sameLease(prior.LeaseUntil, req.LeaseUntil) {
+			return domain.Claim{}, domain.ErrConflict
+		}
+		return prior, nil
+	} else if !errors.Is(err, domain.ErrNotFound) {
+		return domain.Claim{}, err
+	}
+
+	var projectID, state, title string
+	if err = tx.QueryRowContext(ctx, `SELECT project_id,state,title FROM tasks WHERE id=?`, req.TaskID).Scan(&projectID, &state, &title); err != nil {
+		return domain.Claim{}, mapErr(err)
+	}
 	claimedAt := s.now().UTC()
+	var currentClaimID string
+	var currentLease sql.NullString
+	currentErr := tx.QueryRowContext(ctx, `SELECT claim_id,lease_until FROM task_current_claims WHERE task_id=?`, req.TaskID).Scan(&currentClaimID, &currentLease)
+	reclaim := false
+	switch {
+	case errors.Is(currentErr, sql.ErrNoRows):
+		if state != "ready" {
+			return domain.Claim{}, domain.ErrConflict
+		}
+	case currentErr != nil:
+		return domain.Claim{}, currentErr
+	case !currentLease.Valid || parseStamp(currentLease.String).After(claimedAt):
+		return domain.Claim{}, domain.ErrConflict
+	case state != "ready" && state != "in_progress":
+		return domain.Claim{}, domain.ErrConflict
+	default:
+		reclaim = true
+	}
+
+	revision, err := bumpProjectRevision(ctx, tx, projectID, claimedAt)
+	if err != nil {
+		return domain.Claim{}, err
+	}
+	id := newID("C-")
 	var lease any
 	if req.LeaseUntil != nil {
 		lease = stamp(*req.LeaseUntil)
 	}
-	rev, err := s.mutate(ctx, projectID, "claim", req.TaskID, "task claimed", func(tx *sql.Tx, rev int64) error {
-		var state string
-		if err := tx.QueryRowContext(ctx, `SELECT state FROM tasks WHERE id=?`, req.TaskID).Scan(&state); err != nil {
-			return err
-		}
-		if state != "ready" {
-			return domain.ErrConflict
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO task_claims(id,task_id,session_id,request_id,claimed_at,lease_until,project_revision) VALUES(?,?,?,?,?,?,?)`, id, req.TaskID, req.SessionID, storageKey, stamp(claimedAt), lease, rev); err != nil {
-			return err
-		}
-		_, err := tx.ExecContext(ctx, `UPDATE tasks SET state='in_progress',owner_session_id=? WHERE id=? AND state='ready'`, req.SessionID, req.TaskID)
-		return err
-	})
-	if err != nil {
-		if prior, e := s.claimByRequest(ctx, storageKey, req.RequestID); e == nil && prior.TaskID == req.TaskID && prior.SessionID == req.SessionID && sameLease(prior.LeaseUntil, req.LeaseUntil) {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO task_claims(id,task_id,session_id,request_id,claimed_at,lease_until,project_revision) VALUES(?,?,?,?,?,?,?)`,
+		id, req.TaskID, req.SessionID, storageKey, stamp(claimedAt), lease, revision); err != nil {
+		_ = tx.Rollback()
+		if prior, replayErr := s.claimByRequest(ctx, storageKey, req.RequestID); replayErr == nil && prior.TaskID == req.TaskID && prior.SessionID == req.SessionID && sameLease(prior.LeaseUntil, req.LeaseUntil) {
 			return prior, nil
 		}
+		return domain.Claim{}, mapErr(err)
+	}
+	if reclaim {
+		result, err = tx.ExecContext(ctx, `UPDATE task_current_claims SET claim_id=?,lease_until=?,updated_at=? WHERE task_id=? AND claim_id=? AND lease_until=?`,
+			id, lease, stamp(claimedAt), req.TaskID, currentClaimID, currentLease.String)
+		if err != nil {
+			return domain.Claim{}, mapErr(err)
+		}
+		if affected, _ := result.RowsAffected(); affected != 1 {
+			return domain.Claim{}, domain.ErrConflict
+		}
+	} else if _, err = tx.ExecContext(ctx, `INSERT INTO task_current_claims(task_id,claim_id,lease_until,updated_at) VALUES(?,?,?,?)`,
+		req.TaskID, id, lease, stamp(claimedAt)); err != nil {
+		return domain.Claim{}, mapErr(err)
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE tasks SET state='in_progress',owner_session_id=?,project_revision=?,updated_at=? WHERE id=?`,
+		req.SessionID, revision, stamp(claimedAt), req.TaskID); err != nil {
+		return domain.Claim{}, mapErr(err)
+	}
+	kind, summary := "claimed", "Task claimed"
+	if reclaim {
+		kind, summary = "reclaimed", "Expired task claim handed off"
+	}
+	meta := domain.CoreWriteMeta{ActorID: req.ActorID, SessionID: req.SessionID, RequestID: req.RequestID}
+	if err = insertTaskEvent(ctx, tx, req.TaskID, projectID, revision, kind, summary, state, "in_progress", meta, claimedAt); err != nil {
 		return domain.Claim{}, err
 	}
-	return domain.Claim{ID: id, TaskID: req.TaskID, SessionID: req.SessionID, RequestID: req.RequestID, Revision: rev, ClaimedAt: claimedAt, LeaseUntil: req.LeaseUntil}, nil
+	if err = insertCoreChange(ctx, tx, projectID, revision, "claim", req.TaskID, summary, claimedAt); err != nil {
+		return domain.Claim{}, err
+	}
+	if err = insertCoreActivity(ctx, tx, "task_claimed", projectID, req.ActorID, req.TaskID, title, kind, claimedAt); err != nil {
+		return domain.Claim{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		_ = tx.Rollback()
+		if prior, replayErr := s.claimByRequest(ctx, storageKey, req.RequestID); replayErr == nil && prior.TaskID == req.TaskID && prior.SessionID == req.SessionID && sameLease(prior.LeaseUntil, req.LeaseUntil) {
+			return prior, nil
+		}
+		return domain.Claim{}, mapErr(err)
+	}
+	return domain.Claim{ID: id, TaskID: req.TaskID, SessionID: req.SessionID, RequestID: req.RequestID, Revision: revision, ClaimedAt: claimedAt, LeaseUntil: req.LeaseUntil}, nil
 }
 
 func (s *Store) postByRequest(ctx context.Context, storageKey, requestID string) (domain.Post, error) {
@@ -108,15 +182,27 @@ func (s *Store) postByRequest(ctx context.Context, storageKey, requestID string)
 	}
 	p.CreatedAt = parseStamp(at)
 	p.RequestID = requestID
+	p.Attachments, err = readPostAttachments(ctx, s.db, p.ID)
+	if err != nil {
+		return p, err
+	}
 	return p, nil
 }
 
 func samePost(a domain.Post, b domain.PostRequest) bool {
-	return a.TopicID == b.TopicID && a.Kind == b.Kind && a.Title == b.Title && a.Body == b.Body && a.Basis == b.Basis && a.Ref == b.Ref && a.SessionID == b.SessionID
+	if a.TopicID != b.TopicID || a.Kind != b.Kind || a.Title != b.Title || a.Body != b.Body || a.Basis != b.Basis || a.Ref != b.Ref || a.SessionID != b.SessionID || len(a.Attachments) != len(b.Attachments) {
+		return false
+	}
+	for i := range a.Attachments {
+		if a.Attachments[i] != b.Attachments[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) Post(ctx context.Context, req domain.PostRequest) (domain.Post, error) {
-	if req.TopicID == "" || !domain.PostKinds[req.Kind] || req.Title == "" || req.Body == "" || req.Basis == "" || req.SessionID == "" {
+	if req.TopicID == "" || !domain.PostKinds[req.Kind] || req.Title == "" || req.Body == "" || req.Basis == "" || req.SessionID == "" || !validPostAttachments(req.Attachments) {
 		return domain.Post{}, domain.ErrInvalid
 	}
 	if req.Kind == "topic_request" && req.TopicID != domain.TopicGeneral {
@@ -143,8 +229,15 @@ func (s *Store) Post(ctx context.Context, req domain.PostRequest) (domain.Post, 
 		if _, err := tx.ExecContext(ctx, `INSERT INTO posts(id,topic_id,project_id,project_revision,kind,title,body,basis,ref,session_id,request_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,NULLIF(?,''),?)`, id, req.TopicID, project, rev, req.Kind, req.Title, req.Body, req.Basis, req.Ref, req.SessionID, storageKey, stamp(created)); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO search_documents(project_id,ref,kind,revision,title,body) VALUES(?,?,?,?,?,?)`, project, id, req.Kind, valueRev(rev), req.Title, req.Body+" "+req.Basis)
-		return err
+		if _, err := tx.ExecContext(ctx, `INSERT INTO search_documents(project_id,ref,kind,revision,title,body) VALUES(?,?,?,?,?,?)`, project, id, req.Kind, valueRev(rev), req.Title, req.Body+" "+req.Basis); err != nil {
+			return err
+		}
+		for position, attachment := range req.Attachments {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO post_attachments(post_id,position,kind,url,title) VALUES(?,?,?,?,?)`, id, position, attachment.Kind, attachment.URL, attachment.Title); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	var rev int64
 	if project.Valid {
@@ -171,7 +264,7 @@ func (s *Store) Post(ctx context.Context, req domain.PostRequest) (domain.Post, 
 			return domain.Post{}, mapErr(err)
 		}
 	}
-	return domain.Post{ID: id, TopicID: req.TopicID, ProjectID: project.String, Kind: req.Kind, Title: req.Title, Body: req.Body, Basis: req.Basis, Ref: req.Ref, SessionID: req.SessionID, RequestID: req.RequestID, Revision: rev, CreatedAt: created}, nil
+	return domain.Post{ID: id, TopicID: req.TopicID, ProjectID: project.String, Kind: req.Kind, Title: req.Title, Body: req.Body, Basis: req.Basis, Ref: req.Ref, SessionID: req.SessionID, RequestID: req.RequestID, Revision: rev, CreatedAt: created, Attachments: append([]domain.PostAttachment(nil), req.Attachments...)}, nil
 }
 func valueRev(v any) int64 {
 	if n, ok := v.(int64); ok {
@@ -184,7 +277,7 @@ func (s *Store) commentByRequest(ctx context.Context, storageKey string) (domain
 	var prior domain.CommentRequest
 	var result domain.WriteResult
 	var rev sql.NullInt64
-	err := s.db.QueryRowContext(ctx, `SELECT id,project_revision,post_id,body,session_id FROM comments WHERE request_id=?`, storageKey).Scan(&result.ID, &rev, &prior.PostID, &prior.Body, &prior.SessionID)
+	err := s.db.QueryRowContext(ctx, `SELECT id,project_revision,post_id,body,intent,session_id FROM comments WHERE request_id=?`, storageKey).Scan(&result.ID, &rev, &prior.PostID, &prior.Body, &prior.Intent, &prior.SessionID)
 	if err != nil {
 		return prior, result, mapErr(err)
 	}
@@ -195,11 +288,11 @@ func (s *Store) commentByRequest(ctx context.Context, storageKey string) (domain
 }
 
 func sameComment(a, b domain.CommentRequest) bool {
-	return a.PostID == b.PostID && a.Body == b.Body && a.SessionID == b.SessionID
+	return a.PostID == b.PostID && a.Body == b.Body && a.Intent == b.Intent && a.SessionID == b.SessionID
 }
 
 func (s *Store) Comment(ctx context.Context, req domain.CommentRequest) (domain.WriteResult, error) {
-	if req.PostID == "" || req.Body == "" || req.SessionID == "" {
+	if req.PostID == "" || req.Body == "" || !domain.CommentIntents[req.Intent] || req.SessionID == "" {
 		return domain.WriteResult{}, domain.ErrInvalid
 	}
 	storageKey := requestStorageKey(req.ActorID, req.SessionID, req.RequestID)
@@ -222,7 +315,7 @@ func (s *Store) Comment(ctx context.Context, req domain.CommentRequest) (domain.
 	id := newID("R-")
 	created := stamp(s.now())
 	insert := func(tx *sql.Tx, rev any) error {
-		_, err := tx.ExecContext(ctx, `INSERT INTO comments(id,post_id,project_id,project_revision,body,session_id,request_id,created_at) VALUES(?,?,?,?,?,?,NULLIF(?,''),?)`, id, req.PostID, project, rev, req.Body, req.SessionID, storageKey, created)
+		_, err := tx.ExecContext(ctx, `INSERT INTO comments(id,post_id,project_id,project_revision,body,intent,session_id,request_id,created_at) VALUES(?,?,?,?,?,?,?,NULLIF(?,''),?)`, id, req.PostID, project, rev, req.Body, req.Intent, req.SessionID, storageKey, created)
 		return err
 	}
 	var result domain.WriteResult

@@ -31,12 +31,14 @@ type Config struct {
 	Credentials     []Credential
 	MaxRequestBytes int64
 	Version         string
+	HumanAuth       *HumanAuthConfig
 }
 
 type handler struct {
-	backend Backend
-	config  Config
-	serial  atomic.Uint64
+	backend   Backend
+	config    Config
+	humanAuth *humanAuth
+	serial    atomic.Uint64
 }
 
 type responseMeta struct {
@@ -63,7 +65,7 @@ func NewHandler(backend Backend, config Config) http.Handler {
 	if config.Version == "" {
 		config.Version = "dev"
 	}
-	return &handler{backend: backend, config: config}
+	return &handler{backend: backend, config: config, humanAuth: newHumanAuth(config.HumanAuth)}
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -76,6 +78,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, rid, http.StatusBadRequest, "bad_request_id", err.Error())
 		return
 	}
+	if h.authRoute(w, r, rid) {
+		return
+	}
 	if r.URL.Path == "/v1/health" {
 		h.health(w, r, rid)
 		return
@@ -86,15 +91,36 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, rid, http.StatusUnauthorized, "unauthorized", "valid configured credential required")
 		return
 	}
-	meta := RequestMeta{Actor: identity.Actor, Session: identity.Session, Host: identity.Host, RequestID: rid, IdempotencyKey: r.Header.Get("Idempotency-Key")}
+	meta := RequestMeta{PrincipalKind: identity.Kind, Actor: identity.Actor, Session: identity.Session, Host: identity.Host, RequestID: rid, IdempotencyKey: r.Header.Get("Idempotency-Key")}
 	if len(meta.IdempotencyKey) > 200 {
 		h.writeError(w, rid, http.StatusBadRequest, "bad_idempotency_key", "maximum length is 200")
 		return
+	}
+	if identity.Kind == "human" && r.Method != http.MethodGet && r.Method != http.MethodHead {
+		if !isHumanWritePath(r.URL.Path) {
+			h.writeError(w, rid, http.StatusForbidden, "forbidden", "human session cannot use this route")
+			return
+		}
+		if !sameOrigin(r) {
+			h.writeError(w, rid, http.StatusForbidden, "origin_forbidden", "same-origin request required")
+			return
+		}
+		if !constantTimeTokenEqual(r.Header.Get("X-Commons-CSRF"), identity.csrfToken) {
+			h.writeError(w, rid, http.StatusForbidden, "csrf_failed", "valid CSRF token required")
+			return
+		}
+		if meta.IdempotencyKey == "" {
+			h.writeError(w, rid, http.StatusBadRequest, "bad_idempotency_key", "Idempotency-Key required")
+			return
+		}
 	}
 	h.route(w, r, meta)
 }
 
 func (h *handler) route(w http.ResponseWriter, r *http.Request, meta RequestMeta) {
+	if h.projectCoreRoute(w, r, meta) {
+		return
+	}
 	path := r.URL.Path
 	switch {
 	case r.Method == http.MethodGet && path == "/v1/home/general":
@@ -129,6 +155,35 @@ func (h *handler) route(w http.ResponseWriter, r *http.Request, meta RequestMeta
 		}
 		out, err := h.backend.BrowsePeople(r.Context(), query, meta)
 		h.finish(w, meta, out, err, false)
+	case r.Method == http.MethodGet && path == "/v1/topics":
+		limit, err := intParam(r.URL.Query().Get("limit"), 100, 1, 100)
+		if err != nil {
+			h.badQuery(w, meta, err)
+			return
+		}
+		out, err := h.backend.BrowseTopics(r.Context(), TopicsQuery{Limit: limit}, meta)
+		h.finish(w, meta, out, err, false)
+	case r.Method == http.MethodGet && path == "/v1/posts":
+		query, err := parsePostFeedQuery(r.URL.Query())
+		if err != nil {
+			h.badQuery(w, meta, err)
+			return
+		}
+		out, err := h.backend.BrowsePosts(r.Context(), query, meta)
+		h.finish(w, meta, out, err, true)
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/v1/posts/"):
+		ref, ok := pathPart(r.URL, "/v1/posts/")
+		if !ok {
+			h.notFound(w, meta)
+			return
+		}
+		limit, err := intParam(r.URL.Query().Get("comments_limit"), 10, 1, 20)
+		if err != nil {
+			h.badQuery(w, meta, err)
+			return
+		}
+		out, err := h.backend.OpenPost(r.Context(), PostOpenQuery{Ref: ref, CommentsCursor: r.URL.Query().Get("comments_cursor"), CommentsLimit: limit}, meta)
+		h.finish(w, meta, out, err, true)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/v1/projects/"):
 		project, ok := projectOverviewPath(r.URL)
 		if !ok {
@@ -260,6 +315,16 @@ func (h *handler) route(w http.ResponseWriter, r *http.Request, meta RequestMeta
 			h.badBody(w, meta, "topic, kind, title, body, and basis are required")
 			return
 		}
+		if len(in.Attachments) > 8 {
+			h.badBody(w, meta, "at most 8 attachments are allowed")
+			return
+		}
+		for _, attachment := range in.Attachments {
+			if !validPostAttachment(attachment) {
+				h.badBody(w, meta, "attachments require a supported kind and HTTPS URL")
+				return
+			}
+		}
 		if in.Kind == "topic_request" && in.Topic != "general" {
 			h.badBody(w, meta, "topic_request must use the General topic")
 			return
@@ -267,17 +332,33 @@ func (h *handler) route(w http.ResponseWriter, r *http.Request, meta RequestMeta
 		out, err := h.backend.Post(r.Context(), in, meta)
 		allowGlobalRevision := in.Topic == "general"
 		h.finishWrite(w, meta, out, err, allowGlobalRevision)
+	case r.Method == http.MethodPost && path == "/v1/post-states":
+		var in PostStateWriteRequest
+		if !h.decode(w, r, meta, &in) {
+			return
+		}
+		if meta.IdempotencyKey == "" {
+			h.badBody(w, meta, "Idempotency-Key required")
+			return
+		}
+		if in.Ref == "" || (in.State != "open" && in.State != "resolved" && in.State != "superseded") ||
+			(in.State == "superseded") != (in.SupersededBy != "") || in.Ref == in.SupersededBy {
+			h.badBody(w, meta, "valid ref, state, and superseded_by are required")
+			return
+		}
+		out, err := h.backend.SetPostState(r.Context(), in, meta)
+		h.finishWrite(w, meta, out, err, true)
 	case r.Method == http.MethodPost && path == "/v1/comments":
 		var in CommentRequest
 		if !h.decode(w, r, meta, &in) {
 			return
 		}
-		if in.Ref == "" || in.Body == "" || in.Basis == "" {
-			h.badBody(w, meta, "ref, body, and basis are required")
+		if in.Ref == "" || in.Body == "" || !validCommentIntent(in.Intent) {
+			h.badBody(w, meta, "ref, body, and valid intent are required")
 			return
 		}
 		out, err := h.backend.Comment(r.Context(), in, meta)
-		h.finishWrite(w, meta, out, err, false)
+		h.finishWrite(w, meta, out, err, true)
 	case r.Method == http.MethodPost && path == "/v1/status":
 		var in StatusRequest
 		if !h.decode(w, r, meta, &in) {
@@ -321,7 +402,7 @@ func (h *handler) health(w http.ResponseWriter, r *http.Request, rid string) {
 	h.finish(w, RequestMeta{RequestID: rid}, out, err, false)
 }
 
-func (h *handler) authenticate(r *http.Request) (Credential, bool) {
+func (h *handler) authenticate(r *http.Request) (authPrincipal, bool) {
 	bearer := ""
 	if value := r.Header.Get("Authorization"); strings.HasPrefix(value, "Bearer ") {
 		bearer = strings.TrimPrefix(value, "Bearer ")
@@ -330,11 +411,29 @@ func (h *handler) authenticate(r *http.Request) (Credential, bool) {
 	for _, c := range h.config.Credentials {
 		if (c.BearerToken != "" && secureEqual(bearer, c.BearerToken)) || (c.HostCredential != "" && secureEqual(host, c.HostCredential)) {
 			if c.Actor != "" && c.Session != "" && c.Host != "" {
-				return c, true
+				return authPrincipal{Credential: c, Kind: "agent"}, true
 			}
 		}
 	}
-	return Credential{}, false
+	return h.authenticateHuman(r)
+}
+
+func (h *handler) authenticateHuman(r *http.Request) (authPrincipal, bool) {
+	if h.humanAuth == nil {
+		return authPrincipal{}, false
+	}
+	cookie, err := r.Cookie(humanSessionCookie)
+	if err != nil {
+		return authPrincipal{}, false
+	}
+	session, ok := h.humanAuth.lookup(cookie.Value)
+	if !ok {
+		return authPrincipal{}, false
+	}
+	principal := h.humanAuth.principal()
+	principal.csrfToken = session.csrf
+	principal.cookie = cookie.Value
+	return principal, true
 }
 
 func secureEqual(a, b string) bool {
@@ -398,6 +497,15 @@ func validPostKind(kind string) bool {
 	}
 }
 
+func validCommentIntent(intent string) bool {
+	switch intent {
+	case "answer", "add_evidence", "challenge", "clarify":
+		return true
+	default:
+		return false
+	}
+}
+
 func blank(value string) bool { return strings.TrimSpace(value) == "" }
 
 func (h *handler) finish(w http.ResponseWriter, meta RequestMeta, data any, err error, untrusted bool) {
@@ -424,6 +532,8 @@ func (h *handler) finish(w http.ResponseWriter, meta RequestMeta, data any, err 
 
 func statusForCode(code string) int {
 	switch code {
+	case CodeForbidden:
+		return http.StatusForbidden
 	case CodeNotFound:
 		return http.StatusNotFound
 	case CodeConflict:

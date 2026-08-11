@@ -28,6 +28,9 @@ func TestSlice7RealStorePresenceApplicationAndHTTPCompose(t *testing.T) {
 	if err := store.CreateProject(ctx, domain.Project{ID: "alpha", Name: "Alpha", Purpose: "Test browse foundations"}); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.CreateTopic(ctx, domain.Topic{ID: "alpha-topic", ProjectID: "alpha", Name: "Alpha posts"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.CreateTask(ctx, domain.Task{ID: "T-1", ProjectID: "alpha", State: "in_progress", Title: "Build Slice 7", Priority: 9}); err != nil {
 		t.Fatal(err)
 	}
@@ -58,6 +61,7 @@ func TestSlice7RealStorePresenceApplicationAndHTTPCompose(t *testing.T) {
 		"/v1/attention?q=TASK+NEEDS&severity=high&project=alpha": {`"title":"Task needs evidence"`, `"kind":"task"`, `"ref":"T-1"`},
 		"/v1/projects?q=Alpha":           {`"purpose":"Test browse foundations"`, `"active_sessions":1`, `"current_work"`},
 		"/v1/people?execution=executing": {`"purpose":"Verify browse"`, `"host_connected":true`, `"execution":"executing"`},
+		"/v1/topics?limit=100":           {`"id":"alpha-topic"`, `"project_id":"alpha"`, `"untrusted":false`},
 	} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.Header.Set("Authorization", "Bearer secret")

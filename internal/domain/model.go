@@ -89,16 +89,26 @@ type Claim struct {
 
 type PostRequest struct {
 	TopicID, Kind, Title, Body, Basis, Ref, ActorID, SessionID, RequestID string
+	Attachments                                                           []PostAttachment
 }
 
 type Post struct {
 	ID, TopicID, ProjectID, Kind, Title, Body, Basis, Ref, SessionID, RequestID string
 	Revision                                                                    int64
 	CreatedAt                                                                   time.Time
+	Attachments                                                                 []PostAttachment
 }
 
 type CommentRequest struct {
-	PostID, Body, ActorID, SessionID, RequestID string
+	PostID, Body, Intent, ActorID, SessionID, RequestID string
+}
+
+type PostAttachment struct {
+	Kind, URL, Title string
+}
+
+type PostStateRequest struct {
+	PostID, State, SupersededBy, ActorID, SessionID, RequestID string
 }
 
 type StatusRequest struct {
@@ -120,6 +130,10 @@ type ChangesResult struct {
 var PostKinds = map[string]bool{
 	"finding": true, "question": true, "notice": true,
 	"decision": true, "topic_request": true,
+}
+
+var CommentIntents = map[string]bool{
+	"answer": true, "add_evidence": true, "challenge": true, "clarify": true,
 }
 
 const (

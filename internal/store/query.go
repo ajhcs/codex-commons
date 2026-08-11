@@ -141,7 +141,7 @@ func tasks(ctx context.Context, q queryer, projectID string, limit int) ([]domai
 	if limit < 1 || limit > 100 {
 		return nil, domain.ErrInvalid
 	}
-	rows, err := q.QueryContext(ctx, `SELECT id,state,title,priority,COALESCE(owner_session_id,''),accept_text FROM tasks WHERE project_id=? ORDER BY priority,id LIMIT ?`, projectID, limit)
+	rows, err := q.QueryContext(ctx, `SELECT id,state,title,priority,COALESCE(owner_session_id,''),accept_text FROM active_tasks WHERE project_id=? ORDER BY priority,id LIMIT ?`, projectID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -333,7 +333,7 @@ func (s *Store) Next(ctx context.Context, projectID string, limit int) ([]domain
 		return nil, domain.ErrInvalid
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT t.id,t.state,t.title,t.priority,COALESCE(t.owner_session_id,''),t.accept_text
-FROM tasks t WHERE t.project_id=? AND t.state='ready' AND NOT EXISTS(
+FROM active_tasks t WHERE t.project_id=? AND t.state='ready' AND NOT EXISTS(
  SELECT 1 FROM task_dependencies d JOIN tasks b ON b.id=d.depends_on_task_id WHERE d.task_id=t.id AND b.state<>'done')
 ORDER BY t.priority,t.id LIMIT ?`, projectID, limit)
 	if err != nil {

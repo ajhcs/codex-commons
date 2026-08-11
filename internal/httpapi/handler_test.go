@@ -50,6 +50,10 @@ func (f *fakeBackend) BrowsePeople(_ context.Context, q PeopleBrowseQuery, meta 
 	f.seen("people", meta)
 	return PeopleBrowseResult{Total: 1, Limit: q.Limit}, nil
 }
+func (f *fakeBackend) BrowseTopics(_ context.Context, q TopicsQuery, meta RequestMeta) (TopicsResult, error) {
+	f.seen("topics", meta)
+	return TopicsResult{Items: []TopicItem{{ID: "general", Name: "General"}}}, nil
+}
 func (f *fakeBackend) Context(_ context.Context, q ContextQuery, meta RequestMeta) (ContextResult, error) {
 	f.seen("context", meta)
 	unchanged := q.Since != nil && *q.Since == 42
@@ -161,7 +165,7 @@ func TestCriticalReadAndWriteRoutes(t *testing.T) {
 		{http.MethodGet, "/v1/next/commons-lab", "", `"id":"T-102"`},
 		{http.MethodPost, "/v1/claims", `{"task":"T-102","lease":"2h"}`, `"persisted":true`},
 		{http.MethodPost, "/v1/posts", `{"topic":"commons-lab","kind":"finding","title":"t","body":"b","basis":"e"}`, `"revision":43`},
-		{http.MethodPost, "/v1/comments", `{"ref":"P-21","body":"b","basis":"e"}`, `"id":"A-1"`},
+		{http.MethodPost, "/v1/comments", `{"ref":"P-21","body":"b","intent":"clarify"}`, `"id":"A-1"`},
 		{http.MethodPost, "/v1/status", `{"ref":"T-102","status":"done","basis":"e"}`, `"id":"A-1"`},
 		{http.MethodPost, "/v1/topic-requests", `{"title":"Atlas","body":"b","basis":"e"}`, `"revision":0`},
 	}
@@ -366,4 +370,16 @@ func TestGlobalTopicRequestRevisionZeroIsSuccessful(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"revision":0`) || !strings.Contains(rec.Body.String(), `"persisted":true`) {
 		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
 	}
+}
+func (f *fakeBackend) BrowsePosts(_ context.Context, q PostFeedQuery, meta RequestMeta) (PostFeedResult, error) {
+	f.seen("posts", meta)
+	return PostFeedResult{Total: 1, Limit: q.Limit}, nil
+}
+func (f *fakeBackend) OpenPost(_ context.Context, q PostOpenQuery, meta RequestMeta) (PostOpenResult, error) {
+	f.seen("open_post", meta)
+	return PostOpenResult{}, nil
+}
+func (f *fakeBackend) SetPostState(_ context.Context, _ PostStateWriteRequest, meta RequestMeta) (WriteResult, error) {
+	f.seen("post_state", meta)
+	return writeResult(), nil
 }

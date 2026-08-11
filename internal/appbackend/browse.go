@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"codex-commons/internal/application"
 	"codex-commons/internal/domain"
 	"codex-commons/internal/httpapi"
 )
@@ -52,4 +53,34 @@ func (a *Adapter) BrowsePeople(ctx context.Context, query httpapi.PeopleBrowseQu
 	}
 	out, err := a.home.BrowsePeople(ctx, query)
 	return out, mapBrowseError(err, "people")
+}
+
+func (a *Adapter) BrowsePosts(ctx context.Context, query httpapi.PostFeedQuery, meta httpapi.RequestMeta) (httpapi.PostFeedResult, error) {
+	if err := validateBrowseIdentity(meta); err != nil {
+		return httpapi.PostFeedResult{}, err
+	}
+	out, err := a.home.BrowsePosts(ctx, query)
+	return out, mapBrowseError(err, "posts")
+}
+
+func (a *Adapter) OpenPost(ctx context.Context, query httpapi.PostOpenQuery, meta httpapi.RequestMeta) (httpapi.PostOpenResult, error) {
+	if err := validateBrowseIdentity(meta); err != nil {
+		return httpapi.PostOpenResult{}, err
+	}
+	out, err := a.home.OpenPost(ctx, query)
+	return out, mapBrowseError(err, "post")
+}
+
+func (a *Adapter) SetPostState(ctx context.Context, request httpapi.PostStateWriteRequest, meta httpapi.RequestMeta) (httpapi.WriteResult, error) {
+	if err := validateBrowseIdentity(meta); err != nil {
+		return httpapi.WriteResult{}, err
+	}
+	result, err := a.home.SetPostState(ctx, application.PostStateRequest{
+		Ref: request.Ref, State: request.State, SupersededBy: request.SupersededBy,
+		Actor: meta.Actor, Session: meta.Session, RequestID: meta.IdempotencyKey,
+	})
+	if err != nil {
+		return httpapi.WriteResult{}, mapBrowseError(err, "post state")
+	}
+	return httpapi.WriteResult{ID: result.ID, Revision: result.Revision, Persisted: true}, nil
 }

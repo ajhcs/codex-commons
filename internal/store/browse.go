@@ -226,11 +226,24 @@ func (s *Store) ProjectBrowseSnapshot(ctx context.Context, query domain.ProjectB
 	}
 	args = append(args, query.Limit+1)
 	rows, err := tx.QueryContext(ctx, `SELECT p.id,p.name,p.status,p.purpose,
-COALESCE((SELECT count(*) FROM tasks ot WHERE ot.project_id=p.id AND ot.state IN ('ready','in_progress','blocked')),0),
-COALESCE((SELECT t.id FROM tasks t WHERE t.project_id=p.id AND t.state='in_progress' ORDER BY t.priority,t.id LIMIT 1),''),
-COALESCE((SELECT t.title FROM tasks t WHERE t.project_id=p.id AND t.state='in_progress' ORDER BY t.priority,t.id LIMIT 1),''),
-COALESCE((SELECT t.state FROM tasks t WHERE t.project_id=p.id AND t.state='in_progress' ORDER BY t.priority,t.id LIMIT 1),''),
-COALESCE((SELECT t.priority FROM tasks t WHERE t.project_id=p.id AND t.state='in_progress' ORDER BY t.priority,t.id LIMIT 1),0),
+COALESCE((SELECT count(*) FROM active_tasks t WHERE t.project_id=p.id AND t.state='ready'),0),
+COALESCE((SELECT count(*) FROM active_tasks t WHERE t.project_id=p.id AND t.state='in_progress'),0),
+COALESCE((SELECT count(*) FROM active_tasks t WHERE t.project_id=p.id AND t.state='blocked'),0),
+COALESCE((SELECT count(*) FROM active_tasks t WHERE t.project_id=p.id AND t.state='done'),0),
+COALESCE((SELECT count(*) FROM active_tasks t WHERE t.project_id=p.id AND t.state='cancelled'),0),
+COALESCE((SELECT count(*) FROM active_tasks t WHERE t.project_id=p.id),0),
+COALESCE((SELECT t.id FROM active_tasks t WHERE t.project_id=p.id AND t.state='in_progress' ORDER BY t.priority,t.id LIMIT 1),''),
+COALESCE((SELECT t.title FROM active_tasks t WHERE t.project_id=p.id AND t.state='in_progress' ORDER BY t.priority,t.id LIMIT 1),''),
+COALESCE((SELECT t.state FROM active_tasks t WHERE t.project_id=p.id AND t.state='in_progress' ORDER BY t.priority,t.id LIMIT 1),''),
+COALESCE((SELECT t.priority FROM active_tasks t WHERE t.project_id=p.id AND t.state='in_progress' ORDER BY t.priority,t.id LIMIT 1),0),
+COALESCE((SELECT m.id FROM milestones m WHERE m.project_id=p.id AND m.status='active' LIMIT 1),''),
+COALESCE((SELECT m.title FROM milestones m WHERE m.project_id=p.id AND m.status='active' LIMIT 1),''),
+COALESCE((SELECT m.status FROM milestones m WHERE m.project_id=p.id AND m.status='active' LIMIT 1),''),
+COALESCE((SELECT m.position FROM milestones m WHERE m.project_id=p.id AND m.status='active' LIMIT 1),0),
+COALESCE((SELECT m.target_date FROM milestones m WHERE m.project_id=p.id AND m.status='active' LIMIT 1),''),
+COALESCE((SELECT a.kind FROM activity_events a WHERE a.project_id=p.id ORDER BY julianday(a.occurred_at) DESC,a.id DESC LIMIT 1),''),
+COALESCE((SELECT a.object_ref FROM activity_events a WHERE a.project_id=p.id ORDER BY julianday(a.occurred_at) DESC,a.id DESC LIMIT 1),''),
+COALESCE((SELECT a.object_title FROM activity_events a WHERE a.project_id=p.id ORDER BY julianday(a.occurred_at) DESC,a.id DESC LIMIT 1),''),
 COALESCE((SELECT a.occurred_at FROM activity_events a WHERE a.project_id=p.id ORDER BY julianday(a.occurred_at) DESC,a.id DESC LIMIT 1),'')
 FROM projects p WHERE `+strings.Join(where, " AND ")+`
 ORDER BY p.name,p.id LIMIT ?`, args...)
@@ -239,19 +252,30 @@ ORDER BY p.name,p.id LIMIT ?`, args...)
 	}
 	for rows.Next() {
 		var item domain.ProjectBrowseItem
-		var workID, workTitle, workState, latest string
-		var workPriority int
-		if err := rows.Scan(&item.ID, &item.Name, &item.Status, &item.Purpose, &item.OpenTasks,
-			&workID, &workTitle, &workState, &workPriority, &latest); err != nil {
+		var workID, workTitle, workState string
+		var milestoneID, milestoneTitle, milestoneStatus, milestoneTarget string
+		var activityKind, activityRef, activityTitle, activityAt string
+		var workPriority, milestonePosition int
+		if err := rows.Scan(&item.ID, &item.Name, &item.Status, &item.Purpose,
+			&item.TaskCounts.Ready, &item.TaskCounts.InProgress, &item.TaskCounts.Blocked,
+			&item.TaskCounts.Done, &item.TaskCounts.Cancelled, &item.TaskCounts.Total,
+			&workID, &workTitle, &workState, &workPriority,
+			&milestoneID, &milestoneTitle, &milestoneStatus, &milestonePosition, &milestoneTarget,
+			&activityKind, &activityRef, &activityTitle, &activityAt); err != nil {
 			rows.Close()
 			return out, err
 		}
+		item.OpenTasks = item.TaskCounts.Ready + item.TaskCounts.InProgress + item.TaskCounts.Blocked
 		if workID != "" {
 			item.CurrentWork = &domain.ProjectCurrentWork{ID: workID, Title: workTitle, State: workState, Priority: workPriority}
 		}
-		if latest != "" {
-			value := parseStamp(latest)
+		if milestoneID != "" {
+			item.ActiveMilestone = &domain.ProjectMilestoneSummary{ID: milestoneID, Title: milestoneTitle, Status: milestoneStatus, Position: milestonePosition, TargetDate: milestoneTarget}
+		}
+		if activityAt != "" {
+			value := parseStamp(activityAt)
 			item.LatestActivity = &value
+			item.LastDurableActivity = &domain.DurableActivity{Kind: activityKind, Ref: activityRef, Title: activityTitle, OccurredAt: value}
 		}
 		out.Items = append(out.Items, item)
 	}

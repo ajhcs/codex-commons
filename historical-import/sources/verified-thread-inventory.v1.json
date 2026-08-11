@@ -1,0 +1,672 @@
+{
+  "schema_version": 1,
+  "scope": "Codex Commons historical reconstruction",
+  "privacy_boundary": "Identifiers, outcome labels, statuses, and UTC timestamps only. Prompt text, hidden reasoning, tool output, secrets, email addresses, private paths, and generated-image paths are excluded.",
+  "project_thread_aliases": [
+    "019fe428-09cf-75f0-b02f-d8ebed105a6a",
+    "019fe7c2-ccff-77b2-b80b-eb4a185b818d",
+    "019fe7ec-07a1-79b0-8d2c-dedc5ec1d24f",
+    "019fe855-b3d0-7eb1-8451-42750efd4fcd"
+  ],
+  "sessions": [
+    {
+      "outcome": "outcome-01",
+      "session": "019fe44f-9017-7623-9ba6-c4a15251d9cd",
+      "role": "evaluator",
+      "turns": [
+        {
+          "id": "019fe44f-9138",
+          "status": "completed",
+          "completed_at": "2026-08-09T02:19:56Z"
+        },
+        {
+          "id": "019fe45c-2d76",
+          "status": "completed",
+          "completed_at": "2026-08-09T02:33:50Z"
+        },
+        {
+          "id": "019fe45e-bcd8",
+          "status": "completed",
+          "completed_at": "2026-08-09T02:35:18Z"
+        },
+        {
+          "id": "019fe460-1cd7",
+          "status": "completed",
+          "completed_at": "2026-08-09T02:37:04Z"
+        },
+        {
+          "id": "019fe461-db53",
+          "status": "completed",
+          "completed_at": "2026-08-09T02:38:08Z"
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-01",
+      "session": "019fe44f-aca5-7082-a69a-becf20bf9618",
+      "role": "evaluator",
+      "turns": [
+        {
+          "id": "019fe44f-adf4",
+          "status": "interrupted",
+          "completed_at": "2026-08-09T02:25:52Z"
+        },
+        {
+          "id": "019fe457-50aa",
+          "status": "interrupted",
+          "completed_at": "2026-08-09T02:28:46Z",
+          "note": "No final; retained as interrupted literature work, not an independent completion."
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-01",
+      "session": "019fe45a-0920-78a0-884f-4359e640c7ed",
+      "role": "evaluator",
+      "turns": [
+        {
+          "id": "019fe45a-0a8d",
+          "status": "completed",
+          "completed_at": "2026-08-09T02:31:01Z"
+        },
+        {
+          "id": "019fe45c-50e2",
+          "status": "completed",
+          "completed_at": "2026-08-09T02:32:41Z"
+        },
+        {
+          "id": "019fe45e-d7c1",
+          "status": "completed",
+          "completed_at": "2026-08-09T02:34:56Z"
+        },
+        {
+          "id": "019fe460-2dce",
+          "status": "completed",
+          "completed_at": "2026-08-09T02:37:08Z"
+        },
+        {
+          "id": "019fe461-f550",
+          "status": "completed",
+          "completed_at": "2026-08-09T02:37:59Z"
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-01",
+      "session": "019fe462-c8be-7272-b0c2-ade7ad347b39",
+      "role": "evaluator",
+      "turns": [
+        {
+          "id": "019fe462-c9eb",
+          "status": "completed",
+          "completed_at": "2026-08-09T02:42:39Z"
+        },
+        {
+          "id": "019fe482-e87c",
+          "status": "interrupted",
+          "completed_at": "2026-08-09T03:21:14Z"
+        },
+        {
+          "id": "019fe48a-027a",
+          "status": "interrupted",
+          "completed_at": "2026-08-09T03:23:23Z"
+        },
+        {
+          "id": "019fe48f-c62e",
+          "status": "completed",
+          "completed_at": "2026-08-09T03:27:54Z"
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-01",
+      "session": "019fe466-eef9-7ce2-964d-ceef0e17fb3a",
+      "role": "reviewer",
+      "turns": [
+        {
+          "id": "019fe466-f069",
+          "status": "completed",
+          "completed_at": "2026-08-09T02:47:52Z",
+          "note": "Selected outcome completion after adjudication."
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-02",
+      "session": "019fe482-71fa-7ec1-aabb-3a6e2e6deef8",
+      "role": "implementer",
+      "turns": [
+        {
+          "id": "019fe482-74b0",
+          "status": "interrupted",
+          "completed_at": "2026-08-09T03:20:30Z"
+        },
+        {
+          "id": "019fe489-5550",
+          "status": "interrupted",
+          "completed_at": "2026-08-09T03:23:21Z"
+        },
+        {
+          "id": "019fe48c-836e",
+          "status": "completed",
+          "completed_at": "2026-08-09T03:25:18Z"
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-02",
+      "session": "019fe482-97ef-7112-a06c-25228d8ba53f",
+      "role": "implementer",
+      "turns": [
+        {
+          "id": "019fe482-99a7",
+          "status": "interrupted",
+          "completed_at": "2026-08-09T03:21:07Z"
+        },
+        {
+          "id": "019fe489-e727",
+          "status": "interrupted",
+          "completed_at": "2026-08-09T03:23:16Z"
+        },
+        {
+          "id": "019fe48f-d404",
+          "status": "completed",
+          "completed_at": "2026-08-09T03:29:12Z",
+          "note": "Selected outcome completion."
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-03",
+      "session": "019fe4a4-ac2a-7430-b669-443734e19848",
+      "role": "evaluator",
+      "turns": [
+        {
+          "id": "019fe4a4-ad48",
+          "status": "completed",
+          "completed_at": "2026-08-09T03:50:45Z"
+        },
+        {
+          "id": "019fe4a5-50a8",
+          "status": "completed",
+          "completed_at": "2026-08-09T03:51:41Z"
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-03",
+      "session": "019fe4a4-c505-7f41-b636-fc0f15234d05",
+      "role": "evaluator",
+      "turns": [
+        {
+          "id": "019fe4a4-c675",
+          "status": "completed",
+          "completed_at": "2026-08-09T03:52:33Z"
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-03",
+      "session": "019fe4a4-dd2a-7e33-8158-37427cbbfbd6",
+      "role": "evaluator",
+      "turns": [
+        {
+          "id": "019fe4a4-de19",
+          "status": "completed",
+          "completed_at": "2026-08-09T03:51:40Z"
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-03",
+      "session": "019fe4a8-ade7-7030-a7f4-dfc3a63615cf",
+      "role": "evaluator",
+      "turns": [
+        {
+          "id": "019fe4a8-aed4",
+          "status": "completed",
+          "completed_at": "2026-08-09T03:55:34Z"
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-03",
+      "session": "019fe4a8-cddd-7c30-b3ec-f60e6b2e475d",
+      "role": "evaluator",
+      "turns": [
+        {
+          "id": "019fe4a8-cf2c",
+          "status": "completed",
+          "completed_at": "2026-08-09T03:57:18Z",
+          "note": "Selected outcome completion."
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-04",
+      "session": "019fe756-cc3c-7243-b908-383c40d4253a",
+      "role": "implementer",
+      "turns": [
+        {
+          "id": "019fe756-ce47",
+          "status": "completed",
+          "completed_at": "2026-08-09T16:44:16Z",
+          "note": "Selected outcome completion."
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-05",
+      "session": "019fe757-18b9-76c3-8ed1-07a583e8b9a6",
+      "role": "implementer",
+      "turns": [
+        {
+          "id": "019fe757-19d7",
+          "status": "completed",
+          "completed_at": "2026-08-09T16:38:24Z",
+          "note": "Selected outcome completion."
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-06",
+      "session": "019fe76c-b8ef-7d83-b4ed-c5a356106031",
+      "role": "reviewer",
+      "turns": [
+        {
+          "id": "019fe76c-ba0d",
+          "status": "interrupted",
+          "completed_at": "2026-08-09T16:57:57Z"
+        },
+        {
+          "id": "019fe775-bf58",
+          "status": "interrupted",
+          "completed_at": "2026-08-09T16:59:01Z"
+        },
+        {
+          "id": "019fe776-ee62",
+          "status": "interrupted",
+          "completed_at": "2026-08-09T17:16:55Z"
+        },
+        {
+          "id": "019fe787-269f",
+          "status": "completed",
+          "completed_at": "2026-08-09T17:17:19Z"
+        },
+        {
+          "id": "019fe787-9a5d",
+          "status": "completed",
+          "completed_at": "2026-08-09T17:25:58Z",
+          "note": "Selected outcome completion after final verification."
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-07",
+      "session": "019fe792-3793-7f42-b2ce-e65e76f7e21c",
+      "role": "implementer",
+      "turns": [
+        {
+          "id": "019fe792-38c3",
+          "status": "completed",
+          "completed_at": "2026-08-09T17:39:58Z"
+        },
+        {
+          "id": "019fe79c-fd1c",
+          "status": "completed",
+          "completed_at": "2026-08-09T17:44:50Z",
+          "note": "Selected outcome completion after correction."
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-08",
+      "session": "019fe792-6da5-70f1-974b-e657bcb65a29",
+      "role": "implementer",
+      "turns": [
+        {
+          "id": "019fe792-6edc",
+          "status": "completed",
+          "completed_at": "2026-08-09T17:39:22Z",
+          "note": "Selected outcome completion."
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-09",
+      "session": "019fe792-a250-71d3-ba9f-39c098894e3b",
+      "role": "implementer",
+      "turns": [
+        {
+          "id": "019fe792-a382",
+          "status": "completed",
+          "completed_at": "2026-08-09T17:37:31Z"
+        },
+        {
+          "id": "019fe79d-7427",
+          "status": "completed",
+          "completed_at": "2026-08-09T17:44:14Z",
+          "note": "Selected outcome completion after follow-up."
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-10",
+      "session": "019fe7c4-f617-72b1-9ba9-c2a7554b58a9",
+      "role": "implementer",
+      "turns": [
+        {
+          "id": "019fe7c5-0252",
+          "status": "completed",
+          "completed_at": "2026-08-09T18:53:54Z",
+          "note": "Selected outcome completion."
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-11",
+      "session": "019fe7cc-1a84-7ea2-bc0a-a25863123a0d",
+      "role": "evaluator",
+      "turns": [
+        {
+          "id": "019fe7cc-1c78",
+          "status": "completed",
+          "completed_at": "2026-08-09T18:52:25Z",
+          "note": "Selected outcome completion."
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-12",
+      "session": "019fe7fc-1c59-7463-b3e9-c3edc06f0d6a",
+      "role": "implementer",
+      "turns": [
+        {
+          "id": "019fe7fc-1de7",
+          "status": "completed",
+          "completed_at": "2026-08-09T19:44:09Z"
+        },
+        {
+          "id": "019fe81b-9fed",
+          "status": "completed",
+          "completed_at": "2026-08-09T20:16:23Z",
+          "note": "Selected outcome completion after integrated fixes."
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-13",
+      "session": "019fe7fc-4d8e-7a01-a71a-187f65d4194f",
+      "role": "implementer",
+      "turns": [
+        {
+          "id": "019fe7fc-4fb4",
+          "status": "completed",
+          "completed_at": "2026-08-09T20:15:35Z",
+          "note": "Selected outcome completion."
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-14",
+      "session": "019fe7fc-ab91-7af3-b00f-ace20389fe35",
+      "role": "implementer",
+      "turns": [
+        {
+          "id": "019fe7fc-ada4",
+          "status": "completed",
+          "completed_at": "2026-08-09T19:47:12Z",
+          "note": "Selected implementation completion."
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-14",
+      "session": "019fe818-b777-7062-a6cd-3d32a5d72297",
+      "role": "reviewer",
+      "turns": [
+        {
+          "id": "019fe818-b96d",
+          "status": "completed",
+          "completed_at": "2026-08-09T20:06:53Z",
+          "note": "Review/fix evidence; event, not an independent task."
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-15",
+      "session": "019fe857-b8e1-73d0-87e3-0cc9f23064e8",
+      "role": "implementer",
+      "turns": [
+        {
+          "id": "019fe857-bb13",
+          "status": "completed",
+          "completed_at": "2026-08-09T21:20:48Z"
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-15",
+      "session": "019fe857-da2b-78a3-9aed-8e4155ba72b2",
+      "role": "implementer",
+      "turns": [
+        {
+          "id": "019fe857-dca0",
+          "status": "completed",
+          "completed_at": "2026-08-09T21:19:34Z"
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-15",
+      "session": "019fe857-fd90-7b62-a9cd-9cd3d2b32568",
+      "role": "evaluator",
+      "turns": [
+        {
+          "id": "019fe857-ff81",
+          "status": "completed",
+          "completed_at": "2026-08-09T21:19:11Z",
+          "note": "Selected initial Slice 8.5 completion."
+        },
+        {
+          "id": "019fed48-a783",
+          "status": "completed",
+          "completed_at": "2026-08-10T20:07:30Z",
+          "note": "Later audit; excluded from Slice 8.5 completion."
+        },
+        {
+          "id": "019fed59-196e",
+          "status": "completed",
+          "completed_at": "2026-08-10T20:39:56Z",
+          "note": "Later audit; excluded from Slice 8.5 completion."
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-16",
+      "session": "019fe881-6a56-77d0-9d46-547983e72032",
+      "role": "implementer",
+      "turns": [
+        {
+          "id": "019fe881-6c0b",
+          "status": "completed",
+          "completed_at": "2026-08-09T22:25:00Z"
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-16",
+      "session": "019fe881-9961-7c91-916a-a300b2f1112c",
+      "role": "implementer",
+      "turns": [
+        {
+          "id": "019fe881-9b4e",
+          "status": "completed",
+          "completed_at": "2026-08-09T22:16:29Z"
+        },
+        {
+          "id": "019fe8a2-b424",
+          "status": "completed",
+          "completed_at": "2026-08-09T22:29:06Z",
+          "note": "Selected outcome completion after boundary correction."
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-17",
+      "session": "019fe8c2-0eed-7253-8642-502b28b182a5",
+      "role": "evaluator",
+      "turns": [
+        {
+          "id": "019fe8c2-115e",
+          "status": "completed",
+          "completed_at": "2026-08-09T23:05:02Z"
+        },
+        {
+          "id": "019fe8c5-deba",
+          "status": "completed",
+          "completed_at": "2026-08-09T23:05:20Z"
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-17",
+      "session": "019fe8c2-3179-7d80-adf7-5a3c718f0410",
+      "role": "evaluator",
+      "turns": [
+        {
+          "id": "019fe8c2-33ad",
+          "status": "completed",
+          "completed_at": "2026-08-09T23:05:36Z"
+        },
+        {
+          "id": "019fe8c6-5771",
+          "status": "completed",
+          "completed_at": "2026-08-09T23:05:51Z"
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-17",
+      "session": "019fe8c2-55a3-7873-9281-f38b3af0e39b",
+      "role": "evaluator",
+      "turns": [
+        {
+          "id": "019fe8c2-5806",
+          "status": "completed",
+          "completed_at": "2026-08-09T23:06:01Z"
+        },
+        {
+          "id": "019fe8c6-b810",
+          "status": "completed",
+          "completed_at": "2026-08-09T23:06:13Z",
+          "note": "Selected outcome completion."
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-18",
+      "session": "019fec2f-4665-77d0-a2aa-f0b2d5eab46b",
+      "role": "implementer",
+      "turns": [
+        {
+          "id": "019fec2f-4773",
+          "status": "completed",
+          "completed_at": "2026-08-10T15:37:50Z"
+        },
+        {
+          "id": "019fec53-797b",
+          "status": "completed",
+          "completed_at": "2026-08-10T15:40:47Z",
+          "note": "Migration fix."
+        },
+        {
+          "id": "019fed2f-c24c",
+          "status": "completed",
+          "completed_at": "2026-08-10T20:00:39Z",
+          "note": "Later dogfood/adjudication; excluded from Slice 10 completion."
+        },
+        {
+          "id": "019fed58-e439",
+          "status": "completed",
+          "completed_at": "2026-08-10T20:36:42Z",
+          "note": "Later dogfood/adjudication; excluded from Slice 10 completion."
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-18",
+      "session": "019fec2f-903b-7dd3-8821-83dbe096a726",
+      "role": "implementer",
+      "turns": [
+        {
+          "id": "019fec2f-9135",
+          "status": "completed",
+          "completed_at": "2026-08-10T15:53:56Z",
+          "note": "Selected outcome completion."
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-19",
+      "session": "019feccf-6255-7353-b434-ab6127b8e8bd",
+      "role": "implementer",
+      "turns": [
+        {
+          "id": "019feccf-659e",
+          "status": "interrupted",
+          "completed_at": "2026-08-10T18:01:32Z"
+        },
+        {
+          "id": "019fecd6-dd6e",
+          "status": "completed",
+          "completed_at": "2026-08-10T19:15:41Z",
+          "note": "Selected outcome completion."
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-19",
+      "session": "019fecd7-2267-7ff1-8144-4d2611545c1a",
+      "role": "implementer",
+      "turns": [
+        {
+          "id": "019fecd7-252d",
+          "status": "completed",
+          "completed_at": "2026-08-10T19:14:56Z"
+        },
+        {
+          "id": "019fed2f-d8b9",
+          "status": "completed",
+          "completed_at": "2026-08-10T20:00:44Z",
+          "note": "Later dogfood review; excluded from Project Core completion."
+        },
+        {
+          "id": "019fed58-f888",
+          "status": "completed",
+          "completed_at": "2026-08-10T20:41:38Z",
+          "note": "Later provenance audit; excluded from Project Core completion."
+        }
+      ]
+    },
+    {
+      "outcome": "outcome-20",
+      "session": "019fed2f-82a3-73e1-9c08-2ca3ed219d4b",
+      "role": "implementer",
+      "turns": [
+        {
+          "id": "019fed2f-85ee",
+          "status": "completed",
+          "completed_at": "2026-08-10T19:57:01Z",
+          "note": "Selected outcome completion after an earlier interrupted attempt."
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "project_thread_aliases": 4,
+    "spawned_sessions": 37,
+    "accounted_sessions": 41,
+    "outcomes": 20
+  }
+}

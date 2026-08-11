@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "project_id": "codex-commons",
+  "tasks": [
+    {
+      "key": "evaluate-human-workflow",
+      "id": "dogfood-key:evaluate-human-workflow",
+      "title": "Evaluate Codex Commons through real work",
+      "state": "ready"
+    },
+    {
+      "key": "correct-readme",
+      "id": "dogfood-key:correct-readme",
+      "title": "Bring README current with the running product",
+      "state": "ready"
+    },
+    {
+      "key": "specify-agent-bridge",
+      "id": "dogfood-key:specify-agent-bridge",
+      "title": "Specify the minimum Codex bridge contract",
+      "state": "blocked"
+    }
+  ]
+}
