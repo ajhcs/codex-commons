@@ -3,7 +3,7 @@
 ## Selected source
 
 - `selected-option-2.png` is the user-selected Option 2 design checkpoint.
-- Original generated source: `/home/plumbob/.codex/generated_images/019ff1d2-5374-70d0-81ff-c9d9fa7de3c7/exec-991642e1-962a-422f-9495-461faeb81dab.png`
+- Source provenance: copied from the selected Slice 13 ideation output as the only tracked concept image.
 - Comparison viewport: 1440 × 1024 CSS pixels. The stored source is 1487 × 1058 and must be normalized only for comparison, never stretched in product UI.
 - The bitmap is a preview/reference only. All product text, icons, controls, states, and layout are code-native.
 

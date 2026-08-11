@@ -2,10 +2,10 @@
 
 ## Selected target and implementation state
 
-- User-selected source: `/home/plumbob/codex-commons/web/design-references/slice13-single-plane-attention/selected-option-2.png` (stored source 1487 × 1058; comparison target 1440 × 1024).
+- User-selected source: `web/design-references/slice13-single-plane-attention/selected-option-2.png` (stored source 1487 × 1058; comparison target 1440 × 1024).
 - Desktop implementation capture: pending browser authorization/tool availability.
 - Mobile implementation capture: pending browser authorization/tool availability.
-- Browser/IAB is not exposed to this task. Direct `view_image` is also blocked by the host's protected `/home/.git` bubblewrap mount. Per the user instruction, no Playwright fallback has been used without explicit approval.
+- Browser/IAB is not exposed to this task, and direct image inspection is unavailable because the filesystem sandbox could not mount the workspace. Per the user instruction, no Playwright fallback has been used without explicit approval.
 
 ## Required same-state comparison points
 
