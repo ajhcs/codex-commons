@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"path"
 	"strings"
+
+	"codex-commons/internal/httpapi"
 )
 
 func newMux(api http.Handler, web fs.FS, anonymousToken string) (http.Handler, error) {
@@ -43,9 +45,11 @@ func anonymousRead(next http.Handler, token string) http.Handler {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, humanCookieErr := r.Cookie(httpapi.HumanSessionCookieName)
 		if (r.Method == http.MethodGet || r.Method == http.MethodHead) &&
 			r.URL.Path != "/v1/health" &&
-			r.Header.Get("Authorization") == "" && r.Header.Get("X-Commons-Host-Credential") == "" {
+			r.Header.Get("Authorization") == "" && r.Header.Get("X-Commons-Host-Credential") == "" &&
+			humanCookieErr != nil {
 			clone := r.Clone(r.Context())
 			clone.Header = r.Header.Clone()
 			clone.Header.Set("Authorization", "Bearer "+token)

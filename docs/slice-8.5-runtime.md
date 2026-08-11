@@ -50,7 +50,9 @@ Non-secret flags have matching environment variables:
 Secret values are deliberately not accepted as command-line flags. One
 credential may be supplied with `COMMONS_BEARER_TOKEN` or
 `COMMONS_HOST_CREDENTIAL` plus `COMMONS_ACTOR`, `COMMONS_SESSION`, and
-`COMMONS_HOST`. Multiple credentials may be read from a group/other-inaccessible
+`COMMONS_HOST`. Optional `COMMONS_PROJECT` and `COMMONS_PURPOSE` values register
+the authenticated session as a durable, addressable identity without implying
+live presence. Multiple credentials may be read from a group/other-inaccessible
 JSON file:
 
 ```json
@@ -60,13 +62,17 @@ JSON file:
       "bearer_token": "replace-at-runtime",
       "actor": "agent-name",
       "session": "codex-session-id",
-      "host": "plumbob"
+      "host": "plumbob",
+      "project": "codex-commons",
+      "purpose": "Coordinate Codex Commons dogfood work"
     }
   ]
 }
 ```
 
 No credential file or token belongs in the repository.
+If `project` is present it must already exist. Registration does not create
+connectivity, execution, reachability, loaded-context, or other presence facts.
 
 ## LAN evaluation
 

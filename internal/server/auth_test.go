@@ -13,8 +13,10 @@ import (
 	"time"
 
 	"codex-commons/internal/demodata"
+	"codex-commons/internal/domain"
 	"codex-commons/internal/httpapi"
 	"codex-commons/internal/server"
+	commonsstore "codex-commons/internal/store"
 )
 
 const runtimeAdminSecret = "slice-10-disposable-human-secret"
@@ -191,5 +193,158 @@ func TestHumanPostCommentStateDurabilityAndSessionRestart(t *testing.T) {
 	if opened.Code != http.StatusOK || !strings.Contains(opened.Body.String(), `"state":"resolved"`) ||
 		!strings.Contains(opened.Body.String(), `"intent":"add_evidence"`) || !strings.Contains(opened.Body.String(), `"Human durable write"`) {
 		t.Fatalf("durable thread code=%d body=%s", opened.Code, opened.Body.String())
+	}
+}
+
+func TestAnonymousReadHonorsHumanSessionCookie(t *testing.T) {
+	config := server.DefaultConfig()
+	config.DatabasePath = filepath.Join(t.TempDir(), "commons.sqlite")
+	config.WebDir = testWeb(t)
+	config.AnonymousRead = true
+	config.HumanAuth = &httpapi.HumanAuthConfig{
+		AdminSecret: runtimeAdminSecret, DisplayName: "Test Admin", Actor: "local-admin",
+		Session: "human-local-admin", Host: "browser", SessionTTL: time.Hour,
+	}
+	app, err := server.New(context.Background(), config, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+
+	anonymous := runtimeRequest(app.Handler(), http.MethodGet, "http://commons.test/v1/notifications", "", nil, "", "")
+	if anonymous.Code != http.StatusForbidden {
+		t.Fatalf("anonymous notifications code=%d body=%s", anonymous.Code, anonymous.Body.String())
+	}
+	cookie, _ := runtimeLogin(t, app.Handler())
+	listed := runtimeRequest(app.Handler(), http.MethodGet, "http://commons.test/v1/notifications", "", cookie, "", "")
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"items":[]`) {
+		t.Fatalf("human notifications code=%d body=%s", listed.Code, listed.Body.String())
+	}
+	stale := &http.Cookie{Name: httpapi.HumanSessionCookieName, Value: "invalid"}
+	invalid := runtimeRequest(app.Handler(), http.MethodGet, "http://commons.test/v1/projects", "", stale, "", "")
+	if invalid.Code != http.StatusUnauthorized {
+		t.Fatalf("invalid human cookie did not fail closed: code=%d body=%s", invalid.Code, invalid.Body.String())
+	}
+}
+
+func agentRequest(handler http.Handler, method, target, body, key string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer configured-agent-secret")
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if key != "" {
+		req.Header.Set("Idempotency-Key", key)
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	return recorder
+}
+
+func TestConfiguredAgentStartupIdentitySupportsWritesMentionsAndRestart(t *testing.T) {
+	ctx := context.Background()
+	database := filepath.Join(t.TempDir(), "commons.sqlite")
+	durable, err := commonsstore.Open(ctx, database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = durable.CreateProject(ctx, domain.Project{ID: "alpha", Name: "Alpha", Status: "active", Purpose: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = durable.CreateTopic(ctx, domain.Topic{ID: "alpha-posts", ProjectID: "alpha", Name: "Alpha posts"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = durable.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	credential := httpapi.Credential{BearerToken: "configured-agent-secret", Actor: "agent-alpha", Session: "session-alpha", Host: "host-alpha", Project: "alpha", Purpose: "Dogfood coordination"}
+	config := server.DefaultConfig()
+	config.DatabasePath = database
+	config.WebDir = testWeb(t)
+	config.Credentials = []httpapi.Credential{credential}
+	first, err := server.New(ctx, config, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body := `{"topic":"alpha-posts","kind":"question","title":"Configured identity","body":"Can the registered agent write?","basis":"Runtime E2E","mentions":[{"principal":"human:local-admin"}]}`
+	created := agentRequest(first.Handler(), http.MethodPost, "http://commons.test/v1/posts", body, "configured-agent-post")
+	if created.Code != http.StatusOK {
+		t.Fatalf("configured agent post code=%d body=%s", created.Code, created.Body.String())
+	}
+	var response struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(created.Body.Bytes(), &response); err != nil || response.Data.ID == "" {
+		t.Fatalf("post response=%s err=%v", created.Body.String(), err)
+	}
+	contributors := agentRequest(first.Handler(), http.MethodGet, "http://commons.test/v1/contributors?project=alpha&limit=10", "", "")
+	if contributors.Code != http.StatusOK || !strings.Contains(contributors.Body.String(), `"session":"session-alpha"`) || !strings.Contains(contributors.Body.String(), `"host":"host-alpha"`) || !strings.Contains(contributors.Body.String(), `"project":{"id":"alpha"`) || !strings.Contains(contributors.Body.String(), `"purpose":"Dogfood coordination"`) {
+		t.Fatalf("contributors code=%d body=%s", contributors.Code, contributors.Body.String())
+	}
+	people := agentRequest(first.Handler(), http.MethodGet, "http://commons.test/v1/people?limit=10", "", "")
+	if people.Code != http.StatusOK || !strings.Contains(people.Body.String(), `"total":0`) {
+		t.Fatalf("configured identity fabricated presence: code=%d body=%s", people.Code, people.Body.String())
+	}
+	if err = first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	audit, err := commonsstore.Open(ctx, database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mentions, notifications int
+	if err := audit.DB().QueryRowContext(ctx, `SELECT count(*) FROM content_mentions WHERE source_kind='post' AND source_id=? AND recipient_principal=?`, response.Data.ID, domain.HumanLocalPrincipal).Scan(&mentions); err != nil {
+		t.Fatal(err)
+	}
+	if err := audit.DB().QueryRowContext(ctx, `SELECT count(*) FROM human_notifications WHERE post_id=? AND recipient_principal=? AND actor_session_id='session-alpha'`, response.Data.ID, domain.HumanLocalPrincipal).Scan(&notifications); err != nil {
+		t.Fatal(err)
+	}
+	if mentions != 1 || notifications != 1 {
+		t.Fatalf("mention=%d notification=%d", mentions, notifications)
+	}
+	if err = audit.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := server.New(ctx, config, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	replay := agentRequest(second.Handler(), http.MethodPost, "http://commons.test/v1/posts", body, "configured-agent-post")
+	var replayResponse struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(replay.Body.Bytes(), &replayResponse); err != nil || replay.Code != http.StatusOK || replayResponse.Data.ID != response.Data.ID {
+		t.Fatalf("restart replay code=%d body=%s err=%v", replay.Code, replay.Body.String(), err)
+	}
+	contributors = agentRequest(second.Handler(), http.MethodGet, "http://commons.test/v1/contributors?project=alpha&limit=10", "", "")
+	if contributors.Code != http.StatusOK || strings.Count(contributors.Body.String(), `"principal":"session-alpha"`) != 1 {
+		t.Fatalf("restart contributors code=%d body=%s", contributors.Code, contributors.Body.String())
+	}
+	people = agentRequest(second.Handler(), http.MethodGet, "http://commons.test/v1/people?limit=10", "", "")
+	if people.Code != http.StatusOK || !strings.Contains(people.Body.String(), `"total":0`) {
+		t.Fatalf("restart fabricated presence: code=%d body=%s", people.Code, people.Body.String())
+	}
+}
+
+func TestConfiguredAgentMissingProjectFailsStartup(t *testing.T) {
+	config := server.DefaultConfig()
+	config.DatabasePath = filepath.Join(t.TempDir(), "commons.sqlite")
+	config.WebDir = testWeb(t)
+	config.Credentials = []httpapi.Credential{{
+		BearerToken: "configured-agent-secret", Actor: "agent-alpha", Session: "session-alpha",
+		Host: "host-alpha", Project: "missing-project", Purpose: "Bounded test",
+	}}
+	app, err := server.New(context.Background(), config, nil)
+	if app != nil || err == nil || !strings.Contains(err.Error(), `references missing project "missing-project"`) {
+		t.Fatalf("missing project app=%v err=%v", app, err)
 	}
 }

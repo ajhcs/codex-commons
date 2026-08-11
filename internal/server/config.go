@@ -157,6 +157,13 @@ func (c Config) Validate() error {
 		if credential.Actor == "" || credential.Session == "" || credential.Host == "" || credential.BearerToken == "" && credential.HostCredential == "" {
 			return errors.New("each credential requires a secret plus actor, session, and host")
 		}
+		if strings.TrimSpace(credential.Actor) != credential.Actor || len(credential.Actor) > 200 ||
+			strings.TrimSpace(credential.Session) != credential.Session || len(credential.Session) > 200 ||
+			strings.TrimSpace(credential.Host) != credential.Host || len(credential.Host) > 200 ||
+			strings.TrimSpace(credential.Project) != credential.Project || len(credential.Project) > 100 ||
+			strings.TrimSpace(credential.Purpose) != credential.Purpose || len(credential.Purpose) > 400 {
+			return errors.New("credential actor, session, host, project, and purpose must be bounded and have no surrounding whitespace")
+		}
 	}
 	if c.ReadTimeout <= 0 || c.ReadHeaderTimeout <= 0 || c.WriteTimeout <= 0 || c.IdleTimeout <= 0 || c.ShutdownTimeout <= 0 {
 		return errors.New("server timeouts must be positive")
@@ -190,9 +197,10 @@ func credentialFromEnv(getenv func(string) string) (*httpapi.Credential, error) 
 		BearerToken:    strings.TrimSpace(getenv("COMMONS_BEARER_TOKEN")),
 		HostCredential: strings.TrimSpace(getenv("COMMONS_HOST_CREDENTIAL")),
 		Actor:          strings.TrimSpace(getenv("COMMONS_ACTOR")), Session: strings.TrimSpace(getenv("COMMONS_SESSION")),
-		Host: strings.TrimSpace(getenv("COMMONS_HOST")),
+		Host: strings.TrimSpace(getenv("COMMONS_HOST")), Project: strings.TrimSpace(getenv("COMMONS_PROJECT")),
+		Purpose: strings.TrimSpace(getenv("COMMONS_PURPOSE")),
 	}
-	if credential.BearerToken == "" && credential.HostCredential == "" && credential.Actor == "" && credential.Session == "" && credential.Host == "" {
+	if credential.BearerToken == "" && credential.HostCredential == "" && credential.Actor == "" && credential.Session == "" && credential.Host == "" && credential.Project == "" && credential.Purpose == "" {
 		return nil, nil
 	}
 	if credential.Actor == "" || credential.Session == "" || credential.Host == "" || credential.BearerToken == "" && credential.HostCredential == "" {
@@ -223,6 +231,8 @@ func readCredentials(path string) ([]httpapi.Credential, error) {
 		Actor          string `json:"actor"`
 		Session        string `json:"session"`
 		Host           string `json:"host"`
+		Project        string `json:"project,omitempty"`
+		Purpose        string `json:"purpose,omitempty"`
 	}
 	var payload struct {
 		Credentials []fileCredential `json:"credentials"`
@@ -240,7 +250,7 @@ func readCredentials(path string) ([]httpapi.Credential, error) {
 	for _, item := range payload.Credentials {
 		credentials = append(credentials, httpapi.Credential{
 			BearerToken: item.BearerToken, HostCredential: item.HostCredential,
-			Actor: item.Actor, Session: item.Session, Host: item.Host,
+			Actor: item.Actor, Session: item.Session, Host: item.Host, Project: item.Project, Purpose: item.Purpose,
 		})
 	}
 	return credentials, nil
