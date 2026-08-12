@@ -381,9 +381,35 @@ func (s *Store) transitionArchaeology(ctx context.Context, m domain.ArchaeologyM
 				return domain.ArchaeologySession{}, domain.ErrInvalid
 			}
 			next = "draft"
-			_, err = tx.ExecContext(ctx, `INSERT INTO archaeology_handoffs(id,session_id,state,pack_json,created_at,updated_at) VALUES(?,?,'ready_to_claim','{}',?,?)`, deterministicHistoricalID("ARH-", sid), sid, stamp(now), stamp(now))
-			if err != nil {
-				return domain.ArchaeologySession{}, mapErr(err)
+			handoffID := deterministicHistoricalID("ARH-", sid)
+			var handoffState, claimedBy string
+			var claimedAt sql.NullString
+			handoffErr := tx.QueryRowContext(ctx, `SELECT state,claimed_by,claimed_at FROM archaeology_handoffs WHERE id=? AND session_id=?`, handoffID, sid).Scan(&handoffState, &claimedBy, &claimedAt)
+			switch {
+			case errors.Is(handoffErr, sql.ErrNoRows):
+				_, err = tx.ExecContext(ctx, `INSERT INTO archaeology_handoffs(id,session_id,state,pack_json,created_at,updated_at) VALUES(?,?,'ready_to_claim','{}',?,?)`, handoffID, sid, stamp(now), stamp(now))
+				if err != nil {
+					return domain.ArchaeologySession{}, mapErr(err)
+				}
+			case handoffErr != nil:
+				return domain.ArchaeologySession{}, handoffErr
+			default:
+				// Schema-12 upgrades may retain one never-claimed handoff from the
+				// former copy-pack flow. Preserve that row byte-for-byte as audit
+				// history, but allow the explicit new start to use direct tasks.
+				var launches, outcomes, handoffRequests int
+				if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM archaeology_task_launches WHERE session_id=?`, sid).Scan(&launches); err != nil {
+					return domain.ArchaeologySession{}, err
+				}
+				if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM archaeology_outcomes o JOIN archaeology_runs r ON r.id=o.run_id WHERE r.session_id=?`, sid).Scan(&outcomes); err != nil {
+					return domain.ArchaeologySession{}, err
+				}
+				if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM archaeology_handoff_requests WHERE handoff_id=?`, handoffID).Scan(&handoffRequests); err != nil {
+					return domain.ArchaeologySession{}, err
+				}
+				if handoffState != "ready_to_claim" || claimedBy != "" || claimedAt.Valid || handoffRequests != 0 || launches != 0 || outcomes != 0 {
+					return domain.ArchaeologySession{}, domain.ErrConflict
+				}
 			}
 		case "pause":
 			if state != "running" {

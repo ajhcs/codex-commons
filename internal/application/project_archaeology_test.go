@@ -238,3 +238,82 @@ func TestProjectArchaeologyLaunchesTenSelectedProjectsWithBoundedConcurrencyAndN
 		t.Fatalf("idempotent replay created tasks: total=%d", launcher.total)
 	}
 }
+
+func TestProjectArchaeologyUpgradeRediscoveryStartsOneDirectTask(t *testing.T) {
+	ctx := context.Background()
+	repository, err := commonsstore.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	service := New(repository, nil, nil)
+	launcher := &boundedTaskLauncher{perProject: map[string]int{}}
+	service.ConfigureProjectArchaeology(manyArchaeologyDiscoverer{count: 2}, launcher)
+	session, err := service.DiscoverProjectArchaeology(ctx, domain.HumanLocalPrincipal, "legacy-discover-app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err = service.ConfigureArchaeologySession(ctx, domain.HumanLocalPrincipal, "legacy-config-app", ArchaeologyConfigRequest{SelectedProjectIDs: []string{"project-00"}, Depth: "quick", Sources: ArchaeologySources{Git: true}, MaxConcurrency: 1, BaseRevision: session.Revision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := repository.StartArchaeology(ctx, domain.ArchaeologyMutation{Principal: domain.HumanLocalPrincipal, RequestID: "legacy-start-app", BaseRevision: session.Revision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.Handoff == nil || len(legacy.TaskLaunches) != 0 {
+		t.Fatalf("legacy=%+v", legacy)
+	}
+
+	rediscovered, err := service.DiscoverProjectArchaeology(ctx, domain.HumanLocalPrincipal, "native-rediscover-app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rediscovered.Discovery.Candidates) != 2 {
+		t.Fatalf("candidates=%+v", rediscovered.Discovery.Candidates)
+	}
+	configured, err := service.ConfigureArchaeologySession(ctx, domain.HumanLocalPrincipal, "native-config-app", ArchaeologyConfigRequest{SelectedProjectIDs: []string{"project-01"}, Depth: "standard", Sources: ArchaeologySources{Git: true}, MaxConcurrency: 1, BaseRevision: rediscovered.Revision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configured.Handoff != nil || !configured.Controls.CanStart {
+		t.Fatalf("legacy handoff still controls native UI: handoff=%+v controls=%+v", configured.Handoff, configured.Controls)
+	}
+	baseRevision := configured.Revision
+	started, err := service.StartProjectArchaeology(ctx, domain.HumanLocalPrincipal, "native-start-app", ArchaeologyTransitionRequest{BaseRevision: baseRevision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.Handoff == nil || started.Handoff.ID != "" || started.Handoff.State != "launching" ||
+		len(started.Handoff.AllowedActions) != 0 || len(started.Handoff.Tasks) != 1 ||
+		started.Handoff.Tasks[0].ProjectID != "project-01" || started.Handoff.Tasks[0].State != "task_created" {
+		t.Fatalf("started=%+v", started)
+	}
+	launcher.mu.Lock()
+	if launcher.total != 1 || launcher.perProject["project-01"] != 1 {
+		t.Fatalf("launches=%d per=%v", launcher.total, launcher.perProject)
+	}
+	launcher.mu.Unlock()
+	if _, err = service.StartProjectArchaeology(ctx, domain.HumanLocalPrincipal, "native-start-app", ArchaeologyTransitionRequest{BaseRevision: baseRevision}); err != nil {
+		t.Fatal(err)
+	}
+	launcher.mu.Lock()
+	defer launcher.mu.Unlock()
+	if launcher.total != 1 {
+		t.Fatalf("replay launched duplicate task: %d", launcher.total)
+	}
+	var handoffs int
+	if err = repository.DB().QueryRowContext(ctx, `SELECT count(*) FROM archaeology_handoffs WHERE session_id=?`, legacy.ID).Scan(&handoffs); err != nil {
+		t.Fatal(err)
+	}
+	if handoffs != 1 {
+		t.Fatalf("legacy audit rows=%d", handoffs)
+	}
+	var imports int
+	if err = repository.DB().QueryRowContext(ctx, `SELECT count(*) FROM historical_import_batches`).Scan(&imports); err != nil {
+		t.Fatal(err)
+	}
+	if imports != 0 {
+		t.Fatalf("upgrade path auto-imported history: %d", imports)
+	}
+}

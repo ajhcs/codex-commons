@@ -29,6 +29,10 @@ export function configFromModel(config = {}) {
   };
 }
 
+export function archaeologyConfigVersion(model) {
+  return `${model?.id || ""}:${model?.revision ?? ""}`;
+}
+
 export function selectedSourceCount(config) {
   return ARCHAEOLOGY_SOURCES.filter((source) => config?.sources?.[source]).length;
 }
