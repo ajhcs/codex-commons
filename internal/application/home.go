@@ -41,6 +41,7 @@ type Service struct {
 	humanHandle           string
 	identityMu            sync.RWMutex
 	archaeologyDiscoverer ArchaeologyDiscoverer
+	archaeologyLauncher   ArchaeologyHistorianLauncher
 }
 
 func New(repository HomeRepository, live PresenceRegistry, clock Clock) *Service {

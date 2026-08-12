@@ -16,6 +16,13 @@ import (
 	"codex-commons/internal/domain"
 )
 
+type pairingLimitError struct {
+	code  string
+	retry time.Duration
+}
+
+func (e *pairingLimitError) Error() string { return e.code }
+
 const (
 	pairingCookieName = "commons_pairing"
 	pairingCookiePath = "/v1/auth/codex"
@@ -100,11 +107,12 @@ func (m *pairingManager) reserve(cookieHash, remote string) (*pairingAttempt, er
 		return nil, domain.ErrConflict
 	}
 	if len(m.attempts) >= maxPairings {
-		return nil, errors.New("pairing attempts exhausted")
+		return nil, &pairingLimitError{code: "pairing_capacity_limited", retry: time.Minute}
 	}
 	entries := m.starts[remote]
 	if len(entries) >= 3 {
-		return nil, errors.New("pairing starts rate limited")
+		retry := entries[0].Add(10 * time.Minute).Sub(now)
+		return nil, &pairingLimitError{code: "auth_start_limited", retry: retry}
 	}
 	id, ok := randomAuthToken()
 	if !ok {
@@ -277,6 +285,7 @@ type codexStartResult struct {
 	UserCode        string    `json:"user_code"`
 	ExpiresAt       time.Time `json:"expires_at"`
 	PollAfterMS     int       `json:"poll_after_ms"`
+	Resumed         bool      `json:"resumed"`
 }
 
 type codexPollResult struct {
@@ -512,7 +521,7 @@ func (h *handler) codexStart(w http.ResponseWriter, r *http.Request, rid string)
 	cookieHash := pairingHash(pairingValue)
 	if hasCookie {
 		if active, found := h.pairings.activeForCookie(cookieHash); found {
-			h.write(w, http.StatusOK, envelope{OK: true, Data: codexStartResult{AttemptID: active.id, VerificationURL: active.verificationURL, UserCode: active.userCode, ExpiresAt: active.expiresAt, PollAfterMS: 1500}, Meta: responseMeta{RequestID: rid}})
+			h.write(w, http.StatusOK, envelope{OK: true, Data: codexStartResult{AttemptID: active.id, VerificationURL: active.verificationURL, UserCode: active.userCode, ExpiresAt: active.expiresAt, PollAfterMS: 1500, Resumed: true}, Meta: responseMeta{RequestID: rid}})
 			return
 		}
 	}
@@ -520,8 +529,8 @@ func (h *handler) codexStart(w http.ResponseWriter, r *http.Request, rid string)
 	if err != nil {
 		if errors.Is(err, domain.ErrConflict) {
 			h.writeError(w, rid, http.StatusConflict, "pairing_attempt_active", "A Codex sign-in is already active for this browser.")
-		} else if strings.Contains(err.Error(), "rate limited") || strings.Contains(err.Error(), "exhausted") {
-			h.writeError(w, rid, http.StatusTooManyRequests, "too_many_attempts", "Too many Codex sign-in attempts. Wait and try again.")
+		} else if limit := new(pairingLimitError); errors.As(err, &limit) {
+			h.writeCooldownError(w, rid, limit.code, "Codex sign-in is cooling down. Your reading session is unchanged.", limit.retry)
 		} else {
 			h.writeError(w, rid, http.StatusServiceUnavailable, "randomness_unavailable", "Secure browser randomness is unavailable")
 		}
@@ -587,7 +596,8 @@ func (h *handler) codexPoll(w http.ResponseWriter, r *http.Request, rid string) 
 	active, loginID, err := h.pairings.beginPoll(input.AttemptID)
 	if err != nil {
 		if strings.Contains(err.Error(), "too soon") {
-			h.writeError(w, rid, http.StatusTooManyRequests, "poll_too_soon", "Wait for the polling interval before checking again.")
+			retry := minPollInterval - h.pairings.now().UTC().Sub(attempt.lastPoll)
+			h.writeCooldownError(w, rid, "auth_poll_wait", "Codex authorization is still pending. Commons will check again shortly.", retry)
 		} else if strings.Contains(err.Error(), "active") {
 			h.writeError(w, rid, http.StatusConflict, "poll_active", "A Codex sign-in check is already in progress.")
 		} else {

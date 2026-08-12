@@ -50,11 +50,23 @@ func TestProjectArchaeologyIdempotencyBoundsAndRestart(t *testing.T) {
 	if started.State != "draft" || len(started.Runs) != 0 || started.Handoff == nil || started.Handoff.State != "ready_to_claim" {
 		t.Fatalf("started=%+v", started)
 	}
+	var packJSON string
+	must(t, s.DB().QueryRowContext(ctx, `SELECT pack_json FROM archaeology_handoffs WHERE id=?`, started.Handoff.ID).Scan(&packJSON))
+	if packJSON != "{}" {
+		t.Fatalf("legacy prompt pack persisted: %s", packJSON)
+	}
+	digest := make([]byte, 32)
+	digest[0] = 1
+	_, err = s.DB().ExecContext(ctx, `INSERT INTO archaeology_task_launches(id,session_id,candidate_id,state,client_message_id,request_digest,grant_digest,grant_expires_at,created_at,updated_at) VALUES('launch-restart',?,'commons','starting_codex','message',?,?,?,?,?)`, started.ID, digest, digest, stamp(now.Add(time.Hour)), stamp(now), stamp(now))
+	must(t, err)
 	must(t, s.ReconcileArchaeology(ctx))
 	recovered, err := s.ArchaeologySession(ctx, domain.HumanLocalPrincipal)
 	must(t, err)
 	if recovered.State != "draft" || recovered.Handoff == nil || recovered.Handoff.State != "ready_to_claim" {
 		t.Fatalf("recovered=%+v", recovered)
+	}
+	if len(recovered.TaskLaunches) != 1 || recovered.TaskLaunches[0].State != "uncertain" {
+		t.Fatalf("interrupted launch was not reconciled truthfully: %+v", recovered.TaskLaunches)
 	}
 }
 

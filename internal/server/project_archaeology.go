@@ -88,7 +88,7 @@ func (d allowlistedArchaeologyDiscoverer) DiscoverMetadata(ctx context.Context) 
 		}
 		_, gitErr := os.Stat(filepath.Join(root.Path, ".git"))
 		_, docsErr := os.Stat(filepath.Join(root.Path, "docs"))
-		candidate := domain.ArchaeologyCandidate{ID: root.ID, Name: root.Name, PathLabel: root.PathLabel, RepositoryLabel: root.RepositoryLabel, LastActivityAt: info.ModTime().UTC(), HasGit: gitErr == nil, HasDocs: docsErr == nil, DurationMinSeconds: 60, DurationMaxSeconds: 600, RelativeCost: "medium", PrivacyNote: "Only allowlisted metadata is shown; source bodies remain outside Commons until a Codex-owned historian is claimed."}
+		candidate := domain.ArchaeologyCandidate{ID: root.ID, Name: root.Name, PathLabel: root.Name, RepositoryLabel: root.RepositoryLabel, LastActivityAt: info.ModTime().UTC(), HasGit: gitErr == nil, HasDocs: docsErr == nil, DurationMinSeconds: 60, DurationMaxSeconds: 600, RelativeCost: "medium", PrivacyNote: "Only allowlisted metadata is shown; source bodies remain outside Commons until a Codex-owned historian is claimed."}
 		if candidate.LastActivityAt.After(time.Now().Add(5 * time.Minute)) {
 			candidate.LastActivityAt = time.Now().UTC()
 		}

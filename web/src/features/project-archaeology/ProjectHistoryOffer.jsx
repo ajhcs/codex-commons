@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import CommonsCompanion from "../../components/CommonsCompanion.jsx";
+import CommonsMark from "../../components/CommonsMark.jsx";
 
 export function ProjectHistoryOffer({ open, identity, onContinue, onSkip }) {
   const dialogRef = useRef(null);
@@ -26,7 +26,7 @@ export function ProjectHistoryOffer({ open, identity, onContinue, onSkip }) {
       onCancel={(event) => { event.preventDefault(); skip(); }}
     >
       <div className="history-offer-visual" aria-hidden="true">
-        <CommonsCompanion state="history-offered" size="hero" />
+        <CommonsMark state="offered" size="large" />
       </div>
       <div className="history-offer-copy">
         <span className="history-offer-status">Identity connected</span>

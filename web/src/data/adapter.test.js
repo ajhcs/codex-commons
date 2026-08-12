@@ -703,6 +703,7 @@ function archaeologyPayload() {
         last_activity_at: "2026-08-12T11:00:00Z", signals: { git: true, docs: true, codex_history: true },
         estimate: { duration_seconds_min: 240, duration_seconds_max: 480, relative_cost: "medium" },
         privacy_note: "Only selected sources are read after start.", selected_by_default: false,
+        sources: ["codex_metadata"], codex_thread_count: 12,
       }],
     },
     config: { selected_project_ids: ["codex-commons"], depth: "standard", sources: { git: true, docs: true, codex_history: true }, max_concurrency: 2 },
@@ -715,12 +716,14 @@ function archaeologyPayload() {
       member_sessions: [member], provenance_summary: "Exact digests retained; explicit human approval is required.", can_apply: true, requires_explicit_approval: true,
     },
     capabilities: {
+      project_catalog: { configured: true, available: true, mode: "codex_metadata" },
+      task_launch: { configured: true, available: true, mode: "app_server_stdio" },
       discovery: { configured: true, available: true, mode: "allowlisted_metadata" },
-      historian_handoff: { configured: true, available: true, mode: "export_claim_report" },
+      historian_handoff: { configured: true, available: true, mode: "exact_task_claim_report" },
       review: { configured: true, available: true, mode: "validated_manifest" },
       canonical_apply: { configured: true, available: true, mode: "preview_digest_confirm" },
     },
-    handoff: { id: "HAND-1", state: "completed", claimed_by: "SES-4168", depth: "standard", sources: { git: true, docs: true, codex_history: true }, concurrency: 2, candidate_ids: ["codex-commons"], pack: { title: "Codex Commons history", instructions: "Claim and report this bounded pack.", projects: [{ candidate_id: "codex-commons", label: "Codex Commons", task_prompt: "Review the supplied project history." }] }, allowed_actions: [] },
+    handoff: { id: "HAND-1", state: "completed", depth: "standard", sources: { git: true, docs: true, codex_history: true }, concurrency: 2, candidate_ids: ["codex-commons"], tasks: [{ project_id: "codex-commons", state: "completed", thread_id: "019ff-task", turn_id: "turn-1", created_at: "2026-08-12T12:00:00Z", updated_at: "2026-08-12T12:30:00Z", available_actions: [] }], allowed_actions: [] },
     controls: { can_start: false, can_pause: false, can_resume: false, can_cancel: false },
     revision: 7, updated_at: "2026-08-12T12:30:00Z",
   };
@@ -741,7 +744,7 @@ test("Project Archaeology normalizes once and transports explicit human controls
   await adapter.cancelProjectArchaeology(10, { csrfToken: "csrf", idempotencyKey: "arch-cancel" });
 
   assert.equal(model.discovery.metadataOnly, true);
-  assert.equal(model.discovery.candidates[0].pathLabel, "~/codex-commons");
+  assert.equal(model.discovery.candidates[0].pathLabel, undefined, "raw path labels never enter the frontend model");
   assert.equal(model.discovery.candidates[0].signals.codexHistory, true);
   assert.equal(model.review.proposedOutcomes[0].memberSessions[0].sessionId, "SES-4168");
   assert.equal(model.review.memberSessions[0].demonstratedStrengths[0], "Provenance design");
@@ -764,7 +767,7 @@ test("Project Archaeology normalizes once and transports explicit human controls
 
 test("Project Archaeology rejects automatic candidate selection and unreviewed manifests", async () => {
   for (const mutate of [
-    (payload) => { payload.discovery.candidates[0].selected_by_default = true; },
+    (payload) => { payload.discovery.candidates[0].sources = ["filesystem_scan"]; },
     (payload) => { payload.review.requires_explicit_approval = false; },
   ]) {
     const payload = archaeologyPayload();

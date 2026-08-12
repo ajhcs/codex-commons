@@ -22,9 +22,10 @@ import (
 )
 
 type Store struct {
-	db          *sql.DB
-	now         func() time.Time
-	humanAuthMu sync.Mutex
+	db                  *sql.DB
+	now                 func() time.Time
+	humanAuthMu         sync.Mutex
+	archaeologyLaunchMu sync.Mutex
 }
 
 type Option func(*Store)

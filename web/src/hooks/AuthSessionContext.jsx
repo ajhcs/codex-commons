@@ -13,6 +13,8 @@ function authError(error, fallback = "Commons sign-in could not be completed.") 
   return {
     code: error?.code || "auth_error",
     message: error?.message || fallback,
+    retryAfterSeconds: Number(error?.retryAfterSeconds) || 0,
+    retryAt: error?.retryAt || "",
   };
 }
 
@@ -111,8 +113,8 @@ export function AuthSessionProvider({ children }) {
         });
       } catch (error) {
         if (abortError(error) || flowID !== flowRef.current) return;
-        if (error?.code === "poll_too_soon") {
-          schedulePoll(flowID, attemptID, 1500);
+        if (error?.code === "auth_poll_wait" || error?.code === "poll_too_soon") {
+          schedulePoll(flowID, attemptID, Math.max(1000, (Number(error.retryAfterSeconds) || 1.5) * 1000));
           return;
         }
         dispatch({ type: AUTH_ACTIONS.ERROR, error: { ...authError(error), resumeState: "unauthenticated" } });
@@ -169,6 +171,10 @@ export function AuthSessionProvider({ children }) {
       return result;
     } catch (error) {
       if (abortError(error)) return null;
+      if (error?.code === "auth_poll_wait" || error?.code === "poll_too_soon") {
+        schedulePoll(flowRef.current, pairing.attemptID, Math.max(1000, (Number(error.retryAfterSeconds) || 1.5) * 1000));
+        return null;
+      }
       dispatch({ type: AUTH_ACTIONS.ERROR, error: { ...authError(error), resumeState: "unauthenticated" } });
       throw error;
     }

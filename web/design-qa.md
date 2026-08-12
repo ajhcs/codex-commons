@@ -338,3 +338,48 @@ final result: passed
 - Wiki proposal/review UI, GitHub, global history, teams, RBAC, queues, private messages, background-work UI, reactions, and human task assignment are deferred because they are outside this slice or lack the required product surface.
 
 final result: passed
+
+
+---
+
+# Codex-native sign-in and Project Archaeology QA (Option 2)
+
+## Source, method, and captures
+
+- Selected visual target: `/home/plumbob/codex-commons-design-references/openai-native-motion-20260812/display-option-2.png` at 1487 × 1058.
+- Motion reference: `/home/plumbob/.codex/attachments/35e1eea6-3614-4df3-8481-d2f35fe8a10f/95cYQOgg4ig-cMpK.mp4`; the implementation uses its stable-boundary/interior-transition principle, not its exact symbol.
+- The in-app Browser was unavailable. Chrome DevTools MCP was used against isolated loopback-only Vite previews; Playwright was not used and the LAN runtime was not touched during this comparison.
+- Desktop selection: `/tmp/commons-option2-ready-1487.png` at 1487 × 1058.
+- Same-input comparison: `/tmp/commons-option2-comparison.png` (selected target left, rendered implementation right).
+- Direct launch lifecycle: `/tmp/commons-option2-handoff-1487.png` at 1487 × 1058.
+- Auth ready/code: `/tmp/commons-option2-auth-ready-1440.png` and `/tmp/commons-option2-auth-code-1440.png` at 1440 × 900.
+- Responsive captures: `/tmp/commons-option2-ready-390-fixed.png`, `/tmp/commons-option2-ready-390-bottom.png`, and `/tmp/commons-option2-ready-320.png`.
+- Additional states: `/tmp/commons-option2-ready-1440-200pct.png` and `/tmp/commons-option2-ready-1440-dark-app.png`.
+
+## Fidelity and product boundaries
+
+- The selected Option 2 hierarchy is preserved with less clutter: one restrained trust plane, one dominant project catalog, a collapsed Advanced settings disclosure, and a literal task-state ledger. The production application keeps the existing Commons rail instead of adding the mock's permanent activity rail.
+- The rejected pearl companion and raster are removed. The replacement uses the pinned MIT Apps SDK UI `Link` icon in one stable wrapper; no custom SVG, CSS-drawn emblem, mascot, fake Blossom, claimed OpenAI Sans, or copied Grok/X mark is present.
+- Open Sans is the pinned OFL build and is not represented as OpenAI Sans. White/ink/neutral surfaces, measured radii, sparse blue action language, native controls, and whitespace align with the studied OpenAI design language without claiming an official OpenAI product identity.
+- Project selection uses the Codex App Server catalog, sanitized display labels, recent-first ordering, search, selected count, visible bulk selection, and progressively disclosed depth/source/concurrency controls. Direct `Start Codex tasks` replaces task-pack copy.
+- Task lifecycle rows expose only literal backend states. Exact thread/turn IDs are secondary copyable provenance; `uncertain` states say that Commons will not retry automatically. No task is imported without later human review and exact-digest confirmation.
+- Auth cooldowns preserve server retry timing; `auth_poll_wait` schedules another poll without becoming a sign-in failure. The one-time code is a selectable readonly field with a unique ID, secure Clipboard API handling, and the tested insecure-LAN fallback.
+
+## Rendered interaction and accessibility verification
+
+- The full fixture flow was exercised through Sign out → Sign in → Connect → one-time code → profile. The secure-path Copy code action returned the live status `Code copied`; unit tests cover secure success, insecure fallback, rejected Clipboard API fallback, selection restoration, and no false success.
+- The project catalog rendered 30 realistic candidates. Search, project selection, Advanced settings, and `Start Codex tasks` were interactive; the launch state replaced the chooser without a copied prompt or simulated percentage.
+- At true 390 × 844, the initial candidate row exposed a responsive grid conflict that squeezed its text into a 28 px track. The <=520 px rule now removes the decorative row mark, restores the project copy to the fluid column, and moves the estimate into the same content column. The post-fix capture is readable and retains the selected state.
+- True 390 × 844 and 320 × 800 passes report document width equal to viewport width and no horizontal overflow. The internally scrollable catalog remains bounded, while Advanced settings and the primary CTA are reachable at the dialog bottom.
+- At a 1440 × 900 viewport with 200% root text, the document retains zero horizontal overflow and the dialog scrolls vertically. The application-controlled dark theme renders consistent surfaces and selection contrast.
+- Native dialog, form, heading, searchbox, checkbox, disclosure, button, readonly-code, status, and focus semantics appear in the accessibility tree. Reduced-motion media rules remove mark animation and transitions; keyboard focus retains the established visible outline.
+- Final loopback requests were 200. No React exception, failed application request, or page error occurred. Chrome's pairing-field autofill advisory was corrected by assigning the readonly code input a unique generated ID.
+
+## Automated verification
+
+- Frontend unit/contract suite: 50 passed before the final generated-ID-only accessibility edit; the final suite is rerun in the release gate.
+- Sites contract suite: 4 passed.
+- Production Vite/Sites build: passed; 103 modules transformed and required Sites artifacts emitted.
+- Independent integrated review passed full Go tests, full race tests, Go vet, frontend tests/build/Sites, security/path/prompt-leak regressions, and diff checks before this final rendered QA pass.
+
+final result: passed

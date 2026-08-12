@@ -1,5 +1,6 @@
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
-const HANDOFF_STATES = new Set(["ready_to_claim", "claimed", "completed", "failed"]);
+const HANDOFF_STATES = new Set(["launching", "running", "completed", "failed", "uncertain", "ready_to_claim", "claimed"]);
+const TASK_STATES = new Set(["preparing", "starting_codex", "task_created", "claimed", "running", "report_ready", "completed", "failed", "uncertain"]);
 
 function record(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new TypeError("record required");
@@ -39,6 +40,8 @@ function capability(value) {
 export function normalizeArchaeologyCapabilities(value) {
   value = record(value);
   return {
+    projectCatalog: capability(value.project_catalog),
+    taskLaunch: capability(value.task_launch),
     discovery: capability(value.discovery),
     historianHandoff: capability(value.historian_handoff),
     review: capability(value.review),
@@ -51,28 +54,28 @@ export function normalizeArchaeologyHandoff(value, timestampLabel) {
   value = record(value);
   if (!HANDOFF_STATES.has(value.state)) throw new TypeError("invalid handoff state");
   const sources = record(value.sources);
-  const pack = record(value.pack);
-  if (!Array.isArray(pack.projects) || pack.projects.length > 100) throw new TypeError("invalid task pack");
+  if (!Array.isArray(value.tasks) || value.tasks.length > 100) throw new TypeError("invalid task list");
   return {
     id: string(value.id),
     state: value.state,
-    claimedBy: typeof value.claimed_by === "string" ? value.claimed_by : "",
-    failure: typeof value.failure === "string" ? value.failure : "",
     createdAt: timestamp(value.created_at, timestampLabel),
     updatedAt: timestamp(value.updated_at, timestampLabel),
-    claimedAt: timestamp(value.claimed_at, timestampLabel),
     depth: string(value.depth),
     sources: { git: sources.git === true, docs: sources.docs === true, codexHistory: sources.codex_history === true },
     concurrency: integer(value.concurrency),
     candidateIds: stringList(value.candidate_ids, 100),
-    pack: {
-      title: string(pack.title),
-      instructions: string(pack.instructions),
-      projects: pack.projects.map((project) => {
-        project = record(project);
-        return { candidateId: string(project.candidate_id), label: string(project.label), taskPrompt: string(project.task_prompt) };
-      }),
-    },
+    tasks: value.tasks.map((rawTask) => {
+      const task = record(rawTask);
+      if (!TASK_STATES.has(task.state)) throw new TypeError("invalid task state");
+      return {
+        projectId: string(task.project_id), state: task.state,
+        threadId: typeof task.thread_id === "string" ? task.thread_id : "",
+        turnId: typeof task.turn_id === "string" ? task.turn_id : "",
+        createdAt: timestamp(task.created_at, timestampLabel),
+        updatedAt: timestamp(task.updated_at, timestampLabel),
+        availableActions: stringList(task.available_actions || [], 8),
+      };
+    }),
     allowedActions: stringList(value.allowed_actions, 8),
   };
 }

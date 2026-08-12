@@ -1,4 +1,4 @@
-import CommonsCompanion from "./CommonsCompanion.jsx";
+import CommonsMark from "./CommonsMark.jsx";
 
 const JOURNEY_STEPS = ["Connect", "Authorize", "Enter Commons"];
 
@@ -47,7 +47,7 @@ export default function AuthJourney({ stage = "ready", identity = null }) {
           <span className="auth-thread-signal" />
         </div>
         <div className="auth-connection-endpoint auth-connection-endpoint--commons">
-          <CommonsCompanion state={companionState} size="small" className="auth-endpoint-companion" />
+          <CommonsMark state={companionState === "identity-resolved" ? "resolved" : companionState} size="small" className="auth-endpoint-companion" />
           <span><strong>{displayName}</strong><small>{handle}</small></span>
         </div>
       </div>

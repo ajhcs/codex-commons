@@ -93,7 +93,7 @@ export function ProjectArchaeologyFlow({ open, initialArchaeology = null, onClos
       const next = await commonsAdapter.startProjectArchaeology(configured.revision, writeOptions());
       setArchaeology(next);
     } catch (next) {
-      handleError(next, "Commons could not prepare the Codex task pack.");
+      handleError(next, "Commons could not start the selected Codex tasks.");
       if (next?.status === 409) await refresh();
     } finally {
       setBusy(false);

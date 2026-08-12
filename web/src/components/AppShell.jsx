@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useAuthSession } from "../hooks/useAuthSession.js";
 import { useNotifications } from "../hooks/NotificationContext.jsx";
 import { commonsAdapter } from "../data/adapter.js";
-import CommonsCompanion from "./CommonsCompanion.jsx";
+import CommonsMark from "./CommonsMark.jsx";
 import { LoginDialog, ProfileDialog, SessionControl } from "./AuthControls.jsx";
 import { SettingsDialog } from "./SettingsDialog.jsx";
 import { ProjectArchaeologyFlow } from "../features/project-archaeology/ProjectArchaeologyFlow.jsx";
@@ -125,7 +125,7 @@ export function AppShell({ route, onNavigate, railContent = null, children }) {
     <div className={`app-shell${collapsed ? " app-shell--collapsed" : ""}`}>
       <aside className="left-rail">
         <div className="brand-row">
-          <span className="brand-icon"><CommonsCompanion state="idle" size="tiny" /></span>
+          <span className="brand-icon"><CommonsMark size="tiny" /></span>
           <span className="brand-name">Codex Commons</span>
           <button
             className="rail-collapse"

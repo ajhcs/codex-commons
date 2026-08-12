@@ -64,8 +64,10 @@ type envelope struct {
 }
 
 type errorPayload struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code              string     `json:"code"`
+	Message           string     `json:"message"`
+	RetryAfterSeconds int        `json:"retry_after_seconds,omitempty"`
+	RetryAt           *time.Time `json:"retry_at,omitempty"`
 }
 
 func NewHandler(backend Backend, config Config) http.Handler {
@@ -119,6 +121,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/v1/health" {
 		h.health(w, r, rid)
+		return
+	}
+	if h.projectArchaeologyGrantRoute(w, r, rid) {
 		return
 	}
 	identity, ok := h.authenticate(r)
@@ -904,6 +909,15 @@ func (h *handler) notFound(w http.ResponseWriter, meta RequestMeta) {
 }
 func (h *handler) writeError(w http.ResponseWriter, rid string, status int, code, message string) {
 	h.write(w, status, envelope{OK: false, Error: &errorPayload{Code: code, Message: message}, Meta: responseMeta{RequestID: rid}})
+}
+func (h *handler) writeCooldownError(w http.ResponseWriter, rid, code, message string, retry time.Duration) {
+	seconds := int((retry + time.Second - 1) / time.Second)
+	if seconds < 1 {
+		seconds = 1
+	}
+	retryAt := h.pairings.now().UTC().Add(time.Duration(seconds) * time.Second)
+	w.Header().Set("Retry-After", strconv.Itoa(seconds))
+	h.write(w, http.StatusTooManyRequests, envelope{OK: false, Error: &errorPayload{Code: code, Message: message, RetryAfterSeconds: seconds, RetryAt: &retryAt}, Meta: responseMeta{RequestID: rid}})
 }
 func (h *handler) write(w http.ResponseWriter, status int, payload envelope) {
 	w.WriteHeader(status)

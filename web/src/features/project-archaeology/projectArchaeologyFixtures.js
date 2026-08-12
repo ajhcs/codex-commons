@@ -5,8 +5,10 @@ export const archaeologyIdentityFixture = Object.freeze({
 });
 
 const capabilities = Object.freeze({
+  projectCatalog: { configured: true, available: true, mode: "codex_metadata", reason: "" },
+  taskLaunch: { configured: true, available: true, mode: "app_server_stdio", reason: "" },
   discovery: { configured: true, available: true, mode: "allowlisted_metadata", reason: "" },
-  historianHandoff: { configured: true, available: true, mode: "export_claim_report", reason: "" },
+  historianHandoff: { configured: true, available: true, mode: "exact_task_claim_report", reason: "" },
   review: { configured: true, available: true, mode: "validated_manifest", reason: "" },
   canonicalApply: { configured: true, available: true, mode: "preview_digest_confirm", reason: "" },
 });
@@ -15,21 +17,28 @@ const candidates = [
   {
     id: "codex-commons",
     name: "Codex Commons",
-    pathLabel: "~/codex-commons",
     lastActivity: { iso: "2026-08-12T12:40:00.000Z", relative: "Just now", absolute: "Aug 12, 12:40 PM" },
     signals: { git: true, docs: true, codexHistory: true },
     estimate: { durationSecondsMin: 240, durationSecondsMax: 480, relativeCost: "medium" },
-    privacyNote: "Only selected sources are read after you prepare the task pack.",
+    privacyNote: "Only selected sources are read after start.", repositoryLabel: "openai/codex-commons", sources: ["codex_metadata"], codexThreadCount: 14, selectedByDefault: true,
   },
   {
     id: "field-notes",
     name: "Field Notes",
-    pathLabel: "~/field-notes",
     lastActivity: { iso: "2026-08-10T18:12:00.000Z", relative: "2d ago", absolute: "Aug 10, 6:12 PM" },
     signals: { git: true, docs: true, codexHistory: false },
     estimate: { durationSecondsMin: 90, durationSecondsMax: 240, relativeCost: "low" },
-    privacyNote: "Only selected sources are read after you prepare the task pack.",
+    privacyNote: "Only selected sources are read after start.", repositoryLabel: "field-notes", sources: ["codex_metadata"], codexThreadCount: 3, selectedByDefault: false,
   },
+  ...Array.from({ length: 28 }, (_, index) => ({
+    id: `codex-project-${index + 3}`,
+    name: `Codex Project ${index + 3}`,
+    repositoryLabel: index % 2 ? `workspace-${index + 3}` : "",
+    lastActivity: { iso: new Date(Date.UTC(2026, 7, 9 - (index % 8), 12, 0)).toISOString(), relative: `${index + 1}d ago`, absolute: `Aug ${9 - (index % 8)}` },
+    signals: { git: true, docs: index % 3 !== 0, codexHistory: true },
+    estimate: { durationSecondsMin: 120, durationSecondsMax: 600, relativeCost: "medium" },
+    privacyNote: "Only selected sources are read after start.", sources: ["codex_metadata"], codexThreadCount: (index % 7) + 1, selectedByDefault: false,
+  })),
 ];
 
 export const archaeologyReadyFixture = Object.freeze({
@@ -54,20 +63,9 @@ export const archaeologyHandoffFixture = Object.freeze({
   ...archaeologyReadyFixture,
   revision: 5,
   handoff: {
-    id: "HAND-CC-1",
-    state: "ready_to_claim",
-    claimedBy: "",
-    failure: "",
-    depth: "standard",
-    sources: { git: true, docs: true, codexHistory: true },
-    concurrency: 2,
-    candidateIds: ["codex-commons"],
-    allowedActions: ["claim"],
-    pack: {
-      title: "Codex Commons project archaeology",
-      instructions: "Claim this handoff once, review only the selected sources, and report one bounded historical-import proposal.",
-      projects: [{ candidateId: "codex-commons", label: "Codex Commons", taskPrompt: "Review the selected Git, documentation, and Codex-history evidence. Return source digests, exact contributor session IDs, uncertainties, and one current-wins historical import proposal." }],
-    },
+    id: "HAND-CC-1", state: "running", depth: "standard",
+    sources: { git: true, docs: true, codexHistory: true }, concurrency: 2, candidateIds: ["codex-commons"], allowedActions: [],
+    tasks: [{ projectId: "codex-commons", state: "running", threadId: "019ff-commons-history", turnId: "turn-1", createdAt: null, updatedAt: null, availableActions: [] }],
   },
   controls: { canStart: false, canPause: false, canResume: false, canCancel: false },
 });
@@ -88,7 +86,7 @@ const member = Object.freeze({
 export const archaeologyReviewFixture = Object.freeze({
   ...archaeologyHandoffFixture,
   state: "completed",
-  handoff: { ...archaeologyHandoffFixture.handoff, state: "completed", claimedBy: "SES-4168", allowedActions: [] },
+  handoff: { ...archaeologyHandoffFixture.handoff, state: "completed", tasks: archaeologyHandoffFixture.handoff.tasks.map((task) => ({ ...task, state: "completed" })), allowedActions: [] },
   review: {
     requiresExplicitApproval: true,
     canApply: true,
