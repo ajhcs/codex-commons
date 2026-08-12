@@ -362,3 +362,36 @@ func TestProjectArchaeologyUpgradeRediscoveryStartsOneDirectTask(t *testing.T) {
 		t.Fatalf("upgrade path auto-imported history: %d", imports)
 	}
 }
+
+func TestNativeSchedulerHidesClaimedLegacyLaunchRowsFromCurrentWorkflow(t *testing.T) {
+	service := &Service{archaeologyScheduler: &ArchaeologyScheduler{}}
+	value := domain.ArchaeologySession{
+		State: "draft",
+		Config: domain.ArchaeologyConfig{
+			SelectedProjectIDs: []string{"project"},
+			Depth:              "standard",
+			Sources:            domain.ArchaeologySources{Git: true},
+			MaxConcurrency:     2,
+		},
+		Candidates: []domain.ArchaeologyCandidate{{ID: "project", CanonicalProjectID: "project"}},
+		Handoff:    &domain.ArchaeologyHandoff{ID: "legacy-handoff", State: "ready_to_claim"},
+	}
+	for index := 0; index < 9; index++ {
+		value.TaskLaunches = append(value.TaskLaunches, domain.ArchaeologyTaskLaunch{
+			ID:        fmt.Sprintf("legacy-launch-%d", index),
+			ProjectID: "project",
+			State:     "claimed",
+		})
+	}
+
+	view := service.archaeologySessionView(value)
+	if view.Handoff != nil {
+		t.Fatalf("legacy launches replaced current workflow: %+v", view.Handoff)
+	}
+	if !view.Controls.CanStart {
+		t.Fatalf("legacy audit rows blocked a new native run: %+v", view.Controls)
+	}
+	if len(value.TaskLaunches) != 9 || value.Handoff == nil {
+		t.Fatalf("projection mutated durable audit input: launches=%d handoff=%+v", len(value.TaskLaunches), value.Handoff)
+	}
+}
