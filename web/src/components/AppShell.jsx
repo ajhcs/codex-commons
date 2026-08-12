@@ -1,12 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useAuthSession } from "../hooks/useAuthSession.js";
 import { useNotifications } from "../hooks/NotificationContext.jsx";
-import { commonsAdapter } from "../data/adapter.js";
 import CommonsMark from "./CommonsMark.jsx";
 import { LoginDialog, ProfileDialog, SessionControl } from "./AuthControls.jsx";
 import { SettingsDialog } from "./SettingsDialog.jsx";
 import { ProjectArchaeologyFlow } from "../features/project-archaeology/ProjectArchaeologyFlow.jsx";
-import { ProjectHistoryOffer } from "../features/project-archaeology/ProjectHistoryOffer.jsx";
 
 import Bell from "../icons/Bell.tsx";
 import ChevronLeft from "../icons/ChevronLeft.tsx";
@@ -30,7 +28,6 @@ export function AppShell({ route, onNavigate, railContent = null, children }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [accountMessage, setAccountMessage] = useState("");
   const [archaeologyOpen, setArchaeologyOpen] = useState(false);
-  const [historyOfferOpen, setHistoryOfferOpen] = useState(false);
   const [archaeologySeed, setArchaeologySeed] = useState(null);
   authSessionRef.current = auth.session;
   const primaryRoute = route === "project" ? "projects" : route === "post" ? "posts" : route;
@@ -94,29 +91,14 @@ export function AppShell({ route, onNavigate, railContent = null, children }) {
   }
 
   async function authenticated(session, context = {}) {
-    const historyCheck = ++historyCheckRef.current;
+    ++historyCheckRef.current;
     authSessionRef.current = session;
     auth.accept(session);
     setLoginOpen(false);
     setAccountMessage("");
-    if (context.freshCodexProfile !== true || session?.authMethod !== "codex") return;
-    const historyCheckIsCurrent = () => {
-      const currentSession = authSessionRef.current;
-      return historyCheck === historyCheckRef.current
-        && currentSession?.authenticated
-        && currentSession.principal?.principal === session.principal?.principal;
-    };
-    try {
-      const model = await commonsAdapter.readProjectArchaeology();
-      if (!historyCheckIsCurrent()) return;
-      if (model.capabilities?.discovery?.available === true) {
-        setArchaeologySeed(model);
-        setHistoryOfferOpen(true);
-      }
-    } catch {
-      if (historyCheckIsCurrent()) {
-        setAccountMessage("Project history setup could not be checked. You can retry from your account menu.");
-      }
+    if (context.openProjectHistory === true && context.archaeologySeed) {
+      setArchaeologySeed(context.archaeologySeed);
+      setArchaeologyOpen(true);
     }
   }
 
@@ -170,7 +152,6 @@ export function AppShell({ route, onNavigate, railContent = null, children }) {
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <LoginDialog open={loginOpen} onClose={() => setLoginOpen(false)} onAuthenticated={authenticated} />
       <ProfileDialog open={profileOpen} onClose={() => setProfileOpen(false)} />
-      <ProjectHistoryOffer open={historyOfferOpen} identity={auth.session?.principal} onSkip={() => setHistoryOfferOpen(false)} onContinue={() => { setHistoryOfferOpen(false); setArchaeologyOpen(true); }} />
       <ProjectArchaeologyFlow open={archaeologyOpen} initialArchaeology={archaeologySeed} onClose={() => { setArchaeologyOpen(false); setArchaeologySeed(null); }} onNavigate={onNavigate} />
     </>
   );

@@ -6,6 +6,8 @@ import { normalizeProvenance } from "./provenance.js";
 import { confirmedHistoricalImportRequest, normalizeArchaeologyCapabilities, normalizeArchaeologyHandoff, normalizeArchaeologyImportPreview, normalizeHistoricalImportResult } from "./projectArchaeologyAdapter.js";
 import { archaeologyHandoffFixture, archaeologyReadyFixture, archaeologyReviewFixture } from "../features/project-archaeology/projectArchaeologyFixtures.js";
 import { CommonsAPIError, createHTTPTransport } from "./transport.js";
+const PROJECT_ARCHAEOLOGY_DISCOVERY_STAGES = new Set(["idle", "queued", "reading_codex_metadata", "persisting_catalog", "ready", "failed"]);
+
 
 function wait(value, signal) {
   return new Promise((resolve, reject) => {
@@ -392,6 +394,7 @@ function normalizeCodexStart(value) {
     userCode,
     expiresAt: expiresAt.toISOString(),
     pollAfterMS: value.poll_after_ms,
+    destinationBehavior: (() => { const behavior = value.destination_behavior == null ? "manual_code_required" : requireString(value.destination_behavior); if (behavior !== "manual_code_required") throw invalidPayload(); return behavior; })(),
   };
 }
 
@@ -609,6 +612,7 @@ function normalizeProjectArchaeology(data) {
     if (durationSecondsMax < durationSecondsMin) throw invalidPayload();
     return {
       id: requireString(candidate.id),
+      candidateId: requireString(candidate.id),
       name: requireString(candidate.name),
       repositoryLabel: candidate.repository_label == null ? "" : requireString(candidate.repository_label),
       lastActivity: candidate.last_activity_at == null ? null : timestampLabel(candidate.last_activity_at),
@@ -668,6 +672,11 @@ function normalizeProjectArchaeology(data) {
     state: data.state,
     discovery: {
       state: discovery.state,
+      stage: (() => { const stage = discovery.stage || (discovery.state === "discovering" ? "reading_codex_metadata" : discovery.state); if (!PROJECT_ARCHAEOLOGY_DISCOVERY_STAGES.has(stage)) throw invalidPayload(); return stage; })(),
+      startedAt: discovery.started_at == null ? null : timestampLabel(discovery.started_at),
+      updatedAt: discovery.updated_at == null ? null : timestampLabel(discovery.updated_at),
+      codexThreadsExamined: discovery.codex_threads_examined == null ? 0 : requireInteger(discovery.codex_threads_examined),
+      workspacesGrouped: discovery.workspaces_grouped == null ? 0 : requireInteger(discovery.workspaces_grouped),
       candidates,
       discoveredAt: discovery.discovered_at == null ? null : timestampLabel(discovery.discovered_at),
       sourceRootsScanned: requireInteger(discovery.source_roots_scanned),

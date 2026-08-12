@@ -25,31 +25,32 @@ const (
 )
 
 type Config struct {
-	Listen                 string
-	DatabasePath           string
-	WebDir                 string
-	Version                string
-	Credentials            []httpapi.Credential
-	HumanAuth              *httpapi.HumanAuthConfig
-	CodexAuth              bool
-	CodexBin               string
-	CodexBindingKeyFile    string
-	CodexBindingKey        [32]byte
-	CodexBindingKeySet     bool
-	CodexClient            codexauth.Client
-	AllowFirstCodexBindLAN bool
-	EnableRecoveryLogin    bool
-	AnonymousRead          bool
-	AllowAnonymousLAN      bool
-	AllowInsecureHumanLAN  bool
-	DemoSeed               bool
-	ArchaeologyRootsFile   string
-	ArchaeologyRoots       []ArchaeologyRoot
-	ReadTimeout            time.Duration
-	ReadHeaderTimeout      time.Duration
-	WriteTimeout           time.Duration
-	IdleTimeout            time.Duration
-	ShutdownTimeout        time.Duration
+	Listen                      string
+	DatabasePath                string
+	WebDir                      string
+	Version                     string
+	Credentials                 []httpapi.Credential
+	HumanAuth                   *httpapi.HumanAuthConfig
+	CodexAuth                   bool
+	CodexBin                    string
+	CodexBindingKeyFile         string
+	CodexBindingKey             [32]byte
+	CodexBindingKeySet          bool
+	CodexClient                 codexauth.Client
+	AllowFirstCodexBindLAN      bool
+	EnableRecoveryLogin         bool
+	EnableExperimentalHistorian bool
+	AnonymousRead               bool
+	AllowAnonymousLAN           bool
+	AllowInsecureHumanLAN       bool
+	DemoSeed                    bool
+	ArchaeologyRootsFile        string
+	ArchaeologyRoots            []ArchaeologyRoot
+	ReadTimeout                 time.Duration
+	ReadHeaderTimeout           time.Duration
+	WriteTimeout                time.Duration
+	IdleTimeout                 time.Duration
+	ShutdownTimeout             time.Duration
 }
 
 func DefaultConfig() Config {
@@ -83,6 +84,7 @@ func ParseConfig(args []string, getenv func(string) string, stderr io.Writer) (C
 	config.CodexBindingKeyFile = strings.TrimSpace(getenv("COMMONS_CODEX_BINDING_KEY_FILE"))
 	config.AllowFirstCodexBindLAN = envBool(getenv, "COMMONS_ALLOW_FIRST_CODEX_BIND_LAN")
 	config.EnableRecoveryLogin = envBool(getenv, "COMMONS_ENABLE_RECOVERY_LOGIN")
+	config.EnableExperimentalHistorian = envBool(getenv, "COMMONS_EXPERIMENTAL_HISTORIAN_TASKS")
 
 	credentialsFile := strings.TrimSpace(getenv("COMMONS_CREDENTIALS_FILE"))
 	humanSecretFile := strings.TrimSpace(getenv("COMMONS_HUMAN_ADMIN_SECRET_FILE"))
@@ -106,6 +108,7 @@ func ParseConfig(args []string, getenv func(string) string, stderr io.Writer) (C
 	flags.StringVar(&config.CodexBindingKeyFile, "codex-binding-key-file", config.CodexBindingKeyFile, "mode-0600 private binding-key file")
 	flags.BoolVar(&config.AllowFirstCodexBindLAN, "allow-first-codex-bind-lan", config.AllowFirstCodexBindLAN, "acknowledge first Codex account binding from LAN")
 	flags.BoolVar(&config.EnableRecoveryLogin, "enable-recovery-login", config.EnableRecoveryLogin, "enable the secondary recovery-key login")
+	flags.BoolVar(&config.EnableExperimentalHistorian, "experimental-historian-tasks", config.EnableExperimentalHistorian, "enable experimental visible Codex historian tasks with dynamic tools")
 	if err := flags.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -208,6 +211,9 @@ func (c Config) Validate() error {
 			!c.HumanAuth.RecoveryEnabled && !c.HumanAuth.CodexEnabled {
 			return errors.New("valid human admin identity, display name, and session TTL required")
 		}
+	}
+	if c.EnableExperimentalHistorian && !c.CodexAuth {
+		return errors.New("experimental historian tasks require managed Codex auth")
 	}
 	if c.CodexAuth {
 		if !filepath.IsAbs(strings.TrimSpace(c.CodexBin)) || strings.ContainsAny(c.CodexBin, "\r\n\x00") {

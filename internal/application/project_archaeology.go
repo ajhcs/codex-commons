@@ -151,21 +151,31 @@ type ArchaeologyCapabilities struct {
 	CanonicalApply   ArchaeologyCapability `json:"canonical_apply"`
 }
 type ArchaeologyHandoff struct {
-	ID             string                  `json:"id"`
-	State          string                  `json:"state"`
-	ClaimedBy      string                  `json:"claimed_by,omitempty"`
-	Failure        string                  `json:"failure,omitempty"`
-	CreatedAt      *time.Time              `json:"created_at,omitempty"`
-	UpdatedAt      *time.Time              `json:"updated_at,omitempty"`
-	ClaimedAt      *time.Time              `json:"claimed_at,omitempty"`
-	Depth          string                  `json:"depth"`
-	Sources        ArchaeologySources      `json:"sources"`
-	Concurrency    int                     `json:"concurrency"`
-	CandidateIDs   []string                `json:"candidate_ids"`
-	Tasks          []ArchaeologyTaskLaunch `json:"tasks"`
-	AllowedActions []string                `json:"allowed_actions"`
+	BatchID        string                    `json:"batch_id,omitempty"`
+	ID             string                    `json:"id"`
+	State          string                    `json:"state"`
+	ClaimedBy      string                    `json:"claimed_by,omitempty"`
+	Failure        string                    `json:"failure,omitempty"`
+	CreatedAt      *time.Time                `json:"created_at,omitempty"`
+	UpdatedAt      *time.Time                `json:"updated_at,omitempty"`
+	ClaimedAt      *time.Time                `json:"claimed_at,omitempty"`
+	Depth          string                    `json:"depth"`
+	Sources        ArchaeologySources        `json:"sources"`
+	Concurrency    int                       `json:"concurrency"`
+	CandidateIDs   []string                  `json:"candidate_ids"`
+	Tasks          []ArchaeologyTaskLaunch   `json:"tasks"`
+	Progress       ArchaeologyLaunchProgress `json:"progress"`
+	AllowedActions []string                  `json:"allowed_actions"`
 }
 type ArchaeologyTaskLaunch struct {
+	JobID            string     `json:"job_id,omitempty"`
+	BatchID          string     `json:"batch_id,omitempty"`
+	Mode             string     `json:"mode,omitempty"`
+	PhaseLabel       string     `json:"phase_label,omitempty"`
+	SourcesExamined  int        `json:"sources_examined"`
+	DurationMS       *int64     `json:"duration_ms,omitempty"`
+	LaunchID         string     `json:"launch_id"`
+	CandidateID      string     `json:"candidate_id,omitempty"`
 	ProjectID        string     `json:"project_id"`
 	State            string     `json:"state"`
 	ThreadID         string     `json:"thread_id,omitempty"`
@@ -174,6 +184,22 @@ type ArchaeologyTaskLaunch struct {
 	UpdatedAt        *time.Time `json:"updated_at,omitempty"`
 	Error            string     `json:"error,omitempty"`
 	AvailableActions []string   `json:"available_actions"`
+}
+type ArchaeologyLaunchProgress struct {
+	QueuedCount      int        `json:"queued_count"`
+	ActiveCount      int        `json:"active_count"`
+	AttentionCount   int        `json:"attention_count"`
+	SelectedTotal    int        `json:"selected_total"`
+	PreparingCount   int        `json:"preparing_count"`
+	StartingCount    int        `json:"starting_count"`
+	TaskCreatedCount int        `json:"task_created_count"`
+	ClaimedCount     int        `json:"claimed_count"`
+	RunningCount     int        `json:"running_count"`
+	ReportReadyCount int        `json:"report_ready_count"`
+	CompletedCount   int        `json:"completed_count"`
+	FailedCount      int        `json:"failed_count"`
+	UncertainCount   int        `json:"uncertain_count"`
+	UpdatedAt        *time.Time `json:"updated_at,omitempty"`
 }
 type ArchaeologySession struct {
 	ID           string                  `json:"id"`
@@ -295,6 +321,25 @@ func optionalArchaeologyTime(value time.Time) *time.Time {
 	return &copy
 }
 
+func archaeologyNativeMappingReady(value domain.ArchaeologySession) bool {
+	if len(value.Config.SelectedProjectIDs) == 0 {
+		return false
+	}
+	wanted := make(map[string]bool, len(value.Config.SelectedProjectIDs))
+	for _, id := range value.Config.SelectedProjectIDs {
+		wanted[id] = true
+	}
+	for _, candidate := range value.Candidates {
+		if wanted[candidate.ID] {
+			if candidate.CanonicalProjectID == "" {
+				return false
+			}
+			delete(wanted, candidate.ID)
+		}
+	}
+	return len(wanted) == 0
+}
+
 func archaeologyView(value domain.ArchaeologySession) ArchaeologySession {
 	selectedProjectIDs := make([]string, len(value.Config.SelectedProjectIDs))
 	copy(selectedProjectIDs, value.Config.SelectedProjectIDs)
@@ -312,7 +357,7 @@ func archaeologyView(value domain.ArchaeologySession) ArchaeologySession {
 	for _, run := range value.Runs {
 		out.Runs = append(out.Runs, ArchaeologyRun{ID: run.ID, ProjectID: run.ProjectID, State: run.State, PhaseLabel: run.PhaseLabel, CompletedUnits: run.CompletedUnits, TotalUnits: run.TotalUnits, OutcomesFound: run.OutcomesFound, SourcesExamined: run.SourcesExamined, Error: run.Error, UpdatedAt: optionalArchaeologyTime(run.UpdatedAt)})
 	}
-	out.Controls = ArchaeologyControls{CanStart: value.State == "draft" && len(value.Config.SelectedProjectIDs) > 0, CanPause: value.State == "running", CanResume: value.State == "paused" || value.State == "pause_requested", CanCancel: value.State == "running" || value.State == "paused" || value.State == "pause_requested"}
+	out.Controls = ArchaeologyControls{CanStart: value.State == "draft" && archaeologyNativeMappingReady(value), CanPause: value.State == "running", CanResume: value.State == "paused" || value.State == "pause_requested", CanCancel: value.State == "running" || value.State == "paused" || value.State == "pause_requested"}
 	if value.Handoff != nil {
 		actions := []string{}
 		if value.Handoff.State == "ready_to_claim" {
@@ -324,22 +369,44 @@ func archaeologyView(value domain.ArchaeologySession) ArchaeologySession {
 		launchTasks := make([]ArchaeologyTaskLaunch, 0, len(value.TaskLaunches))
 		for _, launch := range value.TaskLaunches {
 			actions := []string{}
-			if launch.State == "failed" {
-				actions = append(actions, "retry")
-			}
-			launchTasks = append(launchTasks, ArchaeologyTaskLaunch{ProjectID: launch.ProjectID, State: launch.State, ThreadID: launch.ThreadID, TurnID: launch.TurnID, CreatedAt: optionalArchaeologyTime(launch.CreatedAt), UpdatedAt: optionalArchaeologyTime(launch.UpdatedAt), Error: publicLaunchError(launch.State), AvailableActions: actions})
+			launchTasks = append(launchTasks, ArchaeologyTaskLaunch{LaunchID: launch.ID, ProjectID: launch.ProjectID, State: launch.State, ThreadID: launch.ThreadID, TurnID: launch.TurnID, CreatedAt: optionalArchaeologyTime(launch.CreatedAt), UpdatedAt: optionalArchaeologyTime(launch.UpdatedAt), Error: publicLaunchError(launch.State), AvailableActions: actions})
 		}
+		progress := archaeologyLaunchProgress(launchTasks)
 		if len(launchTasks) > 0 && out.Handoff == nil {
 			ids := make([]string, 0, len(launchTasks))
 			for _, task := range launchTasks {
 				ids = append(ids, task.ProjectID)
 			}
-			out.Handoff = &ArchaeologyHandoff{State: "launching", Depth: out.Config.Depth, Sources: out.Config.Sources, Concurrency: out.Config.MaxConcurrency, CandidateIDs: ids, Tasks: launchTasks, AllowedActions: []string{}}
+			out.Handoff = &ArchaeologyHandoff{State: "launching", Depth: out.Config.Depth, Sources: out.Config.Sources, Concurrency: out.Config.MaxConcurrency, CandidateIDs: ids, Tasks: launchTasks, Progress: progress, AllowedActions: []string{}}
 		}
 		ids := append([]string(nil), out.Config.SelectedProjectIDs...)
-		out.Handoff = &ArchaeologyHandoff{ID: value.Handoff.ID, State: value.Handoff.State, ClaimedBy: value.Handoff.ClaimedBy, Failure: value.Handoff.Failure, CreatedAt: optionalArchaeologyTime(value.Handoff.CreatedAt), UpdatedAt: optionalArchaeologyTime(value.Handoff.UpdatedAt), ClaimedAt: optionalArchaeologyTime(value.Handoff.ClaimedAt), Depth: out.Config.Depth, Sources: out.Config.Sources, Concurrency: out.Config.MaxConcurrency, CandidateIDs: ids, Tasks: launchTasks, AllowedActions: actions}
+		out.Handoff = &ArchaeologyHandoff{ID: value.Handoff.ID, State: value.Handoff.State, ClaimedBy: value.Handoff.ClaimedBy, Failure: value.Handoff.Failure, CreatedAt: optionalArchaeologyTime(value.Handoff.CreatedAt), UpdatedAt: optionalArchaeologyTime(value.Handoff.UpdatedAt), ClaimedAt: optionalArchaeologyTime(value.Handoff.ClaimedAt), Depth: out.Config.Depth, Sources: out.Config.Sources, Concurrency: out.Config.MaxConcurrency, CandidateIDs: ids, Tasks: launchTasks, Progress: progress, AllowedActions: actions}
 		out.Controls.CanStart = false
 		out.Controls.CanPause, out.Controls.CanResume, out.Controls.CanCancel = false, false, false
+	}
+	if len(value.NativeBatches) > 0 {
+		batch := value.NativeBatches[0]
+		tasks := make([]ArchaeologyTaskLaunch, 0, len(batch.Jobs))
+		ids := make([]string, 0, len(batch.Jobs))
+		for _, job := range batch.Jobs {
+			ids = append(ids, job.CandidateID)
+			errorMessage := ""
+			if job.State == "uncertain" {
+				errorMessage = "Codex may have accepted this task, but Commons cannot safely retry it. Review the exact task ID."
+			}
+			if job.State == "attention" {
+				errorMessage = "This task needs attention before project history can continue."
+			}
+			if job.State == "failed" || job.State == "interrupted" {
+				errorMessage = "This Codex task stopped without a review-ready report."
+			}
+			tasks = append(tasks, ArchaeologyTaskLaunch{JobID: job.ID, BatchID: job.BatchID, CandidateID: job.CandidateID, Mode: job.Mode, PhaseLabel: job.PhaseLabel, SourcesExamined: job.SourcesExamined, DurationMS: job.DurationMS, LaunchID: job.ID, ProjectID: job.ProjectID, State: job.State, ThreadID: job.ThreadID, TurnID: job.TurnID, CreatedAt: optionalArchaeologyTime(job.CreatedAt), UpdatedAt: optionalArchaeologyTime(job.UpdatedAt), Error: errorMessage, AvailableActions: []string{}})
+		}
+		progress := archaeologyLaunchProgress(tasks)
+		out.Handoff = &ArchaeologyHandoff{BatchID: batch.ID, State: batch.State, CreatedAt: optionalArchaeologyTime(batch.CreatedAt), UpdatedAt: optionalArchaeologyTime(batch.UpdatedAt), Depth: out.Config.Depth, Sources: out.Config.Sources, Concurrency: batch.MaxConcurrency, CandidateIDs: ids, Tasks: tasks, Progress: progress, AllowedActions: []string{}}
+		out.Controls.CanStart = value.State == "draft" && (batch.State == "completed") && archaeologyNativeMappingReady(value)
+		out.Controls.CanPause, out.Controls.CanResume = false, false
+		out.Controls.CanCancel = batch.State == "queued" || batch.State == "running"
 	}
 	if len(value.Outcomes) > 0 || value.State == "completed" {
 		review := ArchaeologyReview{ProposedOutcomes: []ArchaeologyOutcome{}, MemberSessions: []ArchaeologyMemberSession{}, RequiresExplicitApproval: true}
@@ -396,6 +463,55 @@ func archaeologyView(value domain.ArchaeologySession) ArchaeologySession {
 	}
 	return out
 }
+func archaeologyLaunchProgress(tasks []ArchaeologyTaskLaunch) ArchaeologyLaunchProgress {
+	out := ArchaeologyLaunchProgress{SelectedTotal: len(tasks)}
+	var latest time.Time
+	for _, task := range tasks {
+		switch task.State {
+		case "queued":
+			out.QueuedCount++
+		case "starting":
+			out.StartingCount++
+			out.ActiveCount++
+		case "active":
+			out.RunningCount++
+			out.ActiveCount++
+		case "cancel_requested":
+			out.ActiveCount++
+		case "canceled":
+			out.FailedCount++
+		case "attention":
+			out.AttentionCount++
+		case "interrupted":
+			out.FailedCount++
+		case "preparing":
+			out.PreparingCount++
+		case "starting_codex":
+			out.StartingCount++
+		case "task_created":
+			out.TaskCreatedCount++
+		case "claimed":
+			out.ClaimedCount++
+		case "running":
+			out.RunningCount++
+		case "report_ready":
+			out.ReportReadyCount++
+			out.ActiveCount++
+		case "completed":
+			out.CompletedCount++
+		case "failed":
+			out.FailedCount++
+		case "uncertain":
+			out.UncertainCount++
+		}
+		if task.UpdatedAt != nil && task.UpdatedAt.After(latest) {
+			latest = *task.UpdatedAt
+		}
+	}
+	out.UpdatedAt = optionalArchaeologyTime(latest)
+	return out
+}
+
 func (s *Service) archaeologySessionView(value domain.ArchaeologySession) ArchaeologySession {
 	out := archaeologyView(value)
 	if s != nil {
@@ -409,7 +525,7 @@ func (s *Service) archaeologySessionView(value domain.ArchaeologySession) Archae
 				nativeTasks = out.Handoff.Tasks
 			}
 			out.Handoff = nil
-			out.Controls.CanStart = len(nativeTasks) == 0 && value.State == "draft" && len(value.Config.SelectedProjectIDs) > 0
+			out.Controls.CanStart = len(nativeTasks) == 0 && value.State == "draft" && archaeologyNativeMappingReady(value)
 			out.Controls.CanPause, out.Controls.CanResume, out.Controls.CanCancel = false, false, false
 			if len(nativeTasks) > 0 {
 				// Present only the exact direct-task ledger. The compatibility row's ID,
@@ -427,10 +543,12 @@ func (s *Service) archaeologySessionView(value domain.ArchaeologySession) Archae
 		capabilityCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		err := s.archaeologyLauncher.Available(capabilityCtx)
 		cancel()
-		if err == nil {
+		if err == nil && archaeologyNativeMappingReady(value) {
 			out.Capabilities.TaskLaunch = ArchaeologyCapability{Configured: true, Available: true, Mode: "app_server_stdio", Reason: "Commons can start one ordinary Codex historian task for each selected project."}
+		} else if err == nil {
+			out.Capabilities.TaskLaunch = ArchaeologyCapability{Configured: true, Available: false, Mode: "app_server_stdio", Reason: "Refresh the Codex project catalog before starting history tasks."}
 		} else {
-			out.Capabilities.TaskLaunch = ArchaeologyCapability{Configured: true, Available: false, Mode: "app_server_stdio", Reason: "The required gpt-5.6-luna max task profile is not currently available."}
+			out.Capabilities.TaskLaunch = ArchaeologyCapability{Configured: true, Available: false, Mode: "app_server_stdio", Reason: "Historian task launch is paused until Commons can durably limit active Codex tasks and reconcile their terminal state."}
 		}
 	}
 	return out
@@ -493,12 +611,22 @@ func (s *Service) StartProjectArchaeology(ctx context.Context, principal, reques
 	if err != nil {
 		return ArchaeologySession{}, err
 	}
+	if s.archaeologyScheduler != nil {
+		value, queueErr := s.queueNativeProjectArchaeology(ctx, principal, requestID, input.BaseRevision)
+		if queueErr != nil {
+			return ArchaeologySession{}, queueErr
+		}
+		return s.archaeologySessionView(value), nil
+	}
+	launcher, supported := s.archaeologyLauncher.(ArchaeologyTaskLauncher)
+	if supported && s.archaeologyLauncher.Available(ctx) != nil {
+		return ArchaeologySession{}, domain.ErrUnavailable
+	}
 	value, err := repository.StartArchaeology(ctx, archaeologyMutation(principal, requestID, input.BaseRevision))
 	if err != nil {
 		return ArchaeologySession{}, err
 	}
-	launcher, supported := s.archaeologyLauncher.(ArchaeologyTaskLauncher)
-	if !supported || s.archaeologyLauncher.Available(ctx) != nil {
+	if !supported {
 		return s.archaeologySessionView(value), nil
 	}
 	selected := map[string]bool{}
@@ -595,6 +723,10 @@ func (s *Service) ResumeProjectArchaeology(ctx context.Context, principal, reque
 	return s.archaeologySessionView(value), err
 }
 func (s *Service) CancelProjectArchaeology(ctx context.Context, principal, requestID string, input ArchaeologyTransitionRequest) (ArchaeologySession, error) {
+	if s.archaeologyScheduler != nil {
+		value, err := s.archaeologyScheduler.Cancel(ctx, principal, requestID, input.BaseRevision)
+		return s.archaeologySessionView(value), err
+	}
 	repository, err := s.archaeologyRepository()
 	if err != nil {
 		return ArchaeologySession{}, err

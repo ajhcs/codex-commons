@@ -225,3 +225,20 @@ func TestCredentialMetadataEnvironmentAndBounds(t *testing.T) {
 		t.Fatalf("oversized purpose accepted: %v", err)
 	}
 }
+
+func TestExperimentalHistorianRequiresManagedCodexAuthAndCanBeExplicitlyEnabled(t *testing.T) {
+	config := server.DefaultConfig()
+	config.DatabasePath = filepath.Join(t.TempDir(), "commons.sqlite3")
+	config.WebDir = t.TempDir()
+	config.EnableExperimentalHistorian = true
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "managed Codex auth") {
+		t.Fatalf("experimental historian without auth err=%v", err)
+	}
+	config.CodexAuth = true
+	config.CodexBin = "/usr/bin/codex"
+	config.CodexBindingKeySet = true
+	config.CodexBindingKey[0] = 1
+	if err := config.Validate(); err != nil {
+		t.Fatalf("explicit experimental historian config rejected: %v", err)
+	}
+}

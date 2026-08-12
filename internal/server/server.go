@@ -37,6 +37,7 @@ type App struct {
 	store    *commonsstore.Store
 	presence *presence.Registry
 	codex    codexauth.Client
+	service  *application.Service
 }
 
 func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
@@ -67,7 +68,7 @@ func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
 	failed := true
 	var codexClient codexauth.Client = config.CodexClient
 	if config.CodexAuth && codexClient == nil {
-		codexClient, err = codexauth.NewManagedProcess(ctx, codexauth.ProcessConfig{Executable: config.CodexBin, Env: codexauth.ApprovedEnvironment(os.Environ())})
+		codexClient, err = codexauth.NewManagedProcess(ctx, codexauth.ProcessConfig{Executable: config.CodexBin, Env: codexauth.ApprovedEnvironment(os.Environ()), EnableExperimentalDynamicTools: config.EnableExperimentalHistorian})
 		if err != nil {
 			// Codex is an optional capability. Keep Commons available and let
 			// /v1/auth/codex/status report the unavailable state.
@@ -127,9 +128,19 @@ func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
 		return nil, err
 	}
 	service := application.New(store, live, nil)
+	defer func() {
+		if failed {
+			service.CloseProjectArchaeology()
+		}
+	}()
 	if archaeologyClient, ok := codexClient.(codexauth.ArchaeologyClient); ok && codexClient.Available() {
-		bridge := &codexArchaeologyBridge{client: archaeologyClient, roots: config.ArchaeologyRoots, baseURL: "http://" + config.Listen, catalogKey: config.CodexBindingKey}
-		service.ConfigureProjectArchaeology(bridge, bridge)
+		bridge := &codexArchaeologyBridge{client: archaeologyClient, roots: config.ArchaeologyRoots, catalogKey: config.CodexBindingKey}
+		service.ConfigureProjectArchaeology(bridge, nil)
+		if config.EnableExperimentalHistorian {
+			if err := service.ConfigureNativeProjectArchaeology(ctx, bridge, domain.HumanLocalPrincipal); err != nil {
+				return nil, fmt.Errorf("configure historian scheduler: %w", err)
+			}
+		}
 	} else if len(config.ArchaeologyRoots) > 0 {
 		service.ConfigureProjectArchaeology(allowlistedArchaeologyDiscoverer{roots: config.ArchaeologyRoots}, nil)
 	}
@@ -169,7 +180,7 @@ func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
 		return nil, fmt.Errorf("build web handler: %w", err)
 	}
 	failed = false
-	return &App{config: config, handler: handler, store: store, presence: live, codex: codexClient}, nil
+	return &App{config: config, handler: handler, store: store, presence: live, codex: codexClient, service: service}, nil
 }
 
 func (a *App) Handler() http.Handler { return a.handler }
@@ -177,6 +188,9 @@ func (a *App) Handler() http.Handler { return a.handler }
 func (a *App) Close() error {
 	if a == nil || a.store == nil {
 		return nil
+	}
+	if a.service != nil {
+		a.service.CloseProjectArchaeology()
 	}
 	if a.codex != nil {
 		_ = a.codex.Close()

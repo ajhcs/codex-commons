@@ -56,6 +56,24 @@ flowchart LR
 - An unavailable handoff is a complete state with its server reason and a calm
   return path, not a disabled primary action.
 
+## Native scheduler lifecycle
+
+- Starting a run adds only missing empty Commons project/topic shells and queues
+  named tasks (`Project history · <project>`). It imports zero Tasks or history.
+- Native rows use separate candidate, canonical project, job, batch, thread, and
+  turn identities. Task names lead; identifiers stay secondary and copyable.
+- Exact native states are rendered literally. At most two jobs are active, and
+  queued/active/report/attention counts come from the bounded backend progress.
+- Cancel appears only for a server-authorized native queued/running batch. It
+  stops queued work, requests interruption for active work, preserves audit
+  history, and never implies pause, retry, or automatic restart.
+- `claimed` rows from the earlier launch path render only as `Legacy historian ·
+  status not reconciled`; they expose no lifecycle controls.
+- Hidden tabs stop and abort polling. The ledger retains known rows and reports
+  `Updates paused while this tab was hidden`, `Updates restored`, and last check.
+- Completed/canceled native batches retain their ledger and review outcomes and
+  may expose `Choose more projects` only when the server returns `can_start`.
+
 ## Frame 4 — Review what Commons found
 
 - Proposed outcomes are review rows with title, concise summary, project,

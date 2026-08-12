@@ -168,6 +168,51 @@ type boundedTaskLauncher struct {
 	active, max, total int
 	perProject         map[string]int
 }
+type unavailableTaskLauncher struct{ calls int }
+
+func (*unavailableTaskLauncher) Available(context.Context) error { return domain.ErrUnavailable }
+func (*unavailableTaskLauncher) Launch(context.Context, domain.ArchaeologySession) error {
+	return domain.ErrUnavailable
+}
+func (f *unavailableTaskLauncher) LaunchProject(context.Context, domain.ArchaeologySession, domain.ArchaeologyCandidate, string, string) (domain.ArchaeologyLaunchResult, error) {
+	f.calls++
+	return domain.ArchaeologyLaunchResult{}, domain.ErrUnavailable
+}
+
+func TestProjectArchaeologyUnavailableNativeLauncherDoesNotMutateOrLaunch(t *testing.T) {
+	ctx := context.Background()
+	repository, err := commonsstore.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	launcher := &unavailableTaskLauncher{}
+	service := New(repository, nil, nil)
+	service.ConfigureProjectArchaeology(fakeArchaeologyDiscoverer{}, launcher)
+	session, err := service.DiscoverProjectArchaeology(ctx, domain.HumanLocalPrincipal, "discover-unavailable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err = service.ConfigureArchaeologySession(ctx, domain.HumanLocalPrincipal, "config-unavailable", ArchaeologyConfigRequest{SelectedProjectIDs: []string{"p"}, Depth: "standard", Sources: ArchaeologySources{Git: true}, MaxConcurrency: 2, BaseRevision: session.Revision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := repository.ArchaeologySession(ctx, domain.HumanLocalPrincipal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.StartProjectArchaeology(ctx, domain.HumanLocalPrincipal, "start-unavailable", ArchaeologyTransitionRequest{BaseRevision: session.Revision})
+	if !errors.Is(err, domain.ErrUnavailable) {
+		t.Fatalf("start err=%v", err)
+	}
+	after, err := repository.ArchaeologySession(ctx, domain.HumanLocalPrincipal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if launcher.calls != 0 || after.Revision != before.Revision || after.Handoff != nil || len(after.TaskLaunches) != 0 {
+		t.Fatalf("calls=%d before_revision=%d after=%+v", launcher.calls, before.Revision, after)
+	}
+}
 
 func (*boundedTaskLauncher) Available(context.Context) error { return nil }
 func (*boundedTaskLauncher) Launch(context.Context, domain.ArchaeologySession) error {

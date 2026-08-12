@@ -7,20 +7,25 @@ import CheckCircle from "../../icons/CheckCircle.tsx";
 import Clock from "../../icons/Clock.tsx";
 import Copy from "../../icons/Copy.tsx";
 import Search from "../../icons/Search.tsx";
+import History from "../../icons/History.tsx";
 import FileDocument from "../../icons/FileDocument.tsx";
 import Folder from "../../icons/Folder.tsx";
-import Pause from "../../icons/Pause.tsx";
-import Play from "../../icons/Play.tsx";
 import Stop from "../../icons/Stop.tsx";
 import {
   ARCHAEOLOGY_DEPTHS,
   archaeologyConfigVersion,
+  archaeologyBatchIsTerminal,
+  archaeologyTaskIsActive,
+  archaeologyTaskPresentation,
   archaeologyView,
   canStartArchaeology,
   configFromModel,
   formatDurationRange,
   memberFacts,
-  runProgressText,
+  discoveryProgressText,
+  handoffProgress,
+  isProjectCandidateSelectable,
+  sortProjectCandidates,
   selectedSourceCount,
   sourceLabels,
 } from "./projectArchaeologyState.js";
@@ -48,19 +53,8 @@ function candidateName(candidates, id) {
   return candidates.find((candidate) => candidate.id === id)?.name || id;
 }
 
-function phaseStatus(state) {
-  return ({ queued: "Queued", running: "Exploring", pause_requested: "Pausing", paused: "Paused", cancel_requested: "Canceling", canceled: "Canceled", completed: "Ready to review", failed: "Needs attention" })[state] || "Preparing";
-}
-
-function launchStatus(state) {
-  return ({ preparing: "Preparing", starting_codex: "Starting in Codex", task_created: "Task created", claimed: "Claimed", running: "Running", report_ready: "Report ready", completed: "Complete", failed: "Needs attention", uncertain: "Status uncertain" })[state] || "Preparing";
-}
-
-function launchDetail(state) {
-  if (state === "uncertain") return "Commons will not retry automatically because Codex may have accepted the task.";
-  if (state === "failed") return "This task did not reach a confirmed running state. Refresh before taking another action.";
-  if (state === "preparing" || state === "starting_codex") return "Commons is durably tracking this launch.";
-  return "Canonical import still requires your review.";
+function taskCandidateName(candidates, task) {
+  return candidateName(candidates, task.candidateId || task.projectId);
 }
 
 function Intro({ identity, model, busy, error, onDiscover, onSkip }) {
@@ -115,40 +109,70 @@ function ReadingState({ error, onRetry, onClose }) {
   );
 }
 
-function CandidateList({ candidates, config, disabled, refreshing, onChange, onRefresh }) {
+
+function useElapsed(active, startedAt) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return undefined;
+    setNow(Date.now());
+    const timer = globalThis.setInterval(() => setNow(Date.now()), 1000);
+    return () => globalThis.clearInterval(timer);
+  }, [active, startedAt]);
+  const start = Date.parse(startedAt?.iso || startedAt || "");
+  return Number.isFinite(start) ? Math.max(0, Math.floor((now - start) / 1000)) : 0;
+}
+
+function CandidateList({ candidates, discovery, config, disabled, refreshing, onChange, onRefresh }) {
   const [query, setQuery] = useState("");
+  const [sort, setSort] = useState("recent");
+  const elapsed = useElapsed(refreshing, discovery?.startedAt);
   const normalizedQuery = query.trim().toLowerCase();
   const visible = candidates.filter((candidate) => !normalizedQuery || [candidate.name, candidate.repositoryLabel].some((value) => value?.toLowerCase().includes(normalizedQuery)));
+  const sorted = sortProjectCandidates(visible, sort);
   const selected = new Set(config.selectedProjectIds);
-  const selectedVisible = visible.filter((candidate) => selected.has(candidate.id));
+  const selectable = visible.filter((candidate) => isProjectCandidateSelectable(candidate));
+  const allSelectable = candidates.filter((candidate) => isProjectCandidateSelectable(candidate));
+  const selectedVisible = selectable.filter((candidate) => selected.has(candidate.id));
+  const listRef = useRef(null);
+  const scrollTopRef = useRef(0);
+  useEffect(() => {
+    if (listRef.current) listRef.current.scrollTop = scrollTopRef.current;
+  }, [candidates]);
   const toggleVisible = () => {
     const next = new Set(config.selectedProjectIds);
-    if (visible.length && selectedVisible.length === visible.length) visible.forEach((candidate) => next.delete(candidate.id));
-    else visible.forEach((candidate) => next.add(candidate.id));
+    if (selectable.length && selectedVisible.length === selectable.length) selectable.forEach((candidate) => next.delete(candidate.id));
+    else selectable.forEach((candidate) => next.add(candidate.id));
     onChange({ ...config, selectedProjectIds: [...next] });
   };
+  const selectAll = () => onChange({ ...config, selectedProjectIds: allSelectable.map((candidate) => candidate.id) });
   const toggle = (id) => onChange({ ...config, selectedProjectIds: selected.has(id) ? config.selectedProjectIds.filter((value) => value !== id) : [...config.selectedProjectIds, id] });
-  const sorted = [...visible].sort((a, b) => (b.lastActivity?.iso || "").localeCompare(a.lastActivity?.iso || "") || a.name.localeCompare(b.name));
+  const refreshLabel = refreshing ? ({ queued: "Refresh queued", reading_codex_metadata: "Reading Codex task metadata", persisting_catalog: "Organizing projects", failed: "Refresh needs attention" })[discovery?.stage] || "Refreshing projects" : "Refresh Codex projects";
+  const grouped = sort === "recent" && !normalizedQuery && sorted.length > 6
+    ? [["Recent", sorted.slice(0, 6)], ["All projects", sorted.slice(6)]]
+    : [["All projects", sorted]];
   return (
     <section className="archaeology-projects" aria-labelledby="archaeology-projects-title">
       <div className="archaeology-catalog-toolbar">
         <label className="archaeology-search"><Search aria-hidden="true" /><span className="sr-only">Search projects</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search Codex projects" /></label>
+        <label className="archaeology-sort"><span>Sort:</span><select aria-label="Sort projects" value={sort} onChange={(event) => setSort(event.target.value)}><option value="recent">Recent activity</option><option value="tasks">Most Codex tasks</option><option value="name">Name</option></select></label>
         <span>{config.selectedProjectIds.length} selected</span>
-        <button type="button" disabled={disabled || !visible.length} onClick={toggleVisible}>{visible.length && selectedVisible.length === visible.length ? "Clear visible" : "Select visible"}</button>
+        <div className="archaeology-selection-actions"><button type="button" disabled={disabled || !selectable.length} onClick={toggleVisible}>{selectable.length && selectedVisible.length === selectable.length ? "Clear visible" : "Select visible"}</button><button type="button" disabled={disabled || !allSelectable.length} onClick={selectAll}>Select all</button></div>
       </div>
-      <div className="archaeology-section-heading"><div><h3 id="archaeology-projects-title">Codex projects</h3><p>{visible.length} of {candidates.length} shown</p></div><button type="button" disabled={disabled} onClick={onRefresh} aria-live="polite">{refreshing ? "Refreshing projects…" : "Refresh Codex projects"}</button></div>
-      {sorted.length ? <div className="archaeology-candidate-list">{sorted.map((candidate) => {
+      <div className="archaeology-section-heading"><div><h3 id="archaeology-projects-title">Codex projects</h3><p>{visible.length} of {candidates.length} shown</p></div><button type="button" aria-disabled={disabled || refreshing} onClick={() => { if (!disabled && !refreshing) onRefresh(); }} aria-busy={refreshing}><History aria-hidden="true" />{refreshLabel}</button></div>
+      <div className={`archaeology-operation-status${refreshing ? " is-active" : " is-ready"}`}><span className="archaeology-operation-icon"><History aria-hidden="true" /></span><strong role="status" aria-live="polite" aria-atomic="true">{discoveryProgressText(discovery)}{refreshing ? <span aria-hidden="true"> · {elapsed}s</span> : null}</strong><small>{refreshing ? "Your current project list stays visible while Commons refreshes it." : discovery?.updatedAt?.relative ? `Updated ${discovery.updatedAt.relative}` : "Catalog ready"}</small></div>
+      {sorted.length ? <div ref={listRef} className="archaeology-candidate-list" onScroll={(event) => { scrollTopRef.current = event.currentTarget.scrollTop; }}>{grouped.map(([group, rows]) => <section className="archaeology-candidate-group" key={group} aria-labelledby={`archaeology-group-${group.replaceAll(" ", "-").toLowerCase()}`}><h4 id={`archaeology-group-${group.replaceAll(" ", "-").toLowerCase()}`}>{group}</h4>{rows.map((candidate) => {
         const checked = selected.has(candidate.id);
         const sources = sourceLabels(candidate.signals);
+        const stale = !isProjectCandidateSelectable(candidate);
         return (
           <label key={candidate.id} className={["archaeology-candidate", checked ? "is-selected" : ""].filter(Boolean).join(" ")}>
-            <input type="checkbox" checked={checked} disabled={disabled} onChange={() => toggle(candidate.id)} />
+            <input type="checkbox" checked={checked} disabled={disabled || stale} onChange={() => toggle(candidate.id)} />
             <span className="archaeology-candidate-mark" aria-hidden="true"><Folder /></span>
-            <span className="archaeology-candidate-copy"><strong>{candidate.name}</strong><small>{candidate.repositoryLabel || "Codex project"}</small><span>{sources.join(" · ") || "Metadata only"}{candidate.codexThreadCount ? ` · ${candidate.codexThreadCount} Codex task${candidate.codexThreadCount === 1 ? "" : "s"}` : ""}</span></span>
+            <span className="archaeology-candidate-copy"><strong>{candidate.name}</strong><small>{candidate.repositoryLabel || "Codex project"}</small><span>{stale ? "Legacy reference · refresh metadata to select" : sources.join(" · ") || "Metadata only"} · {candidate.codexThreadCount} Codex task{candidate.codexThreadCount === 1 ? "" : "s"}</span></span>
             <span className="archaeology-candidate-estimate"><span><Clock aria-hidden="true" />{formatDurationRange(candidate.estimate)}</span><small>{candidate.lastActivity ? `Active ${candidate.lastActivity.relative}` : costCopy[candidate.estimate?.relativeCost] || "Time varies"}</small></span>
           </label>
         );
-      })}</div> : <div className="archaeology-empty"><strong>No matching projects</strong><span>Try another name or clear the search.</span></div>}
+      })}</section>)}</div> : <div className="archaeology-empty"><strong>No matching projects</strong><span>Try another name or clear the search.</span></div>}
     </section>
   );
 }
@@ -184,86 +208,116 @@ function Configuration({ config, disabled, onChange }) {
   );
 }
 
-function Configure({ model, config, busy, refreshing, error, onChange, onDiscover, onStart, onSkip }) {
+function Configure({ model, config, busy, launchingCount, refreshing, error, onChange, onDiscover, onStart, onSkip }) {
   const candidates = model?.discovery?.candidates || [];
-  const valid = canStartArchaeology(config, candidates);
+  const valid = canStartArchaeology(config, candidates) && model?.controls?.canStart === true;
   const launch = model?.capabilities?.taskLaunch;
+  const projectCount = config.selectedProjectIds.length;
+  const projectNoun = projectCount === 1 ? "project" : "projects";
+  const startLabel = `Add ${projectCount} ${projectNoun} to Commons and start up to 2 named Codex tasks`;
   return (
     <div className="archaeology-configure">
-      <header className="archaeology-content-heading"><div><span>Project Archaeology</span><h2 id="archaeology-title">Choose your Codex projects</h2><p id="archaeology-description">Select the work Commons should understand. One ordinary Codex task starts per project; nothing is imported automatically.</p></div></header>
+      <header className="archaeology-content-heading"><div><span>Project Archaeology</span><h2 id="archaeology-title" tabIndex="-1">Choose your Codex projects</h2><p id="archaeology-description">Select the work Commons should understand. Starting adds only empty project and topic shells, then queues named Codex tasks. It imports no Tasks or history.</p></div></header>
       <div className="archaeology-workspace">
         <aside className="archaeology-trust-panel">
           <CommonsMark state="offered" size="large" />
           <h3>Codex stays in control</h3>
           <p>Projects come from the App Server paired with this browser. Commons receives labels and capability facts here—not raw paths or thread bodies.</p>
-          <dl><div><dt>Selected</dt><dd>{config.selectedProjectIds.length} projects</dd></div><div><dt>Mode</dt><dd>{config.depth} review</dd></div><div><dt>Sources</dt><dd>{selectedSourceCount(config)} enabled</dd></div></dl>
+          <dl><div><dt>Selected</dt><dd>{config.selectedProjectIds.length} projects</dd></div><div><dt>Mode</dt><dd>{config.depth} review</dd></div><div><dt>Sources</dt><dd>{selectedSourceCount(config)} enabled</dd></div><div><dt>Scheduler</dt><dd>Max 2 active</dd></div></dl>
         </aside>
-        <div className="archaeology-catalog-panel"><CandidateList candidates={candidates} config={config} disabled={busy} refreshing={refreshing} onChange={onChange} onRefresh={onDiscover} /></div>
+        <div className="archaeology-catalog-panel"><CandidateList candidates={candidates} discovery={model.discovery} config={config} disabled={busy} refreshing={refreshing} onChange={onChange} onRefresh={onDiscover} /></div>
       </div>
       <details className="archaeology-advanced"><summary>Advanced settings <span>{config.depth} · {selectedSourceCount(config)} sources · {config.maxConcurrency} at once</span></summary><Configuration config={config} disabled={busy} onChange={onChange} /></details>
-      <div className="archaeology-truth-note"><strong>Results become reviewable proposals</strong><span>Tasks may take several minutes. Commons reports literal task states and never simulates a percentage or applies history without your confirmation.</span></div>
+      <div className="archaeology-truth-note"><strong>{startLabel}</strong><span>Only empty Commons shells are added at start. No Tasks or history are imported; human review remains required before any canonical history import.</span></div>
       {error ? <p className="archaeology-message archaeology-message--error" role="alert">{error}</p> : null}
       {launch?.available === false ? <p className="archaeology-message" role="status">{launch.reason || "Direct Codex task launch is not available on this installation."}</p> : null}
-      <footer className="archaeology-footer archaeology-footer--between"><button className="secondary-button" type="button" disabled={busy} onClick={onSkip}>Not now</button><button className="primary-button" type="button" disabled={busy || !valid || launch?.available !== true} onClick={() => onStart(config)}>{refreshing ? "Refreshing projects…" : busy ? "Starting tasks…" : `Start Codex tasks · ${config.selectedProjectIds.length}`}</button></footer>
+      {launchingCount > 0 ? <div className="archaeology-launch-ack" role="status" aria-live="polite" aria-atomic="true"><span className="archaeology-operation-icon"><BookOpen aria-hidden="true" /></span><div><strong>Preparing {launchingCount} {launchingCount === 1 ? "project" : "projects"}</strong><small>Your selection is frozen while Commons reserves one durable scheduler row per project.</small></div></div> : null}
+      <footer className="archaeology-footer archaeology-footer--between"><button className="secondary-button" type="button" disabled={busy} onClick={onSkip}>Not now</button><button className="primary-button archaeology-start-button" type="button" aria-busy={launchingCount > 0} disabled={busy || refreshing || !valid || launch?.available !== true} onClick={() => onStart(config)}>{launchingCount > 0 ? `Preparing ${launchingCount} ${launchingCount === 1 ? "project" : "projects"}` : startLabel}</button></footer>
     </div>
   );
 }
 
-function Handoff({ model, busy, error, onRefresh, onClose }) {
+
+function UpdateStatus({ status }) {
+  const checked = status?.lastCheckedAt instanceof Date
+    ? status.lastCheckedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })
+    : "not yet checked";
+  const copy = {
+    hidden: "Updates paused while this tab was hidden",
+    checking: "Checking for task updates…",
+    restored: "Updates restored",
+    paused: "Updates paused",
+  }[status?.state] || "Task updates are available";
+  return <p className={`archaeology-update-status is-${status?.state || "idle"}`} role="status">{copy}<span>Last checked {checked}</span></p>;
+}
+
+function formatTaskDuration(durationMs) {
+  if (!Number.isInteger(durationMs)) return "";
+  if (durationMs < 1000) return `${durationMs} ms`;
+  const seconds = Math.round(durationMs / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+function Handoff({ model, busy, error, updateStatus, onRefresh, onCancel, onReview, onNewRun, onClose }) {
   const handoff = model?.handoff || {};
   const tasks = handoff.tasks || [];
   const candidates = model?.discovery?.candidates || [];
+  const progress = handoffProgress(handoff);
+  const nativeBatch = Boolean(handoff.batchId);
+  const active = tasks.some((task) => task.jobId && archaeologyTaskIsActive(task));
+  const terminal = archaeologyBatchIsTerminal(handoff);
+  const elapsed = useElapsed(active, handoff.createdAt);
   const [copyState, setCopyState] = useState("");
-  const readyCount = tasks.filter((task) => ["report_ready", "completed"].includes(task.state)).length;
+  const heading = !nativeBatch ? "Legacy historian records" : progress.queued + progress.starting > 0 ? "Starting Codex tasks" : terminal ? (handoff.state === "canceled" ? "Project history run canceled" : handoff.state === "attention" ? "Project history needs attention" : "Project history run complete") : "Project history is underway";
   async function copyID(value, label) {
     const copied = await copyText(value);
-    setCopyState(copied ? `${label} copied.` : `Copy did not work. Select the ID and press ${manualCopyShortcut()}.`);
+    setCopyState(copied ? `${label} copied.` : `Copy isn’t available here. Select the ID and press ${manualCopyShortcut()} to copy it.`);
   }
+  const canCancel = nativeBatch && model?.controls?.canCancel === true && ["queued", "running"].includes(handoff.state);
   return (
-    <div className="archaeology-runs archaeology-handoff">
-      <header className="archaeology-content-heading"><div><span>Codex tasks</span><h2 id="archaeology-title">{readyCount ? `${readyCount} report${readyCount === 1 ? "" : "s"} ready` : "Project history is underway"}</h2><p id="archaeology-description">These are ordinary tasks running in your paired Codex App Server. Exact task identities appear only as secondary provenance.</p></div></header>
-      <div className="archaeology-run-list" aria-live="polite">{tasks.map((task) => (
-        <article key={task.projectId} className={["archaeology-run", `archaeology-run--${task.state}`].join(" ")}>
-          <span className="archaeology-run-mark" aria-hidden="true">{["report_ready", "completed"].includes(task.state) ? <CheckCircle /> : <BookOpen />}</span>
-          <div><strong>{candidateName(candidates, task.projectId)}</strong><span>{launchStatus(task.state)}</span><small>{launchDetail(task.state)}</small></div>
-          <div className="archaeology-run-facts"><span>{launchStatus(task.state)}</span>{task.threadId ? <span className="archaeology-task-identity"><code>{task.threadId}</code><button type="button" className="archaeology-id-copy" onClick={() => copyID(task.threadId, "Thread ID")} aria-label="Copy thread ID"><Copy aria-hidden="true" /> Copy</button></span> : <small>Waiting for task identity</small>}</div>
+    <div className="archaeology-runs archaeology-handoff auth-content-transition">
+      <header className="archaeology-content-heading"><div><span>Codex tasks</span><h2 id="archaeology-title" tabIndex="-1">{heading}</h2><p id="archaeology-description">{!nativeBatch ? "These pre-scheduler rows are retained for audit only. Their earlier status is not a current execution claim." : progress.queued + progress.starting > 0 ? "Commons is creating one ordinary named Codex historian task for each selected project." : "You can close this window. Commons preserves every literal scheduler state and imports nothing without human review."}</p></div></header>
+      {nativeBatch ? <div className="archaeology-launch-summary" role="status" aria-live="polite" aria-atomic="true"><strong>{active ? `Preparing ${progress.total} projects` : `${progress.total} projects in this run`}</strong><span>{progress.queued + progress.preparing} queued · {progress.active} active · {progress.ready} reports · {progress.attention} attention<span aria-hidden="true">{elapsed ? ` · ${elapsed}s` : ""}</span></span></div> : <div className="archaeology-launch-summary"><strong>{progress.total} legacy historian records</strong><span>Status not reconciled</span></div>}
+      <p className="archaeology-usage-note">{nativeBatch ? "Max 2 active. Task names are primary; job, batch, candidate, project, thread, and turn IDs remain copyable audit provenance." : "No retry, pause, cancel, or archive controls are available for legacy rows."}</p>
+      {nativeBatch ? <UpdateStatus status={updateStatus} /> : null}
+      {progress.attention > 0 || handoff.state === "attention" ? <div className="archaeology-attention-note" role="alert"><strong>Human review is needed before another queue can start.</strong><span>Commons will not retry, restart, or reinterpret uncertain work automatically.</span></div> : null}
+      <div className="archaeology-run-list">{tasks.map((task) => (
+        <article key={task.jobId || task.launchId || task.projectId} className={["archaeology-run", `archaeology-run--${archaeologyTaskPresentation(task).tone}`].join(" ")}>
+          <span key={task.state} className="archaeology-run-mark" data-state={task.state} aria-hidden="true">{["report_ready", "completed"].includes(task.state) ? <CheckCircle /> : <BookOpen />}</span>
+          <div className="archaeology-run-copy"><strong>{task.jobId ? `Project history · ${taskCandidateName(candidates, task)}` : taskCandidateName(candidates, task)}</strong><span>{archaeologyTaskPresentation(task).primary}</span><small>{archaeologyTaskPresentation(task).secondary}</small>{task.jobId && (task.sourcesExamined > 0 || task.durationMs != null) ? <small>{task.sourcesExamined} source{task.sourcesExamined === 1 ? "" : "s"} examined{task.durationMs != null ? ` · ${formatTaskDuration(task.durationMs)}` : ""}</small> : null}</div>
+          <div className="archaeology-run-facts"><span>{task.jobId ? task.state.replaceAll("_", " ") : "Legacy"}</span><small>{task.updatedAt ? `Updated ${task.updatedAt.relative}` : "No reconciled update"}</small><details className="archaeology-task-provenance"><summary>Task provenance</summary><dl>{[["Job", task.jobId], ["Batch", task.batchId || handoff.batchId], ["Candidate", task.candidateId], ["Project", task.projectId], ["Thread", task.threadId], ["Turn", task.turnId], ["Legacy launch", task.launchId]].filter(([, value]) => value).map(([label, value]) => <div key={label}><dt>{label}</dt><dd><code tabIndex="0">{value}</code><button type="button" className="archaeology-id-copy" onClick={() => copyID(value, `${label} ID`)} aria-label={`Copy ${label.toLowerCase()} ID`}><Copy aria-hidden="true" /> Copy</button></dd></div>)}</dl></details></div>
         </article>
       ))}</div>
-      {!tasks.length ? <div className="archaeology-empty"><strong>No task rows yet</strong><span>Refresh to read the durable launch state.</span></div> : null}
+      {!tasks.length ? <div className="archaeology-empty"><strong>Preparing task rows</strong><span>Commons accepted your selection and is reserving one row per project.</span></div> : null}
       {copyState ? <p className="archaeology-message" role="status">{copyState}</p> : null}
       {error ? <p className="archaeology-message archaeology-message--error" role="alert">{error}</p> : null}
-      <footer className="archaeology-footer archaeology-footer--between"><button className="secondary-button" type="button" onClick={onClose}>Close</button><button className="primary-button" type="button" disabled={busy} onClick={onRefresh}>{busy ? "Checking…" : "Refresh status"}</button></footer>
+      {model.review?.proposedOutcomes?.length ? <section className="archaeology-ledger-review" aria-labelledby="archaeology-ledger-review-title"><h3 id="archaeology-ledger-review-title">Review-ready outcomes</h3><p>Nothing has been imported automatically. Open the canonical preview and approve an exact source digest before apply.</p>{model.review.proposedOutcomes.map((outcome) => <div key={outcome.id}><span><strong>{outcome.title}</strong><small>{candidateName(candidates, outcome.projectId)}</small></span><button className="secondary-button" type="button" disabled={busy || model.review.canApply !== true} onClick={() => onReview(outcome.id)}>Review import</button></div>)}</section> : null}
+      {canCancel ? <div className="archaeology-cancel-note"><span>Cancel stops queued work and requests interruption for active tasks. Audit history is preserved, and work never silently restarts.</span><button className="secondary-button" type="button" disabled={busy} onClick={onCancel}><Stop aria-hidden="true" />Cancel run</button></div> : null}
+      <p className="archaeology-background-note">Closing this window does not cancel accepted work.</p>
+      <footer className="archaeology-footer archaeology-footer--between"><button className="secondary-button" type="button" onClick={onClose}>Close</button><div>{terminal && model.controls?.canStart === true ? <button className="secondary-button" type="button" disabled={busy} onClick={onNewRun}>Choose more projects</button> : null}<button className="primary-button" type="button" disabled={busy} onClick={onRefresh}>{busy ? "Checking status…" : "Check status"}</button></div></footer>
     </div>
   );
 }
 
-function Runs({ model, busy, error, onPause, onResume, onCancel, onClose }) {
+function LegacyRuns({ model, error, onClose }) {
   const candidates = model?.discovery?.candidates || [];
-  const paused = model.state === "paused";
   return (
     <div className="archaeology-runs">
       <header className="archaeology-content-heading">
-        <div><span>Project archaeology</span><h2 id="archaeology-title">{paused ? "Exploration paused" : "Exploring project history"}</h2><p id="archaeology-description">Each project has one historian. Counts below come from completed source work; unknown totals stay unlabeled.</p></div>
+        <div><span>Project archaeology</span><h2 id="archaeology-title">Legacy historian records</h2><p id="archaeology-description">These rows predate the native scheduler. Their status is retained for audit and is not a current execution claim.</p></div>
       </header>
-      <div className="archaeology-run-list" aria-live="polite">
+      <div className="archaeology-run-list">
         {(model.runs || []).map((run) => (
-          <article key={run.id} className={`archaeology-run archaeology-run--${run.state}`}>
-            <span className="archaeology-run-mark" aria-hidden="true">{run.state === "completed" ? <CheckCircle /> : <BookOpen />}</span>
-            <div><strong>{candidateName(candidates, run.projectId)}</strong><span>{run.phaseLabel || phaseStatus(run.state)}</span><small>{runProgressText(run)}</small></div>
-            <div className="archaeology-run-facts"><span>{phaseStatus(run.state)}</span><small>{Number(run.outcomesFound) || 0} outcomes found</small></div>
+          <article key={run.id} className="archaeology-run archaeology-run--legacy">
+            <span className="archaeology-run-mark" aria-hidden="true"><BookOpen /></span>
+            <div><strong>{candidateName(candidates, run.projectId)}</strong><span>Legacy historian · status not reconciled</span><small>This row is audit history only. No retry, pause, cancel, or archive action is available.</small></div>
+            <div className="archaeology-run-facts"><span>Legacy</span><code tabIndex="0">{run.id}</code></div>
           </article>
         ))}
       </div>
       {error ? <p className="archaeology-message archaeology-message--error" role="alert">{error}</p> : null}
-      <p className="archaeology-background-note">You can close this window while historians work. Closing does not pause or cancel exploration.</p>
-      <footer className="archaeology-footer archaeology-footer--between">
-        <button className="secondary-button" type="button" onClick={onClose}>Close</button>
-        <div>
-          {model.controls?.canCancel ? <button className="secondary-button" type="button" disabled={busy} onClick={onCancel}><Stop aria-hidden="true" />Cancel</button> : null}
-          {paused && model.controls?.canResume ? <button className="primary-button" type="button" disabled={busy} onClick={onResume}><Play aria-hidden="true" />Resume</button> : null}
-          {!paused && model.controls?.canPause ? <button className="primary-button" type="button" disabled={busy} onClick={onPause}><Pause aria-hidden="true" />Pause</button> : null}
-        </div>
-      </footer>
+      <footer className="archaeology-footer"><button className="secondary-button" type="button" onClick={onClose}>Close</button></footer>
     </div>
   );
 }
@@ -306,11 +360,15 @@ function Review({ model, busy, error, onReview, onClose }) {
   );
 }
 
-export function ProjectArchaeologyDialog({ open, identity, archaeology, busy = false, refreshingProjects = false, error = "", onDiscover, onStart, onPause, onResume, onCancel, onRefresh, onReview, onSkip, onClose }) {
+export function ProjectArchaeologyDialog({ open, identity, archaeology, busy = false, launchingCount = 0, refreshingProjects = false, updateStatus = null, error = "", onDiscover, onStart, onCancel, onRefresh, onReview, onSkip, onClose }) {
   const dialogRef = useRef(null);
   const modelConfigVersionRef = useRef("");
+  const batchIdentityRef = useRef(archaeology?.handoff?.batchId || "");
   const [config, setConfig] = useState(() => configFromModel(archaeology?.config));
-  const view = !archaeology && (busy || error) ? "reading" : archaeologyView(archaeology);
+  const [configureAgain, setConfigureAgain] = useState(false);
+  const serverView = !archaeology && (busy || error) ? "reading" : archaeologyView(archaeology);
+  const view = configureAgain ? "configure" : serverView;
+  const previousViewRef = useRef(view);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -320,6 +378,12 @@ export function ProjectArchaeologyDialog({ open, identity, archaeology, busy = f
   }, [open]);
 
   useEffect(() => {
+    const previous = previousViewRef.current;
+    previousViewRef.current = view;
+    if (open && previous !== view && (view === "configure" || view === "handoff")) queueMicrotask(() => dialogRef.current?.querySelector("#archaeology-title")?.focus());
+  }, [open, view]);
+
+  useEffect(() => {
     const modelConfigVersion = archaeologyConfigVersion(archaeology);
     if (modelConfigVersion !== modelConfigVersionRef.current) {
       modelConfigVersionRef.current = modelConfigVersion;
@@ -327,12 +391,18 @@ export function ProjectArchaeologyDialog({ open, identity, archaeology, busy = f
     }
   }, [archaeology?.id, archaeology?.revision, archaeology?.config]);
 
+  useEffect(() => {
+    const batchIdentity = archaeology?.handoff?.batchId || "";
+    if (batchIdentityRef.current && batchIdentity && batchIdentityRef.current !== batchIdentity) setConfigureAgain(false);
+    batchIdentityRef.current = batchIdentity;
+  }, [archaeology?.handoff?.batchId]);
+
   const selectedSummary = useMemo(() => {
     const projects = config.selectedProjectIds.length;
     const sources = selectedSourceCount(config);
     return `${projects} project${projects === 1 ? "" : "s"} and ${sources} source${sources === 1 ? "" : "s"} selected`;
   }, [config]);
-  function close() { onClose?.(); }
+  function close() { setConfigureAgain(false); onClose?.(); }
   function skip() { onSkip?.(); }
 
   return (
@@ -342,9 +412,9 @@ export function ProjectArchaeologyDialog({ open, identity, archaeology, busy = f
       {view === "intro" ? <Intro identity={identity} model={archaeology} busy={busy} error={error} onDiscover={onDiscover} onSkip={skip} /> : null}
       {view === "reading" ? <ReadingState error={error} onRetry={onRefresh} onClose={close} /> : null}
       {view === "discovering" || view === "discovery_failed" ? <DiscoveryState failed={view === "discovery_failed"} error={error || archaeology?.discovery?.error} onDiscover={onDiscover} onSkip={skip} /> : null}
-      {view === "handoff" ? <Handoff model={archaeology} busy={busy} error={error} onRefresh={onRefresh} onClose={close} /> : null}
-      {view === "configure" ? <Configure model={archaeology} config={config} busy={busy} refreshing={refreshingProjects} error={error} onChange={setConfig} onDiscover={onDiscover} onStart={onStart} onSkip={skip} /> : null}
-      {view === "running" || view === "paused" ? <Runs model={archaeology} busy={busy} error={error} onPause={onPause} onResume={onResume} onCancel={onCancel} onClose={close} /> : null}
+      {view === "handoff" ? <Handoff model={archaeology} busy={busy} error={error} updateStatus={updateStatus} onRefresh={onRefresh} onCancel={onCancel} onReview={onReview} onNewRun={() => setConfigureAgain(true)} onClose={close} /> : null}
+      {view === "configure" ? <Configure model={archaeology} config={config} busy={busy} launchingCount={launchingCount} refreshing={refreshingProjects} error={error} onChange={setConfig} onDiscover={onDiscover} onStart={onStart} onSkip={skip} /> : null}
+      {view === "running" || view === "paused" ? <LegacyRuns model={archaeology} error={error} onClose={close} /> : null}
       {view === "review" ? <Review model={archaeology} busy={busy} error={error} onReview={onReview} onClose={close} /> : null}
       {view === "failed" ? <DiscoveryState failed error={error || "Project exploration stopped before a review was ready."} onDiscover={() => onStart(config)} onSkip={close} /> : null}
     </dialog>

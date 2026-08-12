@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"codex-commons/internal/application"
 	"codex-commons/internal/codexauth"
 	"codex-commons/internal/domain"
 )
@@ -19,7 +20,6 @@ import (
 type codexArchaeologyBridge struct {
 	client     codexauth.ArchaeologyClient
 	roots      []ArchaeologyRoot
-	baseURL    string
 	catalogKey [32]byte
 }
 
@@ -88,6 +88,9 @@ func (b *codexArchaeologyBridge) DiscoverMetadata(ctx context.Context) (domain.A
 			groups[key] = group
 		}
 		copy := root
+		if group.root != nil && group.root.ID != copy.ID {
+			return domain.ArchaeologyDiscovery{}, domain.ErrConflict
+		}
 		group.root = &copy
 		group.fromRoot = true
 		pathKeys[path] = key
@@ -125,8 +128,13 @@ func (b *codexArchaeologyBridge) DiscoverMetadata(ctx context.Context) (domain.A
 			_, docsErr := os.Stat(filepath.Join(group.path, "docs"))
 			hasDocs = docsErr == nil
 		}
+		candidateID := b.candidateID(group.key)
+		canonicalProjectID := candidateID
+		if group.root != nil {
+			canonicalProjectID = group.root.ID
+		}
 		candidate := domain.ArchaeologyCandidate{
-			ID: b.candidateID(group.key), Name: name, PathLabel: pathLabel,
+			ID: candidateID, CanonicalProjectID: canonicalProjectID, Name: name, PathLabel: pathLabel,
 			RepositoryLabel: repositoryLabel, LastActivityAt: last,
 			HasGit: hasGit, HasDocs: hasDocs, HasCodexHistory: group.count > 0,
 			FromCodexMetadata: group.fromCodex, FromConfiguredRoot: group.fromRoot, CodexThreadCount: group.count,
@@ -268,6 +276,10 @@ func (b *codexArchaeologyBridge) Available(ctx context.Context) error {
 	if b == nil || b.client == nil {
 		return codexauth.ErrUnavailable
 	}
+	experimental, ok := b.client.(codexauth.ExperimentalArchaeologyClient)
+	if !ok || !experimental.ExperimentalDynamicTools() {
+		return codexauth.ErrUnavailable
+	}
 	supported, err := b.client.SupportsModel(ctx, "gpt-5.6-luna", "max")
 	if err != nil {
 		return err
@@ -285,27 +297,10 @@ func (b *codexArchaeologyBridge) Launch(context.Context, domain.ArchaeologySessi
 }
 
 func (b *codexArchaeologyBridge) LaunchProject(ctx context.Context, session domain.ArchaeologySession, candidate domain.ArchaeologyCandidate, grant, launchID string) (domain.ArchaeologyLaunchResult, error) {
-	out := domain.ArchaeologyLaunchResult{LaunchID: launchID, ProjectID: candidate.ID}
-	if err := b.Available(ctx); err != nil {
-		return out, err
-	}
-	cwd, ok := b.candidatePath(ctx, candidate.ID)
-	if !ok {
-		return out, domain.ErrNotFound
-	}
-	prompt := "You are the Codex Commons project historian for one explicitly selected project.\\n\\n" +
-		"Immutable launch: " + launchID + "\\nProject ID: " + candidate.ID +
-		"\\nCodex thread: {{CODEX_THREAD_ID}}\\nCodex session: {{CODEX_SESSION_ID}}" +
-		"\\nDepth: " + session.Config.Depth +
-		"\\nSources: git=" + boolText(session.Config.Sources.Git) + ", docs=" + boolText(session.Config.Sources.Docs) + ", codex_history=" + boolText(session.Config.Sources.CodexHistory) +
-		"\\n\\nInspect only this working directory and the enabled source kinds. Do not mutate source material or Commons. Produce source-grounded historical import proposals with exact sha256 digests and exact contributor session IDs. Current Commons data wins. Human review and digest confirmation are mandatory before import." +
-		"\\n\\nSingle-purpose report grant (30 minute launch possession; not App Server attestation): " + grant +
-		"\\nCommons base URL: " + b.baseURL +
-		"\\nClaim this launch with POST /v1/project-archaeology/task/claim using launch_id, project_id, the exact thread_id and session_id above, and grant. Preserve the returned report_token only for this task." +
-		"\\nReport proposals with POST /v1/project-archaeology/task/report using the same exact identities, report_token, outcomes, and a stable Idempotency-Key. This route can submit proposals for human review only; it cannot apply them."
-	result, err := b.client.LaunchTask(ctx, cwd, "gpt-5.6-luna", "max", prompt, "commons-"+launchID)
-	out.ThreadID, out.CodexSessionID, out.TurnID = result.ThreadID, result.SessionID, result.TurnID
-	return out, err
+	_ = ctx
+	_ = session
+	_ = grant
+	return domain.ArchaeologyLaunchResult{LaunchID: launchID, ProjectID: candidate.ID}, codexauth.ErrUnavailable
 }
 
 func boolText(value bool) string {
@@ -313,4 +308,39 @@ func boolText(value bool) string {
 		return "enabled"
 	}
 	return "disabled"
+}
+
+func (b *codexArchaeologyBridge) LaunchNative(ctx context.Context, job domain.ArchaeologyNativeJob, session domain.ArchaeologySession, candidate domain.ArchaeologyCandidate, onTool func(context.Context, application.ArchaeologyNativeToolCall) application.ArchaeologyNativeToolResponse, onTerminal func(domain.ArchaeologyNativeTerminal)) (domain.ArchaeologyLaunchResult, error) {
+	experimental, ok := b.client.(codexauth.ExperimentalArchaeologyClient)
+	if !ok || !experimental.ExperimentalDynamicTools() {
+		return domain.ArchaeologyLaunchResult{LaunchID: job.ID, ProjectID: job.ProjectID}, codexauth.ErrUnavailable
+	}
+	cwd, ok := b.candidatePath(ctx, candidate.ID)
+	if !ok {
+		return domain.ArchaeologyLaunchResult{LaunchID: job.ID, ProjectID: job.ProjectID}, codexauth.ErrUnavailable
+	}
+	result, err := experimental.LaunchHistorianTask(ctx, cwd, "gpt-5.6-luna", "max", application.HistorianPrompt(candidate), "commons-history-"+job.ID, application.HistorianTitle(candidate.Name), func(toolCtx context.Context, call codexauth.DynamicToolCall) codexauth.DynamicToolResponse {
+		response := onTool(toolCtx, application.ArchaeologyNativeToolCall{ThreadID: call.ThreadID, TurnID: call.TurnID, Tool: call.Tool, Arguments: append([]byte(nil), call.Arguments...)})
+		if !response.Success {
+			return codexauth.DynamicToolResponse{}
+		}
+		return codexauth.DynamicToolResponse{Success: true, ContentItems: []codexauth.DynamicToolContent{{Type: "inputText", Text: response.Message}}}
+	}, func(terminal codexauth.TurnTerminal) {
+		onTerminal(domain.ArchaeologyNativeTerminal{JobID: job.ID, ThreadID: terminal.ThreadID, TurnID: terminal.TurnID, Status: terminal.Status, DurationMS: terminal.DurationMS})
+	})
+	state := ""
+	if err != nil {
+		// Once the App Server launch call begins, a transport or protocol error
+		// cannot prove that thread/start was rejected. Never retry silently.
+		state = "uncertain"
+	}
+	return domain.ArchaeologyLaunchResult{LaunchID: job.ID, ProjectID: job.ProjectID, State: state, ThreadID: result.ThreadID, CodexSessionID: result.SessionID, TurnID: result.TurnID}, err
+}
+
+func (b *codexArchaeologyBridge) InterruptNative(ctx context.Context, job domain.ArchaeologyNativeJob) error {
+	experimental, ok := b.client.(codexauth.ExperimentalArchaeologyClient)
+	if !ok {
+		return codexauth.ErrUnavailable
+	}
+	return experimental.InterruptTurn(ctx, job.ThreadID, job.TurnID)
 }

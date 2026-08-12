@@ -160,6 +160,19 @@ func (m *ManagedProcessClient) LaunchTask(ctx context.Context, cwd, model, effor
 	return client.LaunchTask(ctx, cwd, model, effort, prompt, clientUserMessageID)
 }
 
+func (m *ManagedProcessClient) ExperimentalDynamicTools() bool {
+	client := m.current()
+	return client != nil && client.ExperimentalDynamicTools()
+}
+
+func (m *ManagedProcessClient) LaunchHistorianTask(ctx context.Context, cwd, model, effort, prompt, clientUserMessageID, title string, dynamic DynamicToolHandler, terminal TurnTerminalHandler) (TaskLaunch, error) {
+	client := m.current()
+	if client == nil || !client.ExperimentalDynamicTools() {
+		return TaskLaunch{}, ErrUnavailable
+	}
+	return client.LaunchHistorianTask(ctx, cwd, model, effort, prompt, clientUserMessageID, title, dynamic, terminal)
+}
+
 func (m *ManagedProcessClient) SetEventHandler(handler func(Event)) {
 	if m == nil {
 		return
@@ -194,3 +207,12 @@ func (m *ManagedProcessClient) Close() error {
 
 var _ Client = (*ManagedProcessClient)(nil)
 var _ ArchaeologyClient = (*ManagedProcessClient)(nil)
+var _ ExperimentalArchaeologyClient = (*ManagedProcessClient)(nil)
+
+func (m *ManagedProcessClient) InterruptTurn(ctx context.Context, threadID, turnID string) error {
+	client := m.current()
+	if client == nil {
+		return ErrUnavailable
+	}
+	return client.InterruptTurn(ctx, threadID, turnID)
+}

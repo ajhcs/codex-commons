@@ -16,6 +16,7 @@ function message(error, fallback) {
 export function ProjectArchaeologyFlow({ open, initialArchaeology = null, onClose, onNavigate }) {
   const auth = useAuthSession();
   const controllerRef = useRef(null);
+  const pollControllerRef = useRef(null);
   const [archaeology, setArchaeology] = useState(null);
   const [busy, setBusy] = useState(false);
   const [refreshingProjects, setRefreshingProjects] = useState(false);
@@ -23,6 +24,9 @@ export function ProjectArchaeologyFlow({ open, initialArchaeology = null, onClos
   const [previewBridge, setPreviewBridge] = useState(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [applied, setApplied] = useState(null);
+  const [launchingCount, setLaunchingCount] = useState(0);
+  const [pageVisible, setPageVisible] = useState(() => globalThis.document?.visibilityState !== "hidden");
+  const [updateStatus, setUpdateStatus] = useState({ state: "idle", lastCheckedAt: null });
 
   function writeOptions() {
     const csrfToken = auth.session?.csrfToken;
@@ -36,20 +40,44 @@ export function ProjectArchaeologyFlow({ open, initialArchaeology = null, onClos
   }
 
   async function refresh() {
-    setArchaeology(null);
+    const controller = new AbortController();
+    pollControllerRef.current?.abort();
+    pollControllerRef.current = controller;
     setBusy(true);
     setError("");
+    setUpdateStatus((current) => ({ ...current, state: "checking" }));
     try {
-      const next = await commonsAdapter.readProjectArchaeology();
+      const next = await commonsAdapter.readProjectArchaeology(controller.signal);
       setArchaeology(next);
+      setUpdateStatus({ state: "restored", lastCheckedAt: new Date() });
       return next;
     } catch (next) {
+      if (next?.name === "AbortError") return null;
       handleError(next, "Project Archaeology is unavailable.");
+      setUpdateStatus((current) => ({ ...current, state: "paused" }));
       return null;
     } finally {
+      if (pollControllerRef.current === controller) pollControllerRef.current = null;
       setBusy(false);
     }
   }
+
+  useEffect(() => {
+    const documentObject = globalThis.document;
+    if (!documentObject?.addEventListener) return undefined;
+    const syncVisibility = () => {
+      const visible = documentObject.visibilityState !== "hidden";
+      setPageVisible(visible);
+      if (!visible) {
+        pollControllerRef.current?.abort();
+        setUpdateStatus((current) => ({ ...current, state: "hidden" }));
+      } else {
+        setUpdateStatus((current) => current.state === "hidden" ? { ...current, state: "checking" } : current);
+      }
+    };
+    documentObject.addEventListener("visibilitychange", syncVisibility);
+    return () => documentObject.removeEventListener("visibilitychange", syncVisibility);
+  }, []);
 
   useEffect(() => {
     if (!open || !auth.session?.authenticated) return undefined;
@@ -63,10 +91,12 @@ export function ProjectArchaeologyFlow({ open, initialArchaeology = null, onClos
       const current = initialArchaeology || await commonsAdapter.readProjectArchaeology(controller.signal);
       if (controller.signal.aborted) return;
       setArchaeology(current);
+      setUpdateStatus({ state: "restored", lastCheckedAt: new Date() });
       if (!shouldRefreshProjectCatalog(current)) return;
       const csrfToken = auth.session?.csrfToken;
       if (!csrfToken) return;
       setRefreshingProjects(true);
+      setArchaeology({ ...current, discovery: { ...current.discovery, stage: "reading_codex_metadata", startedAt: { iso: new Date().toISOString() } } });
       try {
         const refreshed = await commonsAdapter.discoverProjectArchaeology({
           csrfToken,
@@ -85,10 +115,40 @@ export function ProjectArchaeologyFlow({ open, initialArchaeology = null, onClos
     return () => controller.abort();
   }, [auth.session?.authenticated, auth.session?.csrfToken, initialArchaeology, open]);
 
-  useEffect(() => () => controllerRef.current?.abort(), []);
+  useEffect(() => () => { controllerRef.current?.abort(); pollControllerRef.current?.abort(); }, []);
+
+  useEffect(() => {
+    if (!open || !auth.session?.authenticated || !archaeology) return undefined;
+    const discoveryActive = archaeology.discovery?.state === "discovering";
+    const launchActive = archaeology.handoff?.tasks?.some((task) => task.jobId && ["queued", "starting", "active", "report_ready", "cancel_requested"].includes(task.state));
+    if (!discoveryActive && !launchActive) return undefined;
+    if (!pageVisible) {
+      setUpdateStatus((current) => current.state === "hidden" ? current : { ...current, state: "hidden" });
+      return undefined;
+    }
+    const controller = new AbortController();
+    pollControllerRef.current?.abort();
+    pollControllerRef.current = controller;
+    const onlyWaitingForReports = !discoveryActive && archaeology.handoff?.tasks?.every((task) => ["active", "report_ready", "claimed", "running"].includes(task.state));
+    const delay = updateStatus.state === "checking" ? 0 : discoveryActive && archaeology.discovery?.stage === "queued" ? 750 : onlyWaitingForReports ? 5000 : 1500;
+    const timer = globalThis.setTimeout(async () => {
+      setUpdateStatus((current) => ({ ...current, state: "checking" }));
+      try {
+        const next = await commonsAdapter.readProjectArchaeology(controller.signal);
+        if (!controller.signal.aborted) {
+          setArchaeology(next);
+          setUpdateStatus({ state: "restored", lastCheckedAt: new Date() });
+        }
+      } catch (next) {
+        if (next?.name !== "AbortError") setUpdateStatus((current) => ({ ...current, state: "paused" }));
+      }
+    }, delay);
+    return () => { globalThis.clearTimeout(timer); controller.abort(); if (pollControllerRef.current === controller) pollControllerRef.current = null; };
+  }, [archaeology, auth.session?.authenticated, open, pageVisible]);
 
   async function discover() {
     setRefreshingProjects(true);
+    setArchaeology((current) => current ? { ...current, discovery: { ...current.discovery, stage: "reading_codex_metadata", startedAt: { iso: new Date().toISOString() } } } : current);
     setBusy(true);
     setError("");
     try {
@@ -103,6 +163,7 @@ export function ProjectArchaeologyFlow({ open, initialArchaeology = null, onClos
 
   async function prepare(config) {
     if (!archaeology) return;
+    setLaunchingCount(config.selectedProjectIds.length);
     setBusy(true);
     setError("");
     try {
@@ -113,6 +174,7 @@ export function ProjectArchaeologyFlow({ open, initialArchaeology = null, onClos
       handleError(next, "Commons could not start the selected Codex tasks.");
       if (next?.status === 409) await refresh();
     } finally {
+      setLaunchingCount(0);
       setBusy(false);
     }
   }
@@ -179,12 +241,12 @@ export function ProjectArchaeologyFlow({ open, initialArchaeology = null, onClos
         identity={auth.session?.principal}
         archaeology={archaeology}
         busy={busy}
-        refreshingProjects={refreshingProjects}
+        launchingCount={launchingCount}
+        refreshingProjects={refreshingProjects || archaeology?.discovery?.state === "discovering"}
+        updateStatus={updateStatus}
         error={error}
         onDiscover={discover}
         onStart={prepare}
-        onPause={() => transition(commonsAdapter.pauseProjectArchaeology, "Commons could not pause this exploration.")}
-        onResume={() => transition(commonsAdapter.resumeProjectArchaeology, "Commons could not resume this exploration.")}
         onCancel={() => transition(commonsAdapter.cancelProjectArchaeology, "Commons could not cancel this exploration.")}
         onRefresh={refresh}
         onReview={review}

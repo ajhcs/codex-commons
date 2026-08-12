@@ -1,6 +1,6 @@
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
-const HANDOFF_STATES = new Set(["launching", "running", "completed", "failed", "uncertain", "ready_to_claim", "claimed"]);
-const TASK_STATES = new Set(["preparing", "starting_codex", "task_created", "claimed", "running", "report_ready", "completed", "failed", "uncertain"]);
+const HANDOFF_STATES = new Set(["queued", "running", "cancel_requested", "canceled", "completed", "attention", "launching", "failed", "uncertain", "ready_to_claim", "claimed"]);
+const TASK_STATES = new Set(["queued", "starting", "active", "report_ready", "cancel_requested", "completed", "failed", "interrupted", "uncertain", "attention", "preparing", "starting_codex", "task_created", "claimed", "running"]);
 
 function record(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new TypeError("record required");
@@ -10,6 +10,20 @@ function record(value) {
 function string(value) {
   if (typeof value !== "string") throw new TypeError("string required");
   return value;
+}
+
+function boundedString(value, maximum, { optional = false } = {}) {
+  if (optional && value == null) return "";
+  const result = string(value);
+  if (result.length > maximum) throw new TypeError("bounded string required");
+  return result;
+}
+
+function optionalInteger(value, maximum) {
+  if (value == null) return null;
+  const result = integer(value);
+  if (result > maximum) throw new TypeError("bounded integer required");
+  return result;
 }
 
 function integer(value) {
@@ -56,7 +70,8 @@ export function normalizeArchaeologyHandoff(value, timestampLabel) {
   const sources = record(value.sources);
   if (!Array.isArray(value.tasks) || value.tasks.length > 100) throw new TypeError("invalid task list");
   return {
-    id: string(value.id),
+    id: boundedString(value.id, 200),
+    batchId: boundedString(value.batch_id, 200, { optional: true }),
     state: value.state,
     createdAt: timestamp(value.created_at, timestampLabel),
     updatedAt: timestamp(value.updated_at, timestampLabel),
@@ -68,15 +83,43 @@ export function normalizeArchaeologyHandoff(value, timestampLabel) {
       const task = record(rawTask);
       if (!TASK_STATES.has(task.state)) throw new TypeError("invalid task state");
       return {
-        projectId: string(task.project_id), state: task.state,
-        threadId: typeof task.thread_id === "string" ? task.thread_id : "",
-        turnId: typeof task.turn_id === "string" ? task.turn_id : "",
+        jobId: boundedString(task.job_id, 200, { optional: true }),
+        batchId: boundedString(task.batch_id, 200, { optional: true }),
+        candidateId: boundedString(task.candidate_id, 240, { optional: true }),
+        projectId: boundedString(task.project_id, 200), state: task.state,
+        mode: boundedString(task.mode, 80, { optional: true }),
+        phaseLabel: boundedString(task.phase_label, 120, { optional: true }),
+        sourcesExamined: integer(task.sources_examined ?? 0),
+        durationMs: optionalInteger(task.duration_ms, 604800000),
+        launchId: boundedString(task.launch_id, 200, { optional: true }),
+        threadId: boundedString(task.thread_id, 240, { optional: true }),
+        turnId: boundedString(task.turn_id, 240, { optional: true }),
         createdAt: timestamp(task.created_at, timestampLabel),
         updatedAt: timestamp(task.updated_at, timestampLabel),
+        error: boundedString(task.error, 320, { optional: true }),
         availableActions: stringList(task.available_actions || [], 8),
       };
     }),
     allowedActions: stringList(value.allowed_actions, 8),
+    progress: value.progress == null ? null : (() => {
+      const progress = record(value.progress);
+      return {
+        queuedCount: integer(progress.queued_count ?? 0),
+        activeCount: integer(progress.active_count ?? 0),
+        attentionCount: integer(progress.attention_count ?? 0),
+        selectedTotal: integer(progress.selected_total),
+        preparingCount: integer(progress.preparing_count),
+        startingCount: integer(progress.starting_count),
+        taskCreatedCount: integer(progress.task_created_count),
+        claimedCount: integer(progress.claimed_count),
+        runningCount: integer(progress.running_count),
+        reportReadyCount: integer(progress.report_ready_count),
+        completedCount: integer(progress.completed_count),
+        failedCount: integer(progress.failed_count),
+        uncertainCount: integer(progress.uncertain_count),
+        updatedAt: timestamp(progress.updated_at, timestampLabel),
+      };
+    })(),
   };
 }
 

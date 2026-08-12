@@ -10,8 +10,86 @@ export const DEFAULT_ARCHAEOLOGY_CONFIG = Object.freeze({
   maxConcurrency: 2,
 });
 
-const ACTIVE_STATES = new Set(["launching", "running", "pause_requested", "paused", "cancel_requested"]);
+const ACTIVE_STATES = new Set(["launching", "running", "pause_requested", "paused", "cancel_requested", "queued"]);
+const ACTIVE_JOB_STATES = new Set(["queued", "starting", "active", "report_ready", "cancel_requested", "preparing", "starting_codex", "task_created", "claimed", "running"]);
+const ATTENTION_JOB_STATES = new Set(["failed", "interrupted", "uncertain", "attention"]);
+const TERMINAL_BATCH_STATES = new Set(["canceled", "completed", "attention", "failed", "uncertain"]);
 const CATALOG_FRESHNESS_MS = 5 * 60 * 1000;
+export const PROJECT_SORTS = Object.freeze(["recent", "tasks", "name"]);
+
+export function sortProjectCandidates(candidates = [], sort = "recent") {
+  const next = [...candidates];
+  const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) || a.id.localeCompare(b.id);
+  const recent = (candidate) => Date.parse(candidate.lastActivity?.iso || "") || Number.NEGATIVE_INFINITY;
+  if (sort === "name") return next.sort(byName);
+  if (sort === "tasks") return next.sort((a, b) => (Number(b.codexThreadCount) || 0) - (Number(a.codexThreadCount) || 0) || recent(b) - recent(a) || byName(a, b));
+  return next.sort((a, b) => recent(b) - recent(a) || byName(a, b));
+}
+
+export function discoveryProgressText(discovery = {}) {
+  const stage = discovery.stage || (discovery.state === "discovering" ? "reading_codex_metadata" : discovery.state);
+  const label = ({ queued: "Refresh queued", reading_codex_metadata: "Reading Codex task metadata", persisting_catalog: "Organizing projects", ready: `${Number(discovery.workspacesGrouped) || discovery.candidates?.length || 0} projects found`, failed: "Refresh needs attention" })[stage] || "Checking project history";
+  const facts = [];
+  if (Number(discovery.codexThreadsExamined) > 0) facts.push(`${Number(discovery.codexThreadsExamined).toLocaleString()} tasks checked`);
+  if (Number(discovery.workspacesGrouped) > 0) facts.push(`${Number(discovery.workspacesGrouped).toLocaleString()} projects found`);
+  return [label, ...facts].filter(Boolean).join(" · ");
+}
+
+export function handoffProgress(handoff = {}) {
+  const tasks = Array.isArray(handoff.tasks) ? handoff.tasks : [];
+  const exact = handoff.progress;
+  const count = (state) => tasks.filter((task) => task.state === state).length;
+  const value = (name, state) => Number.isInteger(exact?.[name]) ? exact[name] : count(state);
+  return {
+    total: Number.isInteger(exact?.selectedTotal) ? exact.selectedTotal : tasks.length,
+    queued: Number.isInteger(exact?.queuedCount) ? exact.queuedCount : count("queued") + count("preparing"),
+    active: Number.isInteger(exact?.activeCount) ? exact.activeCount : count("starting") + count("active") + count("report_ready") + count("cancel_requested"),
+    preparing: value("preparingCount", "preparing"),
+    starting: Number.isInteger(exact?.startingCount) ? exact.startingCount : count("starting_codex") + count("starting"),
+    created: value("taskCreatedCount", "task_created"),
+    claimed: value("claimedCount", "claimed"),
+    running: Number.isInteger(exact?.runningCount) ? exact.runningCount : count("running") + count("active"),
+    ready: value("reportReadyCount", "report_ready") + value("completedCount", "completed"),
+    attention: Number.isInteger(exact?.attentionCount)
+      ? exact.attentionCount + exact.failedCount + exact.uncertainCount
+      : count("attention") + count("uncertain") + count("failed") + count("interrupted"),
+    failed: Number.isInteger(exact?.failedCount) ? exact.failedCount : count("failed") + count("interrupted"),
+    updatedAt: exact?.updatedAt || handoff.updatedAt || null,
+  };
+}
+
+export function isNativeArchaeologyTask(task) {
+  return Boolean(task?.jobId && task?.batchId && task?.candidateId && task?.projectId);
+}
+
+export function archaeologyTaskPresentation(task = {}) {
+  if (!isNativeArchaeologyTask(task)) return {
+    tone: "legacy",
+    primary: "Legacy historian · status not reconciled",
+    secondary: "This pre-scheduler row is retained for audit only. Its earlier status is not a current execution claim.",
+  };
+  const copy = {
+    queued: ["Queued in Commons", "Waiting for a launch slot."],
+    starting: ["Asking Codex to create the task", "Commons is durably tracking this request."],
+    active: ["Historian is examining project sources", task.phaseLabel || "Codex reported this task as active."],
+    report_ready: ["Report ready for Commons", "Preparing it for your review."],
+    cancel_requested: ["Cancellation requested", "Queued work will stop; Commons asked Codex to interrupt active work."],
+    completed: ["Ready to review", "Nothing has been imported automatically."],
+    failed: ["Task needs attention", task.error || "This Codex task stopped without a review-ready report."],
+    interrupted: ["Task was interrupted", task.error || "Human review is needed before project history can continue."],
+    uncertain: ["Codex may have accepted this task", task.error || "Commons will not retry automatically."],
+    attention: ["Task needs human attention", task.error || "The queue is blocked until a human reviews this state."],
+  }[task.state] || ["Task state unavailable", "Commons preserved the last bounded scheduler facts."];
+  return { tone: ATTENTION_JOB_STATES.has(task.state) ? "attention" : task.state, primary: copy[0], secondary: copy[1] };
+}
+
+export function archaeologyTaskIsActive(task) {
+  return ACTIVE_JOB_STATES.has(task?.state);
+}
+
+export function archaeologyBatchIsTerminal(handoff) {
+  return TERMINAL_BATCH_STATES.has(handoff?.state);
+}
 
 export function configFromModel(config = {}) {
   const selectedProjectIds = Array.isArray(config.selectedProjectIds)
@@ -34,6 +112,9 @@ export function archaeologyConfigVersion(model) {
   return `${model?.id || ""}:${model?.revision ?? ""}`;
 }
 
+export function isProjectCandidateSelectable(candidate) {
+  return candidate?.sources?.some((source) => source === "codex_metadata" || source === "configured_root") === true;
+}
 export function shouldRefreshProjectCatalog(model, now = Date.now()) {
   if (!model || model.state !== "draft" || model.capabilities?.projectCatalog?.available !== true) return false;
   if (model.handoff?.tasks?.length) return false;
@@ -53,7 +134,7 @@ export function canStartArchaeology(config, candidates = []) {
   const available = new Map(candidates.map((candidate) => [candidate.id, candidate]));
   return config.selectedProjectIds.every((id) => {
     const candidate = available.get(id);
-    if (!candidate) return false;
+    if (!candidate || !isProjectCandidateSelectable(candidate)) return false;
     return ARCHAEOLOGY_SOURCES.some((source) => config.sources[source] && candidate.signals?.[source]);
   });
 }
@@ -64,8 +145,8 @@ export function archaeologyView(model) {
   if (discoveryState === "idle") return "intro";
   if (discoveryState === "discovering") return "discovering";
   if (discoveryState === "failed" && sessionState === "draft") return "discovery_failed";
-  if (sessionState === "completed" && model?.review) return "review";
   if (model?.handoff?.tasks?.length) return "handoff";
+  if (sessionState === "completed" && model?.review) return "review";
   if (ACTIVE_STATES.has(sessionState)) return sessionState === "paused" ? "paused" : "running";
   if (sessionState === "failed") return "failed";
   return "configure";

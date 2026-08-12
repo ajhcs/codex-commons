@@ -63,9 +63,49 @@ export const archaeologyHandoffFixture = Object.freeze({
   ...archaeologyReadyFixture,
   revision: 5,
   handoff: {
-    id: "HAND-CC-1", state: "running", depth: "standard",
+    id: "", batchId: "BATCH-CC-1", state: "running", depth: "standard",
     sources: { git: true, docs: true, codexHistory: true }, concurrency: 2, candidateIds: ["codex-commons"], allowedActions: [],
-    tasks: [{ projectId: "codex-commons", state: "running", threadId: "019ff-commons-history", turnId: "turn-1", createdAt: null, updatedAt: null, availableActions: [] }],
+    createdAt: { iso: "2026-08-12T12:41:00.000Z", relative: "Just now", absolute: "Aug 12, 12:41 PM" }, updatedAt: { iso: "2026-08-12T12:42:00.000Z", relative: "Just now", absolute: "Aug 12, 12:42 PM" },
+    tasks: [{ jobId: "JOB-CC-1", batchId: "BATCH-CC-1", candidateId: "codex-commons", projectId: "project-codex-commons", launchId: "JOB-CC-1", mode: "app_server_dynamic_tools", state: "active", phaseLabel: "Examining repository documentation", sourcesExamined: 4, durationMs: null, threadId: "019ff-commons-history", turnId: "turn-1", createdAt: { iso: "2026-08-12T12:41:00.000Z", relative: "Just now", absolute: "Aug 12, 12:41 PM" }, updatedAt: { iso: "2026-08-12T12:42:00.000Z", relative: "Just now", absolute: "Aug 12, 12:42 PM" }, error: "", availableActions: [] }],
+    progress: { queuedCount: 0, activeCount: 1, attentionCount: 0, selectedTotal: 1, preparingCount: 0, startingCount: 0, taskCreatedCount: 0, claimedCount: 0, runningCount: 1, reportReadyCount: 0, completedCount: 0, failedCount: 0, uncertainCount: 0, updatedAt: { iso: "2026-08-12T12:42:00.000Z", relative: "Just now", absolute: "Aug 12, 12:42 PM" } },
+  },
+  controls: { canStart: false, canPause: false, canResume: false, canCancel: true },
+});
+
+export const archaeologyAttentionFixture = Object.freeze({
+  ...archaeologyHandoffFixture,
+  revision: 6,
+  handoff: {
+    ...archaeologyHandoffFixture.handoff,
+    state: "attention",
+    tasks: archaeologyHandoffFixture.handoff.tasks.map((task) => ({ ...task, state: "uncertain", error: "Codex may have accepted this task, but Commons cannot safely retry it." })),
+    progress: { ...archaeologyHandoffFixture.handoff.progress, activeCount: 0, attentionCount: 0, runningCount: 0, uncertainCount: 1 },
+  },
+  controls: { canStart: false, canPause: false, canResume: false, canCancel: false },
+});
+
+export const archaeologyCanceledFixture = Object.freeze({
+  ...archaeologyHandoffFixture,
+  revision: 7,
+  state: "draft",
+  handoff: {
+    ...archaeologyHandoffFixture.handoff,
+    state: "canceled",
+    tasks: archaeologyHandoffFixture.handoff.tasks.map((task) => ({ ...task, state: "interrupted", durationMs: 93000, error: "This Codex task stopped without a review-ready report." })),
+    progress: { ...archaeologyHandoffFixture.handoff.progress, activeCount: 0, runningCount: 0, failedCount: 1 },
+  },
+  controls: { canStart: true, canPause: false, canResume: false, canCancel: false },
+});
+
+export const archaeologyLegacyFixture = Object.freeze({
+  ...archaeologyReadyFixture,
+  revision: 4,
+  handoff: {
+    id: "HAND-LEGACY", batchId: "", state: "claimed", depth: "standard",
+    sources: { git: true, docs: true, codexHistory: true }, concurrency: 2,
+    candidateIds: Array.from({ length: 9 }, (_, index) => `codex-project-${index + 3}`), allowedActions: [],
+    tasks: Array.from({ length: 9 }, (_, index) => ({ projectId: `codex-project-${index + 3}`, launchId: `LEGACY-${index + 1}`, state: "claimed", threadId: `legacy-thread-${index + 1}`, turnId: `legacy-turn-${index + 1}`, sourcesExamined: 0, durationMs: null, error: "", createdAt: null, updatedAt: null, availableActions: [] })),
+    progress: { queuedCount: 0, activeCount: 0, attentionCount: 0, selectedTotal: 9, preparingCount: 0, startingCount: 0, taskCreatedCount: 0, claimedCount: 9, runningCount: 0, reportReadyCount: 0, completedCount: 0, failedCount: 0, uncertainCount: 0, updatedAt: null },
   },
   controls: { canStart: false, canPause: false, canResume: false, canCancel: false },
 });
@@ -86,7 +126,7 @@ const member = Object.freeze({
 export const archaeologyReviewFixture = Object.freeze({
   ...archaeologyHandoffFixture,
   state: "completed",
-  handoff: { ...archaeologyHandoffFixture.handoff, state: "completed", tasks: archaeologyHandoffFixture.handoff.tasks.map((task) => ({ ...task, state: "completed" })), allowedActions: [] },
+  handoff: { ...archaeologyHandoffFixture.handoff, state: "completed", tasks: archaeologyHandoffFixture.handoff.tasks.map((task) => ({ ...task, state: "completed", durationMs: 212000 })), progress: { ...archaeologyHandoffFixture.handoff.progress, activeCount: 0, runningCount: 0, completedCount: 1 }, allowedActions: [] },
   review: {
     requiresExplicitApproval: true,
     canApply: true,
@@ -106,5 +146,5 @@ export const archaeologyReviewFixture = Object.freeze({
     memberSessions: [member],
   },
   runs: [{ id: "RUN-1", projectId: "codex-commons", state: "completed", phaseLabel: "Historian report received", completedUnits: 1, totalUnits: 1, outcomesFound: 1, sourcesExamined: 4 }],
-  controls: { canStart: false, canPause: false, canResume: false, canCancel: false },
+  controls: { canStart: true, canPause: false, canResume: false, canCancel: false },
 });

@@ -6,6 +6,9 @@ import {
   archaeologyIdentityFixture,
   archaeologyReadyFixture,
   archaeologyHandoffFixture,
+  archaeologyAttentionFixture,
+  archaeologyCanceledFixture,
+  archaeologyLegacyFixture,
   archaeologyReviewFixture,
 } from "./projectArchaeologyFixtures.js";
 import "../../styles.css";
@@ -26,6 +29,9 @@ const initialStates = {
   discovering: { ...archaeologyReadyFixture, discovery: { state: "discovering", metadataOnly: true, candidates: [] } },
   ready: archaeologyReadyFixture,
   handoff: archaeologyHandoffFixture,
+  attention: archaeologyAttentionFixture,
+  canceled: archaeologyCanceledFixture,
+  legacy: archaeologyLegacyFixture,
   review: archaeologyReviewFixture,
 };
 
@@ -55,9 +61,11 @@ function Storyboard() {
         identity={archaeologyIdentityFixture}
         archaeology={model}
         busy={busy}
+        updateStatus={{ state: "restored", lastCheckedAt: new Date("2026-08-12T12:42:00Z") }}
         onDiscover={() => briefly(() => setModel((current) => ({ ...archaeologyReadyFixture, revision: (current?.revision || 0) + 1 })))}
         onStart={() => briefly(() => setModel(archaeologyHandoffFixture))}
         onRefresh={() => briefly(() => setModel(archaeologyReviewFixture))}
+        onCancel={() => briefly(() => setModel(archaeologyCanceledFixture))}
         onReview={() => briefly(() => setOpen(false))}
         onSkip={() => setOpen(false)}
         onClose={() => setOpen(false)}

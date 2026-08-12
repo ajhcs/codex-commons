@@ -280,12 +280,13 @@ type codexStatusResult struct {
 }
 
 type codexStartResult struct {
-	AttemptID       string    `json:"attempt_id"`
-	VerificationURL string    `json:"verification_url"`
-	UserCode        string    `json:"user_code"`
-	ExpiresAt       time.Time `json:"expires_at"`
-	PollAfterMS     int       `json:"poll_after_ms"`
-	Resumed         bool      `json:"resumed"`
+	DestinationBehavior string    `json:"destination_behavior"`
+	AttemptID           string    `json:"attempt_id"`
+	VerificationURL     string    `json:"verification_url"`
+	UserCode            string    `json:"user_code"`
+	ExpiresAt           time.Time `json:"expires_at"`
+	PollAfterMS         int       `json:"poll_after_ms"`
+	Resumed             bool      `json:"resumed"`
 }
 
 type codexPollResult struct {
@@ -521,7 +522,7 @@ func (h *handler) codexStart(w http.ResponseWriter, r *http.Request, rid string)
 	cookieHash := pairingHash(pairingValue)
 	if hasCookie {
 		if active, found := h.pairings.activeForCookie(cookieHash); found {
-			h.write(w, http.StatusOK, envelope{OK: true, Data: codexStartResult{AttemptID: active.id, VerificationURL: active.verificationURL, UserCode: active.userCode, ExpiresAt: active.expiresAt, PollAfterMS: 1500, Resumed: true}, Meta: responseMeta{RequestID: rid}})
+			h.write(w, http.StatusOK, envelope{OK: true, Data: codexStartResult{DestinationBehavior: "manual_code_required", AttemptID: active.id, VerificationURL: active.verificationURL, UserCode: active.userCode, ExpiresAt: active.expiresAt, PollAfterMS: 1500, Resumed: true}, Meta: responseMeta{RequestID: rid}})
 			return
 		}
 	}
@@ -550,7 +551,7 @@ func (h *handler) codexStart(w http.ResponseWriter, r *http.Request, rid string)
 	if setCookie {
 		setPairingCookie(w, r, pairingValue, int(pairingTTL/time.Second))
 	}
-	h.write(w, http.StatusOK, envelope{OK: true, Data: codexStartResult{AttemptID: attempt.id, VerificationURL: device.VerificationURL, UserCode: device.UserCode, ExpiresAt: attempt.expiresAt, PollAfterMS: 1500}, Meta: responseMeta{RequestID: rid}})
+	h.write(w, http.StatusOK, envelope{OK: true, Data: codexStartResult{DestinationBehavior: "manual_code_required", AttemptID: attempt.id, VerificationURL: device.VerificationURL, UserCode: device.UserCode, ExpiresAt: attempt.expiresAt, PollAfterMS: 1500}, Meta: responseMeta{RequestID: rid}})
 }
 
 func (h *handler) codexPoll(w http.ResponseWriter, r *http.Request, rid string) {

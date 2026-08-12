@@ -35,7 +35,7 @@ func (s *Store) ArchaeologySession(ctx context.Context, principal string) (domai
 	if discovered.Valid {
 		out.DiscoveredAt = parseStamp(discovered.String)
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,path_label,repository_label,last_activity_at,has_git,has_docs,has_codex_history,duration_min_seconds,duration_max_seconds,relative_cost,privacy_note,selected,from_codex_metadata,from_configured_root,codex_thread_count FROM archaeology_candidates WHERE session_id=? ORDER BY name,id`, out.ID)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,canonical_project_id,name,path_label,repository_label,last_activity_at,has_git,has_docs,has_codex_history,duration_min_seconds,duration_max_seconds,relative_cost,privacy_note,selected,from_codex_metadata,from_configured_root,codex_thread_count FROM archaeology_candidates WHERE session_id=? ORDER BY name,id`, out.ID)
 	if err != nil {
 		return out, err
 	}
@@ -43,7 +43,7 @@ func (s *Store) ArchaeologySession(ctx context.Context, principal string) (domai
 		var c domain.ArchaeologyCandidate
 		var last sql.NullString
 		var a, b, d, selected, fromCodex, fromRoot int
-		if err = rows.Scan(&c.ID, &c.Name, &c.PathLabel, &c.RepositoryLabel, &last, &a, &b, &d, &c.DurationMinSeconds, &c.DurationMaxSeconds, &c.RelativeCost, &c.PrivacyNote, &selected, &fromCodex, &fromRoot, &c.CodexThreadCount); err != nil {
+		if err = rows.Scan(&c.ID, &c.CanonicalProjectID, &c.Name, &c.PathLabel, &c.RepositoryLabel, &last, &a, &b, &d, &c.DurationMinSeconds, &c.DurationMaxSeconds, &c.RelativeCost, &c.PrivacyNote, &selected, &fromCodex, &fromRoot, &c.CodexThreadCount); err != nil {
 			rows.Close()
 			return out, err
 		}
@@ -156,6 +156,15 @@ func (s *Store) ArchaeologySession(ctx context.Context, principal string) (domai
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return out, err
 	}
+	out.NativeBatches, err = s.loadArchaeologyNative(ctx, out.ID)
+	if err != nil {
+		return out, err
+	}
+	nativeOutcomes, nativeErr := s.loadArchaeologyNativeOutcomes(ctx, out.ID)
+	if nativeErr != nil {
+		return out, nativeErr
+	}
+	out.Outcomes = append(out.Outcomes, nativeOutcomes...)
 	return out, nil
 }
 
@@ -189,7 +198,7 @@ func claimArchaeologyRequest(ctx context.Context, tx *sql.Tx, principal, key, op
 	return false, mapErr(err)
 }
 func validArchaeologyCandidate(c domain.ArchaeologyCandidate) bool {
-	return boundedCoreText(c.ID, 120, true) && boundedCoreText(c.Name, 200, true) && boundedCoreText(c.PathLabel, 300, true) && boundedCoreText(c.RepositoryLabel, 300, false) && (c.RelativeCost == "low" || c.RelativeCost == "medium" || c.RelativeCost == "high") && c.DurationMinSeconds >= 0 && c.DurationMaxSeconds >= c.DurationMinSeconds && c.DurationMaxSeconds <= 86400 && boundedCoreText(c.PrivacyNote, 500, false)
+	return boundedCoreText(c.ID, 120, true) && projectIDPattern.MatchString(c.CanonicalProjectID) && c.CanonicalProjectID != domain.TopicGeneral && boundedCoreText(c.Name, 200, true) && boundedCoreText(c.PathLabel, 300, true) && boundedCoreText(c.RepositoryLabel, 300, false) && (c.RelativeCost == "low" || c.RelativeCost == "medium" || c.RelativeCost == "high") && c.DurationMinSeconds >= 0 && c.DurationMaxSeconds >= c.DurationMinSeconds && c.DurationMaxSeconds <= 86400 && boundedCoreText(c.PrivacyNote, 500, false)
 }
 
 func (s *Store) ReplaceArchaeologyDiscovery(ctx context.Context, m domain.ArchaeologyMutation, discovery domain.ArchaeologyDiscovery) (domain.ArchaeologySession, error) {
@@ -197,8 +206,12 @@ func (s *Store) ReplaceArchaeologyDiscovery(ctx context.Context, m domain.Archae
 		return domain.ArchaeologySession{}, domain.ErrInvalid
 	}
 	seen := map[string]bool{}
-	for _, c := range discovery.Candidates {
-		if !validArchaeologyCandidate(c) || seen[c.ID] {
+	for index := range discovery.Candidates {
+		c := &discovery.Candidates[index]
+		if c.CanonicalProjectID == "" {
+			c.CanonicalProjectID = c.ID
+		}
+		if !validArchaeologyCandidate(*c) || seen[c.ID] {
 			return domain.ArchaeologySession{}, domain.ErrInvalid
 		}
 		seen[c.ID] = true
@@ -219,24 +232,53 @@ func (s *Store) ReplaceArchaeologyDiscovery(ctx context.Context, m domain.Archae
 		return domain.ArchaeologySession{}, err
 	}
 	if !replay {
-		var runs int
-		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM archaeology_runs WHERE session_id=?`, sid).Scan(&runs); err != nil {
+		var references int
+		if err = tx.QueryRowContext(ctx, `SELECT
+(SELECT count(*) FROM archaeology_runs WHERE session_id=?) +
+(SELECT count(*) FROM archaeology_task_launches WHERE session_id=?) +
+(SELECT count(*) FROM archaeology_candidate_projects WHERE session_id=?) +
+(SELECT count(*) FROM archaeology_native_jobs WHERE session_id=?)`, sid, sid, sid, sid).Scan(&references); err != nil {
 			return domain.ArchaeologySession{}, err
 		}
-		if runs > 0 {
-			return domain.ArchaeologySession{}, domain.ErrConflict
-		}
-		if _, err = tx.ExecContext(ctx, `DELETE FROM archaeology_candidates WHERE session_id=?`, sid); err != nil {
-			return domain.ArchaeologySession{}, mapErr(err)
-		}
-		for _, c := range discovery.Candidates {
-			var last any
-			if !c.LastActivityAt.IsZero() {
-				last = stamp(c.LastActivityAt)
-			}
-			_, err = tx.ExecContext(ctx, `INSERT INTO archaeology_candidates(session_id,id,name,path_label,repository_label,last_activity_at,has_git,has_docs,has_codex_history,duration_min_seconds,duration_max_seconds,relative_cost,privacy_note,selected,from_codex_metadata,from_configured_root,codex_thread_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)`, sid, c.ID, c.Name, c.PathLabel, c.RepositoryLabel, last, c.HasGit, c.HasDocs, c.HasCodexHistory, c.DurationMinSeconds, c.DurationMaxSeconds, c.RelativeCost, c.PrivacyNote, c.FromCodexMetadata, c.FromConfiguredRoot, c.CodexThreadCount)
-			if err != nil {
+		if references > 0 {
+			if _, err = tx.ExecContext(ctx, `UPDATE archaeology_candidates
+SET selected=0,from_codex_metadata=0,from_configured_root=0,codex_thread_count=0,
+privacy_note='Retained for historical audit; refresh metadata before selecting.'
+WHERE session_id=?`, sid); err != nil {
 				return domain.ArchaeologySession{}, mapErr(err)
+			}
+			for _, c := range discovery.Candidates {
+				var prior string
+				readErr := tx.QueryRowContext(ctx, `SELECT canonical_project_id FROM archaeology_candidates WHERE session_id=? AND id=?`, sid, c.ID).Scan(&prior)
+				if readErr == nil && prior != "" && prior != c.CanonicalProjectID {
+					return domain.ArchaeologySession{}, domain.ErrConflict
+				}
+				if readErr != nil && !errors.Is(readErr, sql.ErrNoRows) {
+					return domain.ArchaeologySession{}, readErr
+				}
+				var last any
+				if !c.LastActivityAt.IsZero() {
+					last = stamp(c.LastActivityAt)
+				}
+				_, err = tx.ExecContext(ctx, `INSERT INTO archaeology_candidates(session_id,id,canonical_project_id,name,path_label,repository_label,last_activity_at,has_git,has_docs,has_codex_history,duration_min_seconds,duration_max_seconds,relative_cost,privacy_note,selected,from_codex_metadata,from_configured_root,codex_thread_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)
+ON CONFLICT(session_id,id) DO UPDATE SET canonical_project_id=excluded.canonical_project_id,name=excluded.name,path_label=excluded.path_label,repository_label=excluded.repository_label,last_activity_at=excluded.last_activity_at,has_git=excluded.has_git,has_docs=excluded.has_docs,has_codex_history=excluded.has_codex_history,duration_min_seconds=excluded.duration_min_seconds,duration_max_seconds=excluded.duration_max_seconds,relative_cost=excluded.relative_cost,privacy_note=excluded.privacy_note,selected=0,from_codex_metadata=excluded.from_codex_metadata,from_configured_root=excluded.from_configured_root,codex_thread_count=excluded.codex_thread_count`, sid, c.ID, c.CanonicalProjectID, c.Name, c.PathLabel, c.RepositoryLabel, last, c.HasGit, c.HasDocs, c.HasCodexHistory, c.DurationMinSeconds, c.DurationMaxSeconds, c.RelativeCost, c.PrivacyNote, c.FromCodexMetadata, c.FromConfiguredRoot, c.CodexThreadCount)
+				if err != nil {
+					return domain.ArchaeologySession{}, mapErr(err)
+				}
+			}
+		} else {
+			if _, err = tx.ExecContext(ctx, `DELETE FROM archaeology_candidates WHERE session_id=?`, sid); err != nil {
+				return domain.ArchaeologySession{}, mapErr(err)
+			}
+			for _, c := range discovery.Candidates {
+				var last any
+				if !c.LastActivityAt.IsZero() {
+					last = stamp(c.LastActivityAt)
+				}
+				_, err = tx.ExecContext(ctx, `INSERT INTO archaeology_candidates(session_id,id,canonical_project_id,name,path_label,repository_label,last_activity_at,has_git,has_docs,has_codex_history,duration_min_seconds,duration_max_seconds,relative_cost,privacy_note,selected,from_codex_metadata,from_configured_root,codex_thread_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)`, sid, c.ID, c.CanonicalProjectID, c.Name, c.PathLabel, c.RepositoryLabel, last, c.HasGit, c.HasDocs, c.HasCodexHistory, c.DurationMinSeconds, c.DurationMaxSeconds, c.RelativeCost, c.PrivacyNote, c.FromCodexMetadata, c.FromConfiguredRoot, c.CodexThreadCount)
+				if err != nil {
+					return domain.ArchaeologySession{}, mapErr(err)
+				}
 			}
 		}
 		_, err = tx.ExecContext(ctx, `UPDATE archaeology_sessions SET discovery_state='ready',source_roots_scanned=?,discovered_at=?,updated_at=?,revision=revision+1 WHERE id=?`, discovery.SourceRootsScanned, stamp(now), stamp(now), sid)
@@ -464,6 +506,12 @@ func (s *Store) ReconcileArchaeology(ctx context.Context) error {
 		return mapErr(err)
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE archaeology_task_launches SET state='uncertain',error='Server restarted before Codex task creation was confirmed.',updated_at=? WHERE state='starting_codex'`, now); err != nil {
+		return mapErr(err)
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE archaeology_native_jobs SET state='uncertain',error_code='server_restarted_during_active_task',terminal_at=?,updated_at=? WHERE state IN ('starting','active','report_ready','cancel_requested')`, now, now); err != nil {
+		return mapErr(err)
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE archaeology_native_batches SET state='attention',updated_at=? WHERE id IN (SELECT DISTINCT batch_id FROM archaeology_native_jobs WHERE state='uncertain')`, now); err != nil {
 		return mapErr(err)
 	}
 	return tx.Commit()

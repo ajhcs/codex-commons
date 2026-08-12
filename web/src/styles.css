@@ -1775,3 +1775,14 @@ html[data-theme="dark"] .pairing-code-value { background: transparent; color: va
 @media (prefers-reduced-motion: no-preference) { .history-offer-dialog[open] .history-offer-visual .commons-mark { animation: commons-offer-arrive .72s cubic-bezier(.2,.8,.2,1) both; } }
 @keyframes commons-offer-arrive { from { opacity: 0; transform: translateY(10px) scale(.92); } to { opacity: 1; transform: translateY(0) scale(1.2); } }
 @media (prefers-reduced-motion: reduce) { .commons-mark, .commons-mark svg, .commons-mark--connecting, .history-offer-visual .commons-mark { animation: none !important; transition: none !important; transform: none !important; } }
+
+.auth-content-transition { animation: auth-content-arrive 220ms cubic-bezier(.2,.8,.2,1) both; }
+.auth-history-offer { display: grid; }
+.auth-history-offer > .history-offer-status { margin-top: 22px; }
+.auth-history-offer > h2 { margin-top: 10px; outline: 0; }
+.auth-history-offer > p { margin: 8px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 18px; }
+.auth-history-offer > small, .auth-history-check, .pairing-auto-open-note { margin: 10px 0 0; color: var(--text-tertiary); font-size: 10px; line-height: 15px; }
+.auth-history-offer footer { margin-top: 24px; }
+@keyframes auth-content-arrive { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@media (max-width: 520px) { .auth-history-offer footer :is(.primary-button,.secondary-button) { min-height: 44px; } }
+@media (prefers-reduced-motion: reduce) { .auth-content-transition { animation: none !important; } }

@@ -35,6 +35,34 @@ final result: passed
 
 ---
 
+# Native scheduler lifecycle integration QA — 2026-08-12
+
+- Source visual truth: `/tmp/codex-commons-audit-02-archaeology-ready.png` at 1440 × 900 and the frozen `design-references/onboarding-progress-polish/CONTRACT.md`.
+- Implementation states: `ready`, `handoff`, `attention`, `canceled`, `legacy`, and `review` in `project-archaeology-storyboard.html`.
+- Intended CSS viewports: 1440 px desktop, 390 px and 320 px mobile, dark theme, 200% text, and reduced motion at device scale 1.
+- Implementation screenshot pixels / density: unavailable. No user Chrome DevTools or Codex in-app Browser tool is callable in this task, and the user prohibited Playwright substitution.
+
+## Full-view and focused comparison evidence
+
+The source screenshot was opened before implementation and used to preserve the selected Option 2 white dialog, trust/catalog planes, Open Sans hierarchy, compact toolbar, selected-row blue treatment, advanced disclosure, and restrained footer. Focused source inspection covered the toolbar, selected row, trust summary, truth note, and action hierarchy. No same-input post-change browser capture, DOM snapshot, focus trace, reduced-motion capture, or console log is claimed; build output is not visual evidence.
+
+## Required fidelity surfaces
+
+- Fonts and typography: project-local Open Sans remains unchanged; rendered wrapping and optical hierarchy are pending.
+- Spacing/layout: the two-plane desktop structure and mobile reflow rules remain; clipping, 200% reflow, and target size are pending rendered inspection.
+- Colors/tokens: existing semantic light/dark tokens are reused; dark-mode rendered contrast is pending.
+- Image/assets: no raster assets were added; the pinned icon components and Commons mark remain.
+- Copy/content: empty-shell start disclosure, native lifecycle, reconnect, cancellation, terminal, and unreconciled legacy copy are implemented and covered by strict adapter/state tests where applicable.
+
+## Findings and comparison history
+
+- P1 — Rendered lifecycle certification is unavailable. Capture the same states at the named viewports in the user-authorized browser, verify page identity/overlay/console health, keyboard and modal focus, refresh/launch, hidden-tab reconnect, attention/cancel/terminal behavior, and nine legacy rows, then perform the required combined source/implementation comparison.
+- No visual-fix iteration is claimed because post-change browser evidence is unavailable.
+
+final result: blocked
+
+---
+
 # Slice 13 single-plane attention QA
 
 ## Selected target and implementation state
@@ -383,3 +411,11 @@ final result: passed
 - Independent integrated review passed full Go tests, full race tests, Go vet, frontend tests/build/Sites, security/path/prompt-leak regressions, and diff checks before this final rendered QA pass.
 
 final result: passed
+
+---
+
+## Current QA status — native scheduler lifecycle
+
+The current 2026-08-12 lifecycle implementation is documented in “Native scheduler lifecycle integration QA — 2026-08-12” above. Its required post-change browser capture and combined visual comparison remain unavailable because neither the user's Chrome DevTools nor the Codex in-app Browser is callable in this task, and Playwright substitution is prohibited.
+
+final result: blocked
