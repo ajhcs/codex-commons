@@ -8,6 +8,7 @@ import {
   formatDurationRange,
   memberFacts,
   runProgressText,
+  shouldRefreshProjectCatalog,
 } from "./projectArchaeologyState.js";
 
 test("configuration versions change when rediscovery updates the same session", () => {
@@ -16,6 +17,32 @@ test("configuration versions change when rediscovery updates the same session", 
     archaeologyConfigVersion({ id: "ARCH-1", revision: 4 }),
     archaeologyConfigVersion({ id: "ARCH-1", revision: 5 }),
   );
+});
+
+test("opening a draft refreshes stale or configured-root-only project catalogs", () => {
+  const now = Date.parse("2026-08-12T20:00:00Z");
+  const base = {
+    state: "draft",
+    capabilities: { projectCatalog: { available: true } },
+    discovery: { discoveredAt: { iso: "2026-08-12T19:59:00Z" }, candidates: [] },
+    handoff: null,
+  };
+  assert.equal(shouldRefreshProjectCatalog(base, now), true);
+  assert.equal(shouldRefreshProjectCatalog({
+    ...base,
+    discovery: { ...base.discovery, candidates: [{ sources: ["configured_root"] }] },
+  }, now), true);
+  assert.equal(shouldRefreshProjectCatalog({
+    ...base,
+    discovery: { discoveredAt: { iso: "2026-08-12T19:59:00Z" }, candidates: [{ sources: ["codex_metadata"] }] },
+  }, now), false);
+  assert.equal(shouldRefreshProjectCatalog({
+    ...base,
+    discovery: { discoveredAt: { iso: "2026-08-12T19:50:00Z" }, candidates: [{ sources: ["codex_metadata"] }] },
+  }, now), true);
+  assert.equal(shouldRefreshProjectCatalog({ ...base, state: "running" }, now), false);
+  assert.equal(shouldRefreshProjectCatalog({ ...base, handoff: { tasks: [{ projectId: "alpha" }] } }, now), false);
+  assert.equal(shouldRefreshProjectCatalog({ ...base, capabilities: { projectCatalog: { available: false } } }, now), false);
 });
 
 test("archaeology view follows real discovery and run state", () => {

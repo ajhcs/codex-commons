@@ -4,6 +4,7 @@ import { commonsAdapter } from "../../data/adapter.js";
 import { useAuthSession } from "../../hooks/useAuthSession.js";
 import { HistoricalImportPreviewDialog } from "./HistoricalImportPreviewDialog.jsx";
 import { ProjectArchaeologyDialog } from "./ProjectArchaeologyDialog.jsx";
+import { shouldRefreshProjectCatalog } from "./projectArchaeologyState.js";
 
 function message(error, fallback) {
   if (error?.code === "invalid_payload") return "Commons returned project-history data this version cannot safely use.";
@@ -52,24 +53,37 @@ export function ProjectArchaeologyFlow({ open, initialArchaeology = null, onClos
 
   useEffect(() => {
     if (!open || !auth.session?.authenticated) return undefined;
-    if (initialArchaeology) {
-      setArchaeology(initialArchaeology);
-      setBusy(false);
-      setError("");
-      return undefined;
-    }
     const controller = new AbortController();
     controllerRef.current?.abort();
     controllerRef.current = controller;
     setArchaeology(null);
     setBusy(true);
     setError("");
-    commonsAdapter.readProjectArchaeology(controller.signal)
-      .then(setArchaeology)
+    async function loadCurrentCatalog() {
+      const current = initialArchaeology || await commonsAdapter.readProjectArchaeology(controller.signal);
+      if (controller.signal.aborted) return;
+      setArchaeology(current);
+      if (!shouldRefreshProjectCatalog(current)) return;
+      const csrfToken = auth.session?.csrfToken;
+      if (!csrfToken) return;
+      setRefreshingProjects(true);
+      try {
+        const refreshed = await commonsAdapter.discoverProjectArchaeology({
+          csrfToken,
+          idempotencyKey: createIdempotencyKey(),
+        }, controller.signal);
+        if (!controller.signal.aborted) setArchaeology(refreshed);
+      } catch (next) {
+        if (next?.name !== "AbortError") handleError(next, "Commons could not refresh projects from Codex.");
+      } finally {
+        if (!controller.signal.aborted) setRefreshingProjects(false);
+      }
+    }
+    loadCurrentCatalog()
       .catch((next) => { if (next?.name !== "AbortError") handleError(next, "Project Archaeology is unavailable."); })
       .finally(() => { if (controllerRef.current === controller) { controllerRef.current = null; setBusy(false); } });
     return () => controller.abort();
-  }, [auth.session?.authenticated, initialArchaeology, open]);
+  }, [auth.session?.authenticated, auth.session?.csrfToken, initialArchaeology, open]);
 
   useEffect(() => () => controllerRef.current?.abort(), []);
 

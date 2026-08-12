@@ -11,6 +11,7 @@ export const DEFAULT_ARCHAEOLOGY_CONFIG = Object.freeze({
 });
 
 const ACTIVE_STATES = new Set(["launching", "running", "pause_requested", "paused", "cancel_requested"]);
+const CATALOG_FRESHNESS_MS = 5 * 60 * 1000;
 
 export function configFromModel(config = {}) {
   const selectedProjectIds = Array.isArray(config.selectedProjectIds)
@@ -31,6 +32,16 @@ export function configFromModel(config = {}) {
 
 export function archaeologyConfigVersion(model) {
   return `${model?.id || ""}:${model?.revision ?? ""}`;
+}
+
+export function shouldRefreshProjectCatalog(model, now = Date.now()) {
+  if (!model || model.state !== "draft" || model.capabilities?.projectCatalog?.available !== true) return false;
+  if (model.handoff?.tasks?.length) return false;
+  const candidates = Array.isArray(model.discovery?.candidates) ? model.discovery.candidates : [];
+  const hasCodexMetadata = candidates.some((candidate) => candidate.sources?.includes("codex_metadata"));
+  const discoveredAt = Date.parse(model.discovery?.discoveredAt?.iso || "");
+  if (!hasCodexMetadata || !Number.isFinite(discoveredAt)) return true;
+  return discoveredAt > now + CATALOG_FRESHNESS_MS || now - discoveredAt >= CATALOG_FRESHNESS_MS;
 }
 
 export function selectedSourceCount(config) {
