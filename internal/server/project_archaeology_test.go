@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -25,10 +26,10 @@ func TestArchaeologyRootsAreExplicitMetadataOnlyAllowlist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if discovery.SourceRootsScanned != 1 || len(discovery.Candidates) != 1 || !discovery.Candidates[0].HasGit || discovery.Candidates[0].PathLabel != "~/projects/codex-commons" {
+	if discovery.SourceRootsScanned != 1 || len(discovery.Candidates) != 1 || !discovery.Candidates[0].HasGit || discovery.Candidates[0].PathLabel != "Codex Commons" {
 		t.Fatalf("discovery=%+v", discovery)
 	}
-	if discovery.Candidates[0].PathLabel == root {
+	if strings.Contains(discovery.Candidates[0].PathLabel, "/") || strings.Contains(discovery.Candidates[0].PathLabel, "~") {
 		t.Fatal("raw filesystem path leaked")
 	}
 }

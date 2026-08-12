@@ -3,7 +3,9 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,7 +16,7 @@ import (
 type fakeArchaeologyDiscoverer struct{}
 
 func (fakeArchaeologyDiscoverer) DiscoverMetadata(context.Context) (domain.ArchaeologyDiscovery, error) {
-	return domain.ArchaeologyDiscovery{SourceRootsScanned: 1, Candidates: []domain.ArchaeologyCandidate{{ID: "p", Name: "Project", PathLabel: "~/…/project", HasGit: true, DurationMinSeconds: 60, DurationMaxSeconds: 120, RelativeCost: "low", PrivacyNote: "Metadata only."}}}, nil
+	return domain.ArchaeologyDiscovery{SourceRootsScanned: 1, Candidates: []domain.ArchaeologyCandidate{{ID: "p", Name: "Project", PathLabel: "Project", HasGit: true, DurationMinSeconds: 60, DurationMaxSeconds: 120, RelativeCost: "low", PrivacyNote: "Metadata only."}}}, nil
 }
 
 func TestArchaeologyReportBridgesToCanonicalNonMutatingPreview(t *testing.T) {
@@ -147,5 +149,92 @@ func TestProjectArchaeologyDoesNotInvokeLegacyLauncher(t *testing.T) {
 	}
 	if launcher.launches != 0 || started.State != "draft" || started.Handoff == nil || started.Handoff.State != "ready_to_claim" {
 		t.Fatalf("launches=%d started=%+v", launcher.launches, started)
+	}
+}
+
+type manyArchaeologyDiscoverer struct{ count int }
+
+func (f manyArchaeologyDiscoverer) DiscoverMetadata(context.Context) (domain.ArchaeologyDiscovery, error) {
+	out := domain.ArchaeologyDiscovery{Candidates: make([]domain.ArchaeologyCandidate, 0, f.count)}
+	for index := 0; index < f.count; index++ {
+		id := fmt.Sprintf("project-%02d", index)
+		out.Candidates = append(out.Candidates, domain.ArchaeologyCandidate{ID: id, Name: id, PathLabel: id, HasGit: true, DurationMinSeconds: 60, DurationMaxSeconds: 120, RelativeCost: "low", PrivacyNote: "Metadata only."})
+	}
+	return out, nil
+}
+
+type boundedTaskLauncher struct {
+	mu                 sync.Mutex
+	active, max, total int
+	perProject         map[string]int
+}
+
+func (*boundedTaskLauncher) Available(context.Context) error { return nil }
+func (*boundedTaskLauncher) Launch(context.Context, domain.ArchaeologySession) error {
+	return domain.ErrUnavailable
+}
+func (f *boundedTaskLauncher) LaunchProject(_ context.Context, _ domain.ArchaeologySession, candidate domain.ArchaeologyCandidate, _, _ string) (domain.ArchaeologyLaunchResult, error) {
+	f.mu.Lock()
+	f.active++
+	f.total++
+	f.perProject[candidate.ID]++
+	if f.active > f.max {
+		f.max = f.active
+	}
+	f.mu.Unlock()
+	time.Sleep(100 * time.Millisecond)
+	f.mu.Lock()
+	f.active--
+	f.mu.Unlock()
+	return domain.ArchaeologyLaunchResult{ThreadID: "thread-" + candidate.ID, CodexSessionID: "session-" + candidate.ID, TurnID: "turn-" + candidate.ID}, nil
+}
+
+func TestProjectArchaeologyLaunchesTenSelectedProjectsWithBoundedConcurrencyAndNoReplay(t *testing.T) {
+	ctx := context.Background()
+	repository, err := commonsstore.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	service := New(repository, nil, nil)
+	launcher := &boundedTaskLauncher{perProject: map[string]int{}}
+	service.ConfigureProjectArchaeology(manyArchaeologyDiscoverer{count: 12}, launcher)
+	session, err := service.DiscoverProjectArchaeology(ctx, domain.HumanLocalPrincipal, "discover-many")
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := make([]string, 10)
+	for index := range selected {
+		selected[index] = fmt.Sprintf("project-%02d", index)
+	}
+	session, err = service.ConfigureArchaeologySession(ctx, domain.HumanLocalPrincipal, "config-many", ArchaeologyConfigRequest{SelectedProjectIDs: selected, Depth: "standard", Sources: ArchaeologySources{Git: true}, MaxConcurrency: 2, BaseRevision: session.Revision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseRevision := session.Revision
+	started, err := service.StartProjectArchaeology(ctx, domain.HumanLocalPrincipal, "start-many", ArchaeologyTransitionRequest{BaseRevision: baseRevision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.Handoff == nil || len(started.Handoff.Tasks) != 10 {
+		t.Fatalf("handoff=%+v", started.Handoff)
+	}
+	launcher.mu.Lock()
+	if launcher.total != 10 || launcher.max < 2 || launcher.max > 2 {
+		t.Fatalf("total=%d max=%d", launcher.total, launcher.max)
+	}
+	for _, id := range selected {
+		if launcher.perProject[id] != 1 {
+			t.Fatalf("project %s launches=%d", id, launcher.perProject[id])
+		}
+	}
+	launcher.mu.Unlock()
+	if _, err = service.StartProjectArchaeology(ctx, domain.HumanLocalPrincipal, "start-many", ArchaeologyTransitionRequest{BaseRevision: baseRevision}); err != nil {
+		t.Fatal(err)
+	}
+	launcher.mu.Lock()
+	defer launcher.mu.Unlock()
+	if launcher.total != 10 {
+		t.Fatalf("idempotent replay created tasks: total=%d", launcher.total)
 	}
 }

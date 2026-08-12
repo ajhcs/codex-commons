@@ -104,6 +104,8 @@ export function authReducer(state, action) {
           code: action.error?.code || "auth_error",
           message: action.error?.message || "Commons sign-in could not be completed.",
           resumeState: action.error?.resumeState || stableState(state),
+          retryAfterSeconds: Number(action.error?.retryAfterSeconds) || 0,
+          retryAt: action.error?.retryAt || "",
         },
       };
     case AUTH_ACTIONS.CLEAR_ERROR:

@@ -603,20 +603,21 @@ function normalizeProjectArchaeology(data) {
     const candidate = requireRecord(rawCandidate);
     const signals = requireRecord(candidate.signals);
     const estimate = requireRecord(candidate.estimate);
-    if (typeof signals.git !== "boolean" || typeof signals.docs !== "boolean" || typeof signals.codex_history !== "boolean" || !["low", "medium", "high"].includes(estimate.relative_cost) || candidate.selected_by_default !== false) throw invalidPayload();
+    if (typeof signals.git !== "boolean" || typeof signals.docs !== "boolean" || typeof signals.codex_history !== "boolean" || !["low", "medium", "high"].includes(estimate.relative_cost) || typeof candidate.selected_by_default !== "boolean" || !Array.isArray(candidate.sources) || candidate.sources.length > 2 || !candidate.sources.every((source) => ["codex_metadata", "configured_root"].includes(source))) throw invalidPayload();
     const durationSecondsMin = requireInteger(estimate.duration_seconds_min);
     const durationSecondsMax = requireInteger(estimate.duration_seconds_max);
     if (durationSecondsMax < durationSecondsMin) throw invalidPayload();
     return {
       id: requireString(candidate.id),
       name: requireString(candidate.name),
-      pathLabel: requireString(candidate.path_label),
       repositoryLabel: candidate.repository_label == null ? "" : requireString(candidate.repository_label),
       lastActivity: candidate.last_activity_at == null ? null : timestampLabel(candidate.last_activity_at),
       signals: { git: signals.git, docs: signals.docs, codexHistory: signals.codex_history },
       estimate: { durationSecondsMin, durationSecondsMax, relativeCost: estimate.relative_cost },
       privacyNote: requireString(candidate.privacy_note),
-      selectedByDefault: false,
+      selectedByDefault: candidate.selected_by_default,
+      sources: candidate.sources.map(requireString),
+      codexThreadCount: requireInteger(candidate.codex_thread_count),
     };
   });
   if (new Set(candidates.map((candidate) => candidate.id)).size !== candidates.length) throw invalidPayload();
@@ -939,9 +940,9 @@ export const fixtureAdapter = {
     fixtureArchaeology = { ...archaeologyHandoffFixture, config: fixtureArchaeology.config };
     return wait(fixtureArchaeology, signal);
   },
-  async pauseProjectArchaeology() { throw new CommonsAPIError("Exported Codex task packs cannot be paused from Commons.", { code: "unavailable", status: 503 }); },
-  async resumeProjectArchaeology() { throw new CommonsAPIError("Exported Codex task packs cannot be resumed from Commons.", { code: "unavailable", status: 503 }); },
-  async cancelProjectArchaeology() { throw new CommonsAPIError("Exported Codex task packs cannot be cancelled from Commons.", { code: "unavailable", status: 503 }); },
+  async pauseProjectArchaeology() { throw new CommonsAPIError("Direct Codex tasks cannot be paused from Commons.", { code: "unavailable", status: 503 }); },
+  async resumeProjectArchaeology() { throw new CommonsAPIError("Direct Codex tasks cannot be resumed from Commons.", { code: "unavailable", status: 503 }); },
+  async cancelProjectArchaeology() { throw new CommonsAPIError("Direct Codex tasks cannot be cancelled from Commons.", { code: "unavailable", status: 503 }); },
   async previewProjectArchaeologyImport(outcomeID, _writeOptions, signal) {
     if (outcomeID !== "OUT-1") throw new CommonsAPIError("Choose a proposed outcome to preview.", { code: "invalid_archaeology_outcome" });
     const sourceDigest = `sha256:${"a".repeat(64)}`;

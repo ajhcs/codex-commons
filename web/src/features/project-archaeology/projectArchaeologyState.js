@@ -10,7 +10,7 @@ export const DEFAULT_ARCHAEOLOGY_CONFIG = Object.freeze({
   maxConcurrency: 2,
 });
 
-const ACTIVE_STATES = new Set(["running", "pause_requested", "paused", "cancel_requested"]);
+const ACTIVE_STATES = new Set(["launching", "running", "pause_requested", "paused", "cancel_requested"]);
 
 export function configFromModel(config = {}) {
   const selectedProjectIds = Array.isArray(config.selectedProjectIds)
@@ -50,7 +50,7 @@ export function archaeologyView(model) {
   if (discoveryState === "discovering") return "discovering";
   if (discoveryState === "failed" && sessionState === "draft") return "discovery_failed";
   if (sessionState === "completed" && model?.review) return "review";
-  if (model?.handoff && ["ready_to_claim", "claimed", "failed"].includes(model.handoff.state)) return "handoff";
+  if (model?.handoff?.tasks?.length) return "handoff";
   if (ACTIVE_STATES.has(sessionState)) return sessionState === "paused" ? "paused" : "running";
   if (sessionState === "failed") return "failed";
   return "configure";
@@ -110,21 +110,4 @@ export function memberFacts(member = {}) {
     strengths: Array.isArray(member.demonstratedStrengths) ? member.demonstratedStrengths : [],
     uncertainties: Array.isArray(member.uncertainties) ? member.uncertainties : [],
   };
-}
-
-export function taskPackText(handoff = {}) {
-  const pack = handoff.pack || {};
-  const projects = Array.isArray(pack.projects) ? pack.projects : [];
-  return [
-    pack.title || "Project Archaeology task pack",
-    `Handoff: ${handoff.id || "Not available"}`,
-    `Depth: ${handoff.depth || "standard"}`,
-    `Enabled sources: ${sourceLabels(handoff.sources).join(", ") || "none"}`,
-    `Maximum concurrent historians: ${Number(handoff.concurrency) || 1}`,
-    pack.instructions || "",
-    ...projects.flatMap((project, index) => [
-      `\n${index + 1}. ${project.label || project.candidateId || "Project"}`,
-      project.taskPrompt || "",
-    ]),
-  ].filter(Boolean).join("\n");
 }

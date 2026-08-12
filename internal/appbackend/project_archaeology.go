@@ -94,4 +94,15 @@ func (a *Adapter) PreviewArchaeologyImport(ctx context.Context, input applicatio
 	return out, mapProjectCoreError(err, "project archaeology import preview")
 }
 
+func (a *Adapter) ClaimProjectArchaeologyTask(ctx context.Context, input application.ArchaeologyTaskClaimRequest) (application.ArchaeologyTaskClaimResponse, error) {
+	out, err := a.home.ClaimProjectArchaeologyTask(ctx, input)
+	return out, mapProjectCoreError(err, "project archaeology task claim")
+}
+
+func (a *Adapter) ReportProjectArchaeologyTask(ctx context.Context, requestID string, input application.ArchaeologyTaskReportEnvelope) (application.ArchaeologySession, error) {
+	out, err := a.home.ReportProjectArchaeologyTask(ctx, requestID, input)
+	return out, mapProjectCoreError(err, "project archaeology task report")
+}
+
 var _ httpapi.ProjectArchaeologyBackend = (*Adapter)(nil)
+var _ httpapi.ProjectArchaeologyGrantBackend = (*Adapter)(nil)

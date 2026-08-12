@@ -127,7 +127,10 @@ func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
 		return nil, err
 	}
 	service := application.New(store, live, nil)
-	if len(config.ArchaeologyRoots) > 0 {
+	if archaeologyClient, ok := codexClient.(codexauth.ArchaeologyClient); ok && codexClient.Available() {
+		bridge := &codexArchaeologyBridge{client: archaeologyClient, roots: config.ArchaeologyRoots, baseURL: "http://" + config.Listen, catalogKey: config.CodexBindingKey}
+		service.ConfigureProjectArchaeology(bridge, bridge)
+	} else if len(config.ArchaeologyRoots) > 0 {
 		service.ConfigureProjectArchaeology(allowlistedArchaeologyDiscoverer{roots: config.ArchaeologyRoots}, nil)
 	}
 	if config.HumanAuth != nil {

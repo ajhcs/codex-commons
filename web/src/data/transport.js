@@ -3,12 +3,14 @@ import { MAX_API_RESPONSE_BYTES, MAX_BROWSE_LIMIT, MAX_NOTIFICATIONS, MAX_OVERVI
 const encoder = new TextEncoder();
 
 export class CommonsAPIError extends Error {
-  constructor(message, { code = "client_error", status = 0, requestID = "" } = {}) {
+  constructor(message, { code = "client_error", status = 0, requestID = "", retryAfterSeconds = 0, retryAt = "" } = {}) {
     super(message);
     this.name = "CommonsAPIError";
     this.code = code;
     this.status = status;
     this.requestID = requestID;
+    this.retryAfterSeconds = retryAfterSeconds;
+    this.retryAt = retryAt;
   }
 }
 
@@ -95,6 +97,8 @@ async function readBoundedJSON(response, maximumBytes) {
 function responseError(response, envelope) {
   const requestID = envelope?.meta?.request_id || "";
   const code = envelope?.error?.code || `http_${response.status}`;
+  const retryAfterSeconds = Number(envelope?.error?.retry_after_seconds || response.headers.get("retry-after")) || 0;
+  const retryAt = typeof envelope?.error?.retry_at === "string" ? envelope.error.retry_at : "";
   let message = "Commons could not complete this request.";
   if (response.status === 400) message = "Commons rejected this request.";
   if (response.status === 401) message = "Your writing session has expired. Sign in and try again.";
@@ -103,7 +107,10 @@ function responseError(response, envelope) {
     : "Commons access is not available for this browser.";
   if (response.status === 404) message = "The requested Commons record was not found.";
   if (response.status === 409) message = "This request conflicts with newer Commons activity.";
-  if (response.status === 429) message = "Too many write attempts. Wait a moment and try again.";
+  if (response.status === 429) message = "Please wait a moment before trying again.";
+  if (code === "auth_start_limited") message = "Codex sign-in was started recently. You can retry when the cooldown ends.";
+  if (code === "pairing_capacity_limited") message = "Another Codex sign-in is already using the available pairing slot.";
+  if (code === "auth_poll_wait") message = "Codex is still waiting for authorization.";
   if (response.status === 503) message = "Commons is temporarily unavailable.";
   if (code === "codex_unavailable") message = "Codex sign-in is unavailable on this Commons installation.";
   if (code === "account_mismatch") message = "This Commons installation is already linked to another Codex account.";
@@ -115,7 +122,7 @@ function responseError(response, envelope) {
   if (code === "authorization_failed") message = "Codex sign-in was not completed.";
   if (code === "pairing_not_found") message = "That Codex sign-in attempt is no longer available.";
   if (code === "pairing_attempt_active") message = "A Codex sign-in is already active in this browser. Return to its code or cancel it before starting again.";
-  return new CommonsAPIError(message, { code, status: response.status, requestID });
+  return new CommonsAPIError(message, { code, status: response.status, requestID, retryAfterSeconds, retryAt });
 }
 
 export function createHTTPTransport({

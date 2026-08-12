@@ -129,6 +129,37 @@ func (m *ManagedProcessClient) AccountState(ctx context.Context) (AccountState, 
 	return state, err
 }
 
+func (m *ManagedProcessClient) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
+	var result []Workspace
+	err := m.withRetry(ctx, func(client *ClientImpl) error {
+		var callErr error
+		result, callErr = client.ListWorkspaces(ctx)
+		return callErr
+	})
+	return result, err
+}
+
+func (m *ManagedProcessClient) SupportsModel(ctx context.Context, model, effort string) (bool, error) {
+	var result bool
+	err := m.withRetry(ctx, func(client *ClientImpl) error {
+		var callErr error
+		result, callErr = client.SupportsModel(ctx, model, effort)
+		return callErr
+	})
+	return result, err
+}
+
+// LaunchTask deliberately does not use the managed retry path. Any transport
+// failure after thread/start may mean Codex accepted the task, so callers must
+// persist an uncertain state instead of silently launching a duplicate.
+func (m *ManagedProcessClient) LaunchTask(ctx context.Context, cwd, model, effort, prompt, clientUserMessageID string) (TaskLaunch, error) {
+	client := m.current()
+	if client == nil {
+		return TaskLaunch{}, ErrUnavailable
+	}
+	return client.LaunchTask(ctx, cwd, model, effort, prompt, clientUserMessageID)
+}
+
 func (m *ManagedProcessClient) SetEventHandler(handler func(Event)) {
 	if m == nil {
 		return
@@ -162,3 +193,4 @@ func (m *ManagedProcessClient) Close() error {
 }
 
 var _ Client = (*ManagedProcessClient)(nil)
+var _ ArchaeologyClient = (*ManagedProcessClient)(nil)

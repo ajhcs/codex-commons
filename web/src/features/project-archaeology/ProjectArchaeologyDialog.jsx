@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { copyText, manualCopyShortcut } from "../../browser/copyText.js";
-import CommonsCompanion from "../../components/CommonsCompanion.jsx";
+import CommonsMark from "../../components/CommonsMark.jsx";
 import BookOpen from "../../icons/BookOpen.tsx";
 import Branch from "../../icons/Branch.tsx";
 import CheckCircle from "../../icons/CheckCircle.tsx";
 import Clock from "../../icons/Clock.tsx";
+import Copy from "../../icons/Copy.tsx";
+import Search from "../../icons/Search.tsx";
 import FileDocument from "../../icons/FileDocument.tsx";
 import Folder from "../../icons/Folder.tsx";
 import Pause from "../../icons/Pause.tsx";
@@ -15,7 +17,6 @@ import {
   archaeologyView,
   canStartArchaeology,
   configFromModel,
-  taskPackText,
   formatDurationRange,
   memberFacts,
   runProgressText,
@@ -50,28 +51,36 @@ function phaseStatus(state) {
   return ({ queued: "Queued", running: "Exploring", pause_requested: "Pausing", paused: "Paused", cancel_requested: "Canceling", canceled: "Canceled", completed: "Ready to review", failed: "Needs attention" })[state] || "Preparing";
 }
 
+function launchStatus(state) {
+  return ({ preparing: "Preparing", starting_codex: "Starting in Codex", task_created: "Task created", claimed: "Claimed", running: "Running", report_ready: "Report ready", completed: "Complete", failed: "Needs attention", uncertain: "Status uncertain" })[state] || "Preparing";
+}
+
+function launchDetail(state) {
+  if (state === "uncertain") return "Commons will not retry automatically because Codex may have accepted the task.";
+  if (state === "failed") return "This task did not reach a confirmed running state. Refresh before taking another action.";
+  if (state === "preparing" || state === "starting_codex") return "Commons is durably tracking this launch.";
+  return "Canonical import still requires your review.";
+}
+
 function Intro({ identity, model, busy, error, onDiscover, onSkip }) {
   const discovery = model?.capabilities?.discovery;
   return (
     <div className="archaeology-intro">
       <div className="archaeology-identity" aria-label={`Signed in as ${identityLabel(identity)}`}>
-        <CommonsCompanion state="history-offered" size="medium" />
-        <strong>{identityLabel(identity)}</strong>
-        <small>Identity connected</small>
+        <CommonsMark state="offered" size="large" />
+        <div><strong>{identityLabel(identity)}</strong><small>Codex identity connected</small></div>
       </div>
       <div className="archaeology-intro-copy">
-        <h2 id="archaeology-title">Bring your work into Commons</h2>
-        <p id="archaeology-description">Find projects you may want Commons to understand. Discovery checks project names, Git and documentation signals, Codex-history availability, and recent activity only.</p>
+        <span>Project Archaeology</span>
+        <h2 id="archaeology-title">Bring your Codex work into Commons</h2>
+        <p id="archaeology-description">Choose from projects known to your paired Codex App Server. Commons reads only bounded metadata until you explicitly start tasks.</p>
       </div>
-      <div className="archaeology-privacy-note">
-        <strong>Metadata only at this step</strong>
-        <span>Commons does not read file contents or conversations until you select projects and start an exploration.</span>
-      </div>
+      <div className="archaeology-privacy-note"><strong>You stay in control</strong><span>Starting creates one ordinary Codex task per selected project. Results remain proposals until you review and apply them.</span></div>
       {!error && discovery?.available === false ? <p className="archaeology-message" role="status">{discovery.reason || "Project discovery is not configured on this installation."}</p> : null}
       {error ? <p className="archaeology-message archaeology-message--error" role="alert">{error}</p> : null}
       <footer className="archaeology-footer">
-        <button className="secondary-button" type="button" onClick={onSkip}>Skip for now</button>
-        <button className="primary-button" type="button" disabled={busy || discovery?.available !== true} onClick={onDiscover}>{busy ? "Finding projects…" : "Find projects"}</button>
+        <button className="secondary-button" type="button" onClick={onSkip}>Not now</button>
+        <button className="primary-button" type="button" disabled={busy || discovery?.available !== true} onClick={onDiscover}>{busy ? "Finding projects…" : "Choose projects"}</button>
       </footer>
     </div>
   );
@@ -106,39 +115,39 @@ function ReadingState({ error, onRetry, onClose }) {
 }
 
 function CandidateList({ candidates, config, disabled, onChange }) {
-  const allSelected = candidates.length > 0 && candidates.every((candidate) => config.selectedProjectIds.includes(candidate.id));
-  const toggleAll = () => onChange({ ...config, selectedProjectIds: allSelected ? [] : candidates.map((candidate) => candidate.id) });
-  const toggle = (id) => onChange({
-    ...config,
-    selectedProjectIds: config.selectedProjectIds.includes(id)
-      ? config.selectedProjectIds.filter((candidateID) => candidateID !== id)
-      : [...config.selectedProjectIds, id],
-  });
+  const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLowerCase();
+  const visible = candidates.filter((candidate) => !normalizedQuery || [candidate.name, candidate.repositoryLabel].some((value) => value?.toLowerCase().includes(normalizedQuery)));
+  const selected = new Set(config.selectedProjectIds);
+  const selectedVisible = visible.filter((candidate) => selected.has(candidate.id));
+  const toggleVisible = () => {
+    const next = new Set(config.selectedProjectIds);
+    if (visible.length && selectedVisible.length === visible.length) visible.forEach((candidate) => next.delete(candidate.id));
+    else visible.forEach((candidate) => next.add(candidate.id));
+    onChange({ ...config, selectedProjectIds: [...next] });
+  };
+  const toggle = (id) => onChange({ ...config, selectedProjectIds: selected.has(id) ? config.selectedProjectIds.filter((value) => value !== id) : [...config.selectedProjectIds, id] });
+  const sorted = [...visible].sort((a, b) => (b.lastActivity?.iso || "").localeCompare(a.lastActivity?.iso || "") || a.name.localeCompare(b.name));
   return (
     <section className="archaeology-projects" aria-labelledby="archaeology-projects-title">
-      <div className="archaeology-section-heading">
-        <div><h3 id="archaeology-projects-title">Projects</h3><p>{config.selectedProjectIds.length} of {candidates.length} selected</p></div>
-        <button type="button" disabled={disabled || !candidates.length} onClick={toggleAll}>{allSelected ? "Clear all" : "Select all"}</button>
+      <div className="archaeology-catalog-toolbar">
+        <label className="archaeology-search"><Search aria-hidden="true" /><span className="sr-only">Search projects</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search Codex projects" /></label>
+        <span>{config.selectedProjectIds.length} selected</span>
+        <button type="button" disabled={disabled || !visible.length} onClick={toggleVisible}>{visible.length && selectedVisible.length === visible.length ? "Clear visible" : "Select visible"}</button>
       </div>
-      {candidates.length ? <div className="archaeology-candidate-list">
-        {candidates.map((candidate) => {
-          const checked = config.selectedProjectIds.includes(candidate.id);
-          const sources = sourceLabels(candidate.signals);
-          return (
-            <label key={candidate.id} className={`archaeology-candidate${checked ? " is-selected" : ""}`}>
-              <input type="checkbox" checked={checked} disabled={disabled} onChange={() => toggle(candidate.id)} />
-              <span className="archaeology-candidate-mark" aria-hidden="true"><Folder /></span>
-              <span className="archaeology-candidate-copy">
-                <strong>{candidate.name}</strong>
-                <small>{candidate.pathLabel || "Project folder"}</small>
-                <span>{sources.length ? sources.join(" · ") : "No supported sources found"}{candidate.lastActivity ? ` · Active ${candidate.lastActivity.relative}` : " · No recent activity recorded"}</span>
-                <em>{candidate.privacyNote}</em>
-              </span>
-              <span className="archaeology-candidate-estimate"><span><Clock aria-hidden="true" />{formatDurationRange(candidate.estimate)}</span><small>{costCopy[candidate.estimate?.relativeCost] || "Model use varies"}</small></span>
-            </label>
-          );
-        })}
-      </div> : <div className="archaeology-empty"><strong>No candidate projects found</strong><span>You can skip for now and return when another project folder is available.</span></div>}
+      <div className="archaeology-section-heading"><div><h3 id="archaeology-projects-title">Codex projects</h3><p>{visible.length} of {candidates.length} shown</p></div></div>
+      {sorted.length ? <div className="archaeology-candidate-list">{sorted.map((candidate) => {
+        const checked = selected.has(candidate.id);
+        const sources = sourceLabels(candidate.signals);
+        return (
+          <label key={candidate.id} className={["archaeology-candidate", checked ? "is-selected" : ""].filter(Boolean).join(" ")}>
+            <input type="checkbox" checked={checked} disabled={disabled} onChange={() => toggle(candidate.id)} />
+            <span className="archaeology-candidate-mark" aria-hidden="true"><Folder /></span>
+            <span className="archaeology-candidate-copy"><strong>{candidate.name}</strong><small>{candidate.repositoryLabel || "Codex project"}</small><span>{sources.join(" · ") || "Metadata only"}{candidate.codexThreadCount ? ` · ${candidate.codexThreadCount} Codex task${candidate.codexThreadCount === 1 ? "" : "s"}` : ""}</span></span>
+            <span className="archaeology-candidate-estimate"><span><Clock aria-hidden="true" />{formatDurationRange(candidate.estimate)}</span><small>{candidate.lastActivity ? `Active ${candidate.lastActivity.relative}` : costCopy[candidate.estimate?.relativeCost] || "Time varies"}</small></span>
+          </label>
+        );
+      })}</div> : <div className="archaeology-empty"><strong>No matching projects</strong><span>Try another name or clear the search.</span></div>}
     </section>
   );
 }
@@ -177,76 +186,52 @@ function Configuration({ config, disabled, onChange }) {
 function Configure({ model, config, busy, error, onChange, onStart, onSkip }) {
   const candidates = model?.discovery?.candidates || [];
   const valid = canStartArchaeology(config, candidates);
-  const [step, setStep] = useState("projects");
-  const projectsChosen = config.selectedProjectIds.length > 0;
+  const launch = model?.capabilities?.taskLaunch;
   return (
     <div className="archaeology-configure">
-      <ol className="archaeology-guide" aria-label="Project history setup progress">
-        <li data-state="complete"><span>1</span>Discover</li>
-        <li data-state={step === "projects" ? "current" : "complete"}><span>2</span>Choose projects</li>
-        <li data-state={step === "details" ? "current" : "upcoming"}><span>3</span>Depth &amp; sources</li>
-        <li data-state="upcoming"><span>4</span>Review handoff</li>
-      </ol>
-      <header className="archaeology-content-heading">
-        <div><span>Optional setup</span><h2 id="archaeology-title">{step === "projects" ? "Choose projects" : "Set the exploration boundaries"}</h2><p id="archaeology-description">{step === "projects" ? "Select only the projects whose history should be prepared for review." : "Choose how deeply Commons should look and which canonical sources may be read after you start."}</p></div>
-      </header>
-      {step === "projects" ? <CandidateList candidates={candidates} config={config} disabled={busy} onChange={onChange} /> : <Configuration config={config} disabled={busy} onChange={onChange} />}
-      <div className="archaeology-truth-note"><strong>{formatDurationRange({ durationSecondsMin: config.depth === "quick" ? 60 : config.depth === "deep" ? 480 : 240, durationSecondsMax: config.depth === "quick" ? 240 : config.depth === "deep" ? 1800 : 900 })} per project</strong><span>Time and model usage vary with project history. Commons will show real project states, not a simulated percentage.</span></div>
+      <header className="archaeology-content-heading"><div><span>Project Archaeology</span><h2 id="archaeology-title">Choose your Codex projects</h2><p id="archaeology-description">Select the work Commons should understand. One ordinary Codex task starts per project; nothing is imported automatically.</p></div></header>
+      <div className="archaeology-workspace">
+        <aside className="archaeology-trust-panel">
+          <CommonsMark state="offered" size="large" />
+          <h3>Codex stays in control</h3>
+          <p>Projects come from the App Server paired with this browser. Commons receives labels and capability facts here—not raw paths or thread bodies.</p>
+          <dl><div><dt>Selected</dt><dd>{config.selectedProjectIds.length} projects</dd></div><div><dt>Mode</dt><dd>{config.depth} review</dd></div><div><dt>Sources</dt><dd>{selectedSourceCount(config)} enabled</dd></div></dl>
+        </aside>
+        <div className="archaeology-catalog-panel"><CandidateList candidates={candidates} config={config} disabled={busy} onChange={onChange} /></div>
+      </div>
+      <details className="archaeology-advanced"><summary>Advanced settings <span>{config.depth} · {selectedSourceCount(config)} sources · {config.maxConcurrency} at once</span></summary><Configuration config={config} disabled={busy} onChange={onChange} /></details>
+      <div className="archaeology-truth-note"><strong>Results become reviewable proposals</strong><span>Tasks may take several minutes. Commons reports literal task states and never simulates a percentage or applies history without your confirmation.</span></div>
       {error ? <p className="archaeology-message archaeology-message--error" role="alert">{error}</p> : null}
-      {model?.capabilities?.historianHandoff?.available === false ? <p className="archaeology-message" role="status">{model.capabilities.historianHandoff.reason || "Codex task-pack handoff is not available on this installation."}</p> : null}
-      <footer className="archaeology-footer">
-        {step === "projects" ? <button className="secondary-button" type="button" disabled={busy} onClick={onSkip}>Skip for now</button> : <button className="secondary-button" type="button" disabled={busy} onClick={() => setStep("projects")}>Back</button>}
-        {step === "projects" ? (
-          <button className="primary-button" type="button" disabled={busy || !projectsChosen} onClick={() => setStep("details")}>Continue</button>
-        ) : (
-          <button className="primary-button" type="button" disabled={busy || !valid || model?.capabilities?.historianHandoff?.available !== true} onClick={() => onStart(config)}>{busy ? "Preparing…" : "Prepare Codex task pack"}</button>
-        )}
-      </footer>
+      {launch?.available === false ? <p className="archaeology-message" role="status">{launch.reason || "Direct Codex task launch is not available on this installation."}</p> : null}
+      <footer className="archaeology-footer archaeology-footer--between"><button className="secondary-button" type="button" disabled={busy} onClick={onSkip}>Not now</button><button className="primary-button" type="button" disabled={busy || !valid || launch?.available !== true} onClick={() => onStart(config)}>{busy ? "Starting tasks…" : `Start Codex tasks · ${config.selectedProjectIds.length}`}</button></footer>
     </div>
   );
 }
 
 function Handoff({ model, busy, error, onRefresh, onClose }) {
   const handoff = model?.handoff || {};
+  const tasks = handoff.tasks || [];
+  const candidates = model?.discovery?.candidates || [];
   const [copyState, setCopyState] = useState("");
-  const ready = handoff.state === "ready_to_claim";
-  const claimed = handoff.state === "claimed";
-
-  async function copyPack() {
-    const copied = await copyText(taskPackText(handoff));
-    setCopyState(copied
-      ? "Task pack copied."
-      : `Copy didn't work. Open the project instructions and use ${manualCopyShortcut()} to copy them manually.`);
+  const readyCount = tasks.filter((task) => ["report_ready", "completed"].includes(task.state)).length;
+  async function copyID(value, label) {
+    const copied = await copyText(value);
+    setCopyState(copied ? `${label} copied.` : `Copy did not work. Select the ID and press ${manualCopyShortcut()}.`);
   }
-
   return (
     <div className="archaeology-runs archaeology-handoff">
-      <header className="archaeology-content-heading">
-        <div><span>Codex-owned handoff</span><h2 id="archaeology-title">{ready ? "Continue in Codex" : claimed ? "Codex is reviewing the history" : "Task pack needs attention"}</h2><p id="archaeology-description">Commons prepared a durable, bounded task pack. It did not start an agent or claim that work is running.</p></div>
-      </header>
-      <div className="archaeology-handoff-id"><span>Handoff</span><code>{handoff.id || "Not available"}</code></div>
-      <div className="archaeology-run-list" aria-live="polite">
-        {(handoff.pack?.projects || []).map((project) => (
-          <article key={project.candidateId} className="archaeology-run">
-            <span className="archaeology-run-mark" aria-hidden="true"><BookOpen /></span>
-            <div><strong>{project.label}</strong><span>Bounded Codex task</span><small>{model.config?.depth || "standard"} depth · source selection retained</small></div>
-            <details className="archaeology-task-prompt"><summary>View instructions</summary><p>{project.taskPrompt}</p></details>
-          </article>
-        ))}
-      </div>
-      <div className="archaeology-truth-note">
-        <strong>{ready ? "Ready for an exact Codex session to claim" : claimed ? `Claimed by ${handoff.claimedBy || "a Codex session"}` : "No report is available"}</strong>
-        <span>{ready ? "Copy the pack into Codex. This installation keeps the handoff explicit until direct agent join is available." : claimed ? "Commons will accept only a validated report from the exact claiming session. Refresh to check for a review." : handoff.failure || "The server could not prepare this handoff."}</span>
-      </div>
+      <header className="archaeology-content-heading"><div><span>Codex tasks</span><h2 id="archaeology-title">{readyCount ? `${readyCount} report${readyCount === 1 ? "" : "s"} ready` : "Project history is underway"}</h2><p id="archaeology-description">These are ordinary tasks running in your paired Codex App Server. Exact task identities appear only as secondary provenance.</p></div></header>
+      <div className="archaeology-run-list" aria-live="polite">{tasks.map((task) => (
+        <article key={task.projectId} className={["archaeology-run", `archaeology-run--${task.state}`].join(" ")}>
+          <span className="archaeology-run-mark" aria-hidden="true">{["report_ready", "completed"].includes(task.state) ? <CheckCircle /> : <BookOpen />}</span>
+          <div><strong>{candidateName(candidates, task.projectId)}</strong><span>{launchStatus(task.state)}</span><small>{launchDetail(task.state)}</small></div>
+          <div className="archaeology-run-facts"><span>{launchStatus(task.state)}</span>{task.threadId ? <span className="archaeology-task-identity"><code>{task.threadId}</code><button type="button" className="archaeology-id-copy" onClick={() => copyID(task.threadId, "Thread ID")} aria-label="Copy thread ID"><Copy aria-hidden="true" /> Copy</button></span> : <small>Waiting for task identity</small>}</div>
+        </article>
+      ))}</div>
+      {!tasks.length ? <div className="archaeology-empty"><strong>No task rows yet</strong><span>Refresh to read the durable launch state.</span></div> : null}
       {copyState ? <p className="archaeology-message" role="status">{copyState}</p> : null}
       {error ? <p className="archaeology-message archaeology-message--error" role="alert">{error}</p> : null}
-      <footer className="archaeology-footer archaeology-footer--between">
-        <button className="secondary-button" type="button" onClick={onClose}>Close</button>
-        <div>
-          {(ready || claimed) ? <button className="secondary-button" type="button" onClick={copyPack}>Copy task pack</button> : null}
-          <button className="primary-button" type="button" disabled={busy} onClick={onRefresh}>{busy ? "Checking…" : "Refresh status"}</button>
-        </div>
-      </footer>
+      <footer className="archaeology-footer archaeology-footer--between"><button className="secondary-button" type="button" onClick={onClose}>Close</button><button className="primary-button" type="button" disabled={busy} onClick={onRefresh}>{busy ? "Checking…" : "Refresh status"}</button></footer>
     </div>
   );
 }

@@ -37,7 +37,7 @@ flowchart LR
   `1 | 2 at a time`.
 - Cost and privacy copy updates with depth and sources. It never claims exact
   tokens, completion time, or file coverage.
-- Primary action: `Prepare Codex task pack`. The action states the number of
+- Primary action: `Start Codex tasks`. The action states the number of
   projects and is disabled until at least one project and one source are chosen.
 - Commons does not claim that this launches a task. The prepared pack is a
   durable, bounded handoff that Codex can claim and report against.
@@ -47,7 +47,7 @@ flowchart LR
 - The prepared pack shows its durable handoff ID and one bounded task per
   selected project. It never renders a spinner, percentage, fake historian, or
   unsupported launch button.
-- `Copy task pack` is a local browser action. `Close` leaves the durable handoff
+- Exact task and thread IDs are secondary provenance. `Close` leaves durable tasks running
   ready to claim. Both are explicit about what Commons did and did not start.
 - Once Codex claims the pack, the surface waits for a validated result report.
 - Counts appear only when reported by Codex. Pause, resume, and cancel appear

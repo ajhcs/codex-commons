@@ -15,14 +15,50 @@ type ProjectArchaeologyBackend interface {
 	PauseProjectArchaeology(context.Context, application.ArchaeologyTransitionRequest, RequestMeta) (application.ArchaeologySession, error)
 	ResumeProjectArchaeology(context.Context, application.ArchaeologyTransitionRequest, RequestMeta) (application.ArchaeologySession, error)
 	CancelProjectArchaeology(context.Context, application.ArchaeologyTransitionRequest, RequestMeta) (application.ArchaeologySession, error)
-	ClaimProjectArchaeology(context.Context, application.ArchaeologyHandoffClaimRequest, RequestMeta) (application.ArchaeologySession, error)
-	ReportProjectArchaeology(context.Context, application.ArchaeologyHandoffReportEnvelope, RequestMeta) (application.ArchaeologySession, error)
 	PreviewArchaeologyImport(context.Context, application.ArchaeologyImportPreviewRequest, RequestMeta) (application.ArchaeologyImportPreview, error)
+}
+
+type ProjectArchaeologyGrantBackend interface {
+	ClaimProjectArchaeologyTask(context.Context, application.ArchaeologyTaskClaimRequest) (application.ArchaeologyTaskClaimResponse, error)
+	ReportProjectArchaeologyTask(context.Context, string, application.ArchaeologyTaskReportEnvelope) (application.ArchaeologySession, error)
+}
+
+func (h *handler) projectArchaeologyGrantRoute(w http.ResponseWriter, r *http.Request, requestID string) bool {
+	if r.Method != http.MethodPost || (r.URL.Path != "/v1/project-archaeology/task/claim" && r.URL.Path != "/v1/project-archaeology/task/report") {
+		return false
+	}
+	backend, ok := h.backend.(ProjectArchaeologyGrantBackend)
+	meta := RequestMeta{RequestID: requestID}
+	if !ok {
+		h.finish(w, meta, nil, NewError(CodeUnavailable, "project archaeology task grants unavailable"), false)
+		return true
+	}
+	if r.URL.Path == "/v1/project-archaeology/task/claim" {
+		var input application.ArchaeologyTaskClaimRequest
+		if !h.decode(w, r, meta, &input) {
+			return true
+		}
+		out, err := backend.ClaimProjectArchaeologyTask(r.Context(), input)
+		h.finish(w, meta, out, err, false)
+		return true
+	}
+	requestKey := r.Header.Get("Idempotency-Key")
+	if !validIdempotencyKey(requestKey) || requestKey == "" {
+		h.writeError(w, requestID, http.StatusBadRequest, "bad_idempotency_key", "Idempotency-Key required")
+		return true
+	}
+	var input application.ArchaeologyTaskReportEnvelope
+	if !h.decode(w, r, meta, &input) {
+		return true
+	}
+	out, err := backend.ReportProjectArchaeologyTask(r.Context(), requestKey, input)
+	h.finish(w, meta, out, err, false)
+	return true
 }
 
 func (h *handler) projectArchaeologyRoute(w http.ResponseWriter, r *http.Request, meta RequestMeta) bool {
 	path := r.URL.Path
-	known := path == "/v1/project-archaeology" || path == "/v1/project-archaeology/discover" || path == "/v1/project-archaeology/config" || path == "/v1/project-archaeology/start" || path == "/v1/project-archaeology/pause" || path == "/v1/project-archaeology/resume" || path == "/v1/project-archaeology/cancel" || path == "/v1/project-archaeology/handoff/claim" || path == "/v1/project-archaeology/handoff/report" || path == "/v1/project-archaeology/import-preview"
+	known := path == "/v1/project-archaeology" || path == "/v1/project-archaeology/discover" || path == "/v1/project-archaeology/config" || path == "/v1/project-archaeology/start" || path == "/v1/project-archaeology/pause" || path == "/v1/project-archaeology/resume" || path == "/v1/project-archaeology/cancel" || path == "/v1/project-archaeology/import-preview"
 	if !known {
 		return false
 	}
@@ -62,20 +98,6 @@ func (h *handler) projectArchaeologyRoute(w http.ResponseWriter, r *http.Request
 		case "/v1/project-archaeology/cancel":
 			out, err = backend.CancelProjectArchaeology(r.Context(), input, meta)
 		}
-		h.finish(w, meta, out, err, true)
-	case r.Method == http.MethodPost && path == "/v1/project-archaeology/handoff/claim":
-		var input application.ArchaeologyHandoffClaimRequest
-		if !h.decodeCoreWrite(w, r, meta, &input) {
-			return true
-		}
-		out, err := backend.ClaimProjectArchaeology(r.Context(), input, meta)
-		h.finish(w, meta, out, err, true)
-	case r.Method == http.MethodPost && path == "/v1/project-archaeology/handoff/report":
-		var input application.ArchaeologyHandoffReportEnvelope
-		if !h.decodeCoreWrite(w, r, meta, &input) {
-			return true
-		}
-		out, err := backend.ReportProjectArchaeology(r.Context(), input, meta)
 		h.finish(w, meta, out, err, true)
 	case r.Method == http.MethodPost && path == "/v1/project-archaeology/import-preview":
 		var input application.ArchaeologyImportPreviewRequest

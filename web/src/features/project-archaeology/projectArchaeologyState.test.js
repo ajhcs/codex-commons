@@ -6,14 +6,13 @@ import {
   configFromModel,
   formatDurationRange,
   memberFacts,
-  taskPackText,
   runProgressText,
 } from "./projectArchaeologyState.js";
 
 test("archaeology view follows real discovery and run state", () => {
   assert.equal(archaeologyView(null), "intro");
   assert.equal(archaeologyView({ discovery: { state: "discovering" }, state: "draft" }), "discovering");
-  assert.equal(archaeologyView({ discovery: { state: "ready" }, state: "draft", handoff: { state: "ready_to_claim" } }), "handoff");
+  assert.equal(archaeologyView({ discovery: { state: "ready" }, state: "draft", handoff: { state: "running", tasks: [{ projectId: "alpha", state: "running" }] } }), "handoff");
   assert.equal(archaeologyView({ discovery: { state: "ready" }, state: "paused" }), "paused");
   assert.equal(archaeologyView({ discovery: { state: "ready" }, state: "completed", review: {} }), "review");
 });
@@ -57,14 +56,4 @@ test("session membership facts do not infer reachability or authority", () => {
     uncertainties: [],
   });
   assert.equal(memberFacts({ sessionId: "SES-2" }).sessionID, "SES-2");
-});
-
-test("task pack text preserves the durable handoff and exact bounded prompts", () => {
-  const text = taskPackText({ id: "HAND-1", depth: "deep", sources: { git: true, docs: false, codexHistory: true }, concurrency: 2, pack: { title: "History pack", instructions: "Claim once.", projects: [{ candidateId: "p", label: "Codex Commons", taskPrompt: "Review Git and docs." }] } });
-  assert.match(text, /HAND-1/);
-  assert.match(text, /Codex Commons/);
-  assert.match(text, /Review Git and docs/);
-  assert.match(text, /Depth: deep/);
-  assert.match(text, /Enabled sources: Git, Codex history/);
-  assert.match(text, /Maximum concurrent historians: 2/);
 });

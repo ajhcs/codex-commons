@@ -51,7 +51,7 @@ func TestProjectArchaeologyInitialReadIsNonMutatingDraft(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !configuredView.Capabilities.Discovery.Configured || !configuredView.Capabilities.Discovery.Available || configuredView.Capabilities.Discovery.Mode != "allowlisted_metadata" {
+	if !configuredView.Capabilities.Discovery.Configured || !configuredView.Capabilities.Discovery.Available || configuredView.Capabilities.Discovery.Mode != "codex_known_metadata" {
 		t.Fatalf("configured discovery capability=%+v", configuredView.Capabilities.Discovery)
 	}
 	var count int

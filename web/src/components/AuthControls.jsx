@@ -5,7 +5,7 @@ import { useAuthSession } from "../hooks/useAuthSession.js";
 import { copyText, manualCopyShortcut } from "../browser/copyText.js";
 import Members from "../icons/Members.tsx";
 import AuthJourney from "./AuthJourney.jsx";
-import CommonsCompanion from "./CommonsCompanion.jsx";
+import CommonsMark from "./CommonsMark.jsx";
 
 export function createIdempotencyKey() {
   const browserCrypto = globalThis.crypto;
@@ -83,6 +83,7 @@ export function LoginDialog({ open, onClose, onAuthenticated }) {
   const flowStartedRef = useRef(false);
   const freshProfileRef = useRef(false);
   const recoveryInputRef = useRef(null);
+  const pairingCodeID = useId();
   const pairingHelpID = useId();
   const onAuthenticatedRef = useRef(onAuthenticated);
   const auth = useAuthSession();
@@ -91,12 +92,16 @@ export function LoginDialog({ open, onClose, onAuthenticated }) {
   const [recoveryState, setRecoveryState] = useState({ state: "idle", message: "" });
   const [profile, setProfile] = useState({ displayName: "", handle: "" });
   const [copyState, setCopyState] = useState("");
+  const [cooldownUntil, setCooldownUntil] = useState(0);
+  const [cooldownNow, setCooldownNow] = useState(() => Date.now());
 
   const closeDialog = useModal(open, dialogRef, onClose);
   const pairing = auth.pairing;
   const profileMode = auth.status === "needs_profile" || auth.error?.resumeState === "needs_profile";
   const pairingMode = auth.status === "pairing";
   const flowError = auth.status === "error" && !profileMode ? auth.error : null;
+  const cooldownSeconds = Math.max(0, Math.ceil((cooldownUntil - cooldownNow) / 1000));
+  const retryBlocked = cooldownSeconds > 0;
   const completionSession = auth.status === "authenticated" && flowStartedRef.current ? auth.session : null;
   const completionMode = Boolean(completionSession?.authenticated);
   const journeyStage = completionMode
@@ -106,6 +111,19 @@ export function LoginDialog({ open, onClose, onAuthenticated }) {
       : pairingMode
         ? pairing?.userCode ? "authorize" : "connecting"
         : "ready";
+
+  useEffect(() => {
+    if (!flowError?.retryAfterSeconds && !flowError?.retryAt) {
+      setCooldownUntil(0);
+      return undefined;
+    }
+    const serverDeadline = Date.parse(flowError.retryAt || "");
+    const deadline = Number.isFinite(serverDeadline) ? serverDeadline : Date.now() + (Number(flowError.retryAfterSeconds) || 0) * 1000;
+    setCooldownUntil(deadline);
+    setCooldownNow(Date.now());
+    const timer = globalThis.setInterval(() => setCooldownNow(Date.now()), 1000);
+    return () => globalThis.clearInterval(timer);
+  }, [flowError?.code, flowError?.retryAfterSeconds, flowError?.retryAt]);
 
   useEffect(() => {
     onAuthenticatedRef.current = onAuthenticated;
@@ -268,7 +286,7 @@ export function LoginDialog({ open, onClose, onAuthenticated }) {
     <dialog ref={dialogRef} className="auth-dialog auth-dialog--codex" onClose={closed} onCancel={cancel} onKeyDown={keepFocusInside}>
       <form onSubmit={profileMode ? submitProfile : recoveryOpen ? submitRecovery : (event) => { event.preventDefault(); beginCodex(); }}>
         <header>
-          <span className="auth-mark"><CommonsCompanion state={completionMode ? "identity-resolved" : pairingMode ? journeyStage === "authorize" ? "authorized" : "connecting" : "idle"} size="small" /></span>
+          <span className="auth-mark"><CommonsMark state={completionMode ? "resolved" : pairingMode ? journeyStage === "authorize" ? "authorized" : "connecting" : "idle"} size="small" /></span>
           <div>
             <h2>{title}</h2>
             <p>{description}</p>
@@ -300,6 +318,7 @@ export function LoginDialog({ open, onClose, onAuthenticated }) {
                   <span>One-time code</span>
                   <input
                     ref={codeRef}
+                    id={pairingCodeID}
                     className="pairing-code-value"
                     value={pairing.userCode}
                     readOnly
@@ -330,10 +349,10 @@ export function LoginDialog({ open, onClose, onAuthenticated }) {
           </>
         ) : flowError ? (
           <>
-            <div className="auth-error-card" role="alert"><strong>{errorMessage(flowError)}</strong><span>Nothing was saved in the browser.</span></div>
+            <div className="auth-error-card" role="alert"><strong>{errorMessage(flowError)}</strong><span>{retryBlocked ? `Try again in ${cooldownSeconds}s. Reading remains available.` : "Nothing was saved in the browser."}</span></div>
             <footer>
               <button type="button" className="secondary-button" onClick={requestClose}>Cancel</button>
-              <button type="button" className="primary-button" onClick={retry}>Try again</button>
+              <button type="button" className="primary-button" onClick={retry} disabled={retryBlocked}>{retryBlocked ? `Try again in ${cooldownSeconds}s` : "Try again"}</button>
             </footer>
             <button type="button" className="auth-recovery-link" onClick={() => { auth.clearError(); setRecoveryOpen(true); }}>Use recovery key</button>
           </>
@@ -417,7 +436,7 @@ export function ProfileDialog({ open, onClose }) {
     <dialog ref={dialogRef} className="auth-dialog profile-dialog" onClose={close} onCancel={(event) => { event.preventDefault(); close(); }}>
       <form onSubmit={submit}>
         <header>
-          <span className="auth-mark"><CommonsCompanion state="authorized" size="small" /></span>
+          <span className="auth-mark"><CommonsMark state="authorized" size="small" /></span>
           <div><h2>Edit profile</h2><p>Your dynamic human identity is used for new Commons writing.</p></div>
         </header>
         <ProfileFields value={profile} onChange={setProfile} disabled={state.state === "loading"} />

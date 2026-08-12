@@ -2,9 +2,14 @@ package application
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"sort"
+	"strings"
+	"sync"
 	"time"
 
 	"codex-commons/internal/domain"
@@ -18,6 +23,10 @@ type ArchaeologyRepository interface {
 	PauseArchaeology(context.Context, domain.ArchaeologyMutation) (domain.ArchaeologySession, error)
 	ResumeArchaeology(context.Context, domain.ArchaeologyMutation) (domain.ArchaeologySession, error)
 	CancelArchaeology(context.Context, domain.ArchaeologyMutation) (domain.ArchaeologySession, error)
+	PrepareArchaeologyTaskLaunch(context.Context, string, string, string, string, [32]byte, time.Time) (domain.ArchaeologyTaskLaunch, bool, error)
+	CompleteArchaeologyTaskLaunch(context.Context, domain.ArchaeologyLaunchResult) (domain.ArchaeologyTaskLaunch, error)
+	ClaimArchaeologyTaskLaunch(context.Context, domain.ArchaeologyTaskClaim) (domain.ArchaeologyTaskClaimResult, error)
+	ReportArchaeologyTaskLaunch(context.Context, domain.ArchaeologyTaskReport) (domain.ArchaeologySession, error)
 	ClaimArchaeologyHandoff(context.Context, domain.ArchaeologyHandoffClaim) (domain.ArchaeologySession, error)
 	ReportArchaeologyHandoff(context.Context, domain.ArchaeologyHandoffReport) (domain.ArchaeologySession, error)
 }
@@ -28,6 +37,9 @@ type ArchaeologyDiscoverer interface {
 type ArchaeologyHistorianLauncher interface {
 	Available(context.Context) error
 	Launch(context.Context, domain.ArchaeologySession) error
+}
+type ArchaeologyTaskLauncher interface {
+	LaunchProject(context.Context, domain.ArchaeologySession, domain.ArchaeologyCandidate, string, string) (domain.ArchaeologyLaunchResult, error)
 }
 
 type ArchaeologySources struct {
@@ -61,6 +73,8 @@ type ArchaeologyCandidate struct {
 	Estimate          ArchaeologyEstimate `json:"estimate"`
 	PrivacyNote       string              `json:"privacy_note"`
 	SelectedByDefault bool                `json:"selected_by_default"`
+	Sources           []string            `json:"sources"`
+	CodexThreadCount  int                 `json:"codex_thread_count"`
 }
 type ArchaeologyDiscovery struct {
 	State              string                 `json:"state"`
@@ -129,35 +143,37 @@ type ArchaeologyCapability struct {
 	Reason     string `json:"reason,omitempty"`
 }
 type ArchaeologyCapabilities struct {
+	ProjectCatalog   ArchaeologyCapability `json:"project_catalog"`
+	TaskLaunch       ArchaeologyCapability `json:"task_launch"`
 	Discovery        ArchaeologyCapability `json:"discovery"`
 	HistorianHandoff ArchaeologyCapability `json:"historian_handoff"`
 	Review           ArchaeologyCapability `json:"review"`
 	CanonicalApply   ArchaeologyCapability `json:"canonical_apply"`
 }
-type ArchaeologyHandoffProject struct {
-	CandidateID string `json:"candidate_id"`
-	Label       string `json:"label"`
-	TaskPrompt  string `json:"task_prompt"`
-}
-type ArchaeologyHandoffPack struct {
-	Title        string                      `json:"title"`
-	Instructions string                      `json:"instructions"`
-	Projects     []ArchaeologyHandoffProject `json:"projects"`
-}
 type ArchaeologyHandoff struct {
-	ID             string                 `json:"id"`
-	State          string                 `json:"state"`
-	ClaimedBy      string                 `json:"claimed_by,omitempty"`
-	Failure        string                 `json:"failure,omitempty"`
-	CreatedAt      *time.Time             `json:"created_at,omitempty"`
-	UpdatedAt      *time.Time             `json:"updated_at,omitempty"`
-	ClaimedAt      *time.Time             `json:"claimed_at,omitempty"`
-	Depth          string                 `json:"depth"`
-	Sources        ArchaeologySources     `json:"sources"`
-	Concurrency    int                    `json:"concurrency"`
-	CandidateIDs   []string               `json:"candidate_ids"`
-	Pack           ArchaeologyHandoffPack `json:"pack"`
-	AllowedActions []string               `json:"allowed_actions"`
+	ID             string                  `json:"id"`
+	State          string                  `json:"state"`
+	ClaimedBy      string                  `json:"claimed_by,omitempty"`
+	Failure        string                  `json:"failure,omitempty"`
+	CreatedAt      *time.Time              `json:"created_at,omitempty"`
+	UpdatedAt      *time.Time              `json:"updated_at,omitempty"`
+	ClaimedAt      *time.Time              `json:"claimed_at,omitempty"`
+	Depth          string                  `json:"depth"`
+	Sources        ArchaeologySources      `json:"sources"`
+	Concurrency    int                     `json:"concurrency"`
+	CandidateIDs   []string                `json:"candidate_ids"`
+	Tasks          []ArchaeologyTaskLaunch `json:"tasks"`
+	AllowedActions []string                `json:"allowed_actions"`
+}
+type ArchaeologyTaskLaunch struct {
+	ProjectID        string     `json:"project_id"`
+	State            string     `json:"state"`
+	ThreadID         string     `json:"thread_id,omitempty"`
+	TurnID           string     `json:"turn_id,omitempty"`
+	CreatedAt        *time.Time `json:"created_at,omitempty"`
+	UpdatedAt        *time.Time `json:"updated_at,omitempty"`
+	Error            string     `json:"error,omitempty"`
+	AvailableActions []string   `json:"available_actions"`
 }
 type ArchaeologySession struct {
 	ID           string                  `json:"id"`
@@ -218,6 +234,29 @@ type ArchaeologyHandoffReportEnvelope struct {
 	HandoffID string                            `json:"handoff_id"`
 	Outcomes  []ArchaeologyOutcomeReportRequest `json:"outcomes"`
 }
+type ArchaeologyTaskClaimRequest struct {
+	LaunchID       string `json:"launch_id"`
+	ProjectID      string `json:"project_id"`
+	ThreadID       string `json:"thread_id"`
+	CodexSessionID string `json:"session_id"`
+	Grant          string `json:"grant"`
+}
+type ArchaeologyTaskClaimResponse struct {
+	LaunchID        string    `json:"launch_id"`
+	ProjectID       string    `json:"project_id"`
+	ThreadID        string    `json:"thread_id"`
+	CodexSessionID  string    `json:"session_id"`
+	ReportToken     string    `json:"report_token"`
+	ReportExpiresAt time.Time `json:"report_expires_at"`
+}
+type ArchaeologyTaskReportEnvelope struct {
+	LaunchID       string                            `json:"launch_id"`
+	ProjectID      string                            `json:"project_id"`
+	ThreadID       string                            `json:"thread_id"`
+	CodexSessionID string                            `json:"session_id"`
+	ReportToken    string                            `json:"report_token"`
+	Outcomes       []ArchaeologyOutcomeReportRequest `json:"outcomes"`
+}
 type ArchaeologyImportPreview struct {
 	ProjectID string                  `json:"project_id"`
 	Request   HistoricalImportRequest `json:"request"`
@@ -226,7 +265,7 @@ type ArchaeologyImportPreview struct {
 
 func (s *Service) ConfigureProjectArchaeology(discoverer ArchaeologyDiscoverer, launcher ArchaeologyHistorianLauncher) {
 	s.archaeologyDiscoverer = discoverer
-	_ = launcher // retained only for source compatibility; production never invokes it
+	s.archaeologyLauncher = launcher
 }
 func (s *Service) archaeologyRepository() (ArchaeologyRepository, error) {
 	if s == nil {
@@ -238,6 +277,16 @@ func (s *Service) archaeologyRepository() (ArchaeologyRepository, error) {
 	}
 	return repository, nil
 }
+func publicLaunchError(state string) string {
+	if state == "failed" {
+		return "Codex could not start this task. Try again when the connection is available."
+	}
+	if state == "uncertain" {
+		return "Codex may have created this task, but Commons could not confirm it. Review the task ID before taking action."
+	}
+	return ""
+}
+
 func optionalArchaeologyTime(value time.Time) *time.Time {
 	if value.IsZero() {
 		return nil
@@ -251,15 +300,20 @@ func archaeologyView(value domain.ArchaeologySession) ArchaeologySession {
 	copy(selectedProjectIDs, value.Config.SelectedProjectIDs)
 	out := ArchaeologySession{ID: value.ID, State: value.State, Discovery: ArchaeologyDiscovery{State: value.DiscoveryState, MetadataOnly: true, SourceRootsScanned: value.SourceRootsScanned, DiscoveredAt: optionalArchaeologyTime(value.DiscoveredAt), Error: value.DiscoveryError, Candidates: []ArchaeologyCandidate{}}, Config: ArchaeologyConfig{SelectedProjectIDs: selectedProjectIDs, Depth: value.Config.Depth, Sources: ArchaeologySources{Git: value.Config.Sources.Git, Docs: value.Config.Sources.Docs, CodexHistory: value.Config.Sources.CodexHistory}, MaxConcurrency: value.Config.MaxConcurrency}, Runs: []ArchaeologyRun{}, Revision: value.Revision, UpdatedAt: optionalArchaeologyTime(value.UpdatedAt)}
 	for _, candidate := range value.Candidates {
-		out.Discovery.Candidates = append(out.Discovery.Candidates, ArchaeologyCandidate{ID: candidate.ID, Name: candidate.Name, PathLabel: candidate.PathLabel, RepositoryLabel: candidate.RepositoryLabel, LastActivityAt: optionalArchaeologyTime(candidate.LastActivityAt), Signals: ArchaeologySignals{Git: candidate.HasGit, Docs: candidate.HasDocs, CodexHistory: candidate.HasCodexHistory}, Estimate: ArchaeologyEstimate{DurationSecondsMin: candidate.DurationMinSeconds, DurationSecondsMax: candidate.DurationMaxSeconds, RelativeCost: candidate.RelativeCost}, PrivacyNote: candidate.PrivacyNote, SelectedByDefault: false})
+		sources := []string{}
+		if candidate.FromCodexMetadata {
+			sources = append(sources, "codex_metadata")
+		}
+		if candidate.FromConfiguredRoot {
+			sources = append(sources, "configured_root")
+		}
+		out.Discovery.Candidates = append(out.Discovery.Candidates, ArchaeologyCandidate{ID: candidate.ID, Name: candidate.Name, PathLabel: candidate.PathLabel, RepositoryLabel: candidate.RepositoryLabel, LastActivityAt: optionalArchaeologyTime(candidate.LastActivityAt), Signals: ArchaeologySignals{Git: candidate.HasGit, Docs: candidate.HasDocs, CodexHistory: candidate.HasCodexHistory}, Estimate: ArchaeologyEstimate{DurationSecondsMin: candidate.DurationMinSeconds, DurationSecondsMax: candidate.DurationMaxSeconds, RelativeCost: candidate.RelativeCost}, PrivacyNote: candidate.PrivacyNote, SelectedByDefault: false, Sources: sources, CodexThreadCount: candidate.CodexThreadCount})
 	}
 	for _, run := range value.Runs {
 		out.Runs = append(out.Runs, ArchaeologyRun{ID: run.ID, ProjectID: run.ProjectID, State: run.State, PhaseLabel: run.PhaseLabel, CompletedUnits: run.CompletedUnits, TotalUnits: run.TotalUnits, OutcomesFound: run.OutcomesFound, SourcesExamined: run.SourcesExamined, Error: run.Error, UpdatedAt: optionalArchaeologyTime(run.UpdatedAt)})
 	}
 	out.Controls = ArchaeologyControls{CanStart: value.State == "draft" && len(value.Config.SelectedProjectIDs) > 0, CanPause: value.State == "running", CanResume: value.State == "paused" || value.State == "pause_requested", CanCancel: value.State == "running" || value.State == "paused" || value.State == "pause_requested"}
 	if value.Handoff != nil {
-		var pack ArchaeologyHandoffPack
-		_ = json.Unmarshal([]byte(value.Handoff.PackJSON), &pack)
 		actions := []string{}
 		if value.Handoff.State == "ready_to_claim" {
 			actions = append(actions, "claim")
@@ -267,11 +321,23 @@ func archaeologyView(value domain.ArchaeologySession) ArchaeologySession {
 		if value.Handoff.State == "claimed" {
 			actions = append(actions, "report")
 		}
-		ids := make([]string, 0, len(pack.Projects))
-		for _, project := range pack.Projects {
-			ids = append(ids, project.CandidateID)
+		launchTasks := make([]ArchaeologyTaskLaunch, 0, len(value.TaskLaunches))
+		for _, launch := range value.TaskLaunches {
+			actions := []string{}
+			if launch.State == "failed" {
+				actions = append(actions, "retry")
+			}
+			launchTasks = append(launchTasks, ArchaeologyTaskLaunch{ProjectID: launch.ProjectID, State: launch.State, ThreadID: launch.ThreadID, TurnID: launch.TurnID, CreatedAt: optionalArchaeologyTime(launch.CreatedAt), UpdatedAt: optionalArchaeologyTime(launch.UpdatedAt), Error: publicLaunchError(launch.State), AvailableActions: actions})
 		}
-		out.Handoff = &ArchaeologyHandoff{ID: value.Handoff.ID, State: value.Handoff.State, ClaimedBy: value.Handoff.ClaimedBy, Failure: value.Handoff.Failure, CreatedAt: optionalArchaeologyTime(value.Handoff.CreatedAt), UpdatedAt: optionalArchaeologyTime(value.Handoff.UpdatedAt), ClaimedAt: optionalArchaeologyTime(value.Handoff.ClaimedAt), Depth: out.Config.Depth, Sources: out.Config.Sources, Concurrency: out.Config.MaxConcurrency, CandidateIDs: ids, Pack: pack, AllowedActions: actions}
+		if len(launchTasks) > 0 && out.Handoff == nil {
+			ids := make([]string, 0, len(launchTasks))
+			for _, task := range launchTasks {
+				ids = append(ids, task.ProjectID)
+			}
+			out.Handoff = &ArchaeologyHandoff{State: "launching", Depth: out.Config.Depth, Sources: out.Config.Sources, Concurrency: out.Config.MaxConcurrency, CandidateIDs: ids, Tasks: launchTasks, AllowedActions: []string{}}
+		}
+		ids := append([]string(nil), out.Config.SelectedProjectIDs...)
+		out.Handoff = &ArchaeologyHandoff{ID: value.Handoff.ID, State: value.Handoff.State, ClaimedBy: value.Handoff.ClaimedBy, Failure: value.Handoff.Failure, CreatedAt: optionalArchaeologyTime(value.Handoff.CreatedAt), UpdatedAt: optionalArchaeologyTime(value.Handoff.UpdatedAt), ClaimedAt: optionalArchaeologyTime(value.Handoff.ClaimedAt), Depth: out.Config.Depth, Sources: out.Config.Sources, Concurrency: out.Config.MaxConcurrency, CandidateIDs: ids, Tasks: launchTasks, AllowedActions: actions}
 		out.Controls.CanStart = false
 		out.Controls.CanPause, out.Controls.CanResume, out.Controls.CanCancel = false, false, false
 	}
@@ -321,8 +387,10 @@ func archaeologyView(value domain.ArchaeologySession) ArchaeologySession {
 		out.Review = &review
 	}
 	out.Capabilities = ArchaeologyCapabilities{
+		ProjectCatalog:   ArchaeologyCapability{Configured: false, Available: false, Mode: "codex_metadata", Reason: "Connect a Codex App Server to list known projects."},
+		TaskLaunch:       ArchaeologyCapability{Configured: false, Available: false, Mode: "app_server_stdio", Reason: "Connect a compatible Codex App Server to start historian tasks."},
 		Discovery:        ArchaeologyCapability{Configured: false, Available: false, Mode: "allowlisted_metadata", Reason: "Configure an explicit project-root allowlist to enable metadata discovery."},
-		HistorianHandoff: ArchaeologyCapability{Configured: true, Available: true, Mode: "export_claim_report", Reason: "Commons exports a task pack; Codex owns task creation and exact-session execution."},
+		HistorianHandoff: ArchaeologyCapability{Configured: true, Available: true, Mode: "exact_task_claim_report", Reason: "Historian reports remain bound to exact launched task identity and human review."},
 		Review:           ArchaeologyCapability{Configured: true, Available: out.Review != nil, Mode: "durable_manifest"},
 		CanonicalApply:   ArchaeologyCapability{Configured: true, Available: out.Review != nil && out.Review.CanApply, Mode: "preview_digest_confirm", Reason: "A signed-in human must preview and explicitly confirm the exact source digest."},
 	}
@@ -331,7 +399,18 @@ func archaeologyView(value domain.ArchaeologySession) ArchaeologySession {
 func (s *Service) archaeologySessionView(value domain.ArchaeologySession) ArchaeologySession {
 	out := archaeologyView(value)
 	if s != nil && s.archaeologyDiscoverer != nil {
-		out.Capabilities.Discovery = ArchaeologyCapability{Configured: true, Available: true, Mode: "allowlisted_metadata", Reason: "Only explicitly configured project roots are eligible."}
+		out.Capabilities.Discovery = ArchaeologyCapability{Configured: true, Available: true, Mode: "codex_known_metadata", Reason: "Catalog uses bounded Codex thread metadata plus configured roots; message bodies are not read."}
+		out.Capabilities.ProjectCatalog = ArchaeologyCapability{Configured: true, Available: true, Mode: "codex_metadata", Reason: "Projects are grouped from Codex-known workspaces and additive configured roots."}
+	}
+	if s != nil && s.archaeologyLauncher != nil {
+		capabilityCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		err := s.archaeologyLauncher.Available(capabilityCtx)
+		cancel()
+		if err == nil {
+			out.Capabilities.TaskLaunch = ArchaeologyCapability{Configured: true, Available: true, Mode: "app_server_stdio", Reason: "Commons can start one ordinary Codex historian task for each selected project."}
+		} else {
+			out.Capabilities.TaskLaunch = ArchaeologyCapability{Configured: true, Available: false, Mode: "app_server_stdio", Reason: "The required gpt-5.6-luna max task profile is not currently available."}
+		}
 	}
 	return out
 }
@@ -394,7 +473,89 @@ func (s *Service) StartProjectArchaeology(ctx context.Context, principal, reques
 		return ArchaeologySession{}, err
 	}
 	value, err := repository.StartArchaeology(ctx, archaeologyMutation(principal, requestID, input.BaseRevision))
+	if err != nil {
+		return ArchaeologySession{}, err
+	}
+	launcher, supported := s.archaeologyLauncher.(ArchaeologyTaskLauncher)
+	if !supported || s.archaeologyLauncher.Available(ctx) != nil {
+		return s.archaeologySessionView(value), nil
+	}
+	selected := map[string]bool{}
+	for _, id := range value.Config.SelectedProjectIDs {
+		selected[id] = true
+	}
+	var candidates []domain.ArchaeologyCandidate
+	for _, candidate := range value.Candidates {
+		if selected[candidate.ID] {
+			candidates = append(candidates, candidate)
+		}
+	}
+	workers := value.Config.MaxConcurrency
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > 2 {
+		workers = 2
+	}
+	jobs := make(chan domain.ArchaeologyCandidate)
+	errs := make(chan error, len(candidates))
+	var group sync.WaitGroup
+	for index := 0; index < workers; index++ {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			for candidate := range jobs {
+				if err := s.launchArchaeologyCandidate(ctx, repository, launcher, principal, requestID, value, candidate); err != nil {
+					errs <- err
+				}
+			}
+		}()
+	}
+	for _, candidate := range candidates {
+		jobs <- candidate
+	}
+	close(jobs)
+	group.Wait()
+	close(errs)
+	for launchErr := range errs {
+		if launchErr != nil {
+			return ArchaeologySession{}, launchErr
+		}
+	}
+	value, err = repository.ArchaeologySession(ctx, principal)
 	return s.archaeologySessionView(value), err
+}
+
+func (s *Service) launchArchaeologyCandidate(ctx context.Context, repository ArchaeologyRepository, launcher ArchaeologyTaskLauncher, principal, requestID string, session domain.ArchaeologySession, candidate domain.ArchaeologyCandidate) error {
+	var raw [32]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return domain.ErrUnavailable
+	}
+	grant := base64.RawURLEncoding.EncodeToString(raw[:])
+	clientMessageID := "commons-archaeology-" + session.ID + "-" + candidate.ID
+	prepared, reserved, err := repository.PrepareArchaeologyTaskLaunch(ctx, principal, candidate.ID, requestID, clientMessageID, sha256.Sum256([]byte(grant)), s.clock.Now().UTC().Add(30*time.Minute))
+	if err != nil {
+		return err
+	}
+	// Only the caller that inserted the durable reservation may cross the
+	// non-idempotent App Server boundary. Replays return the existing task.
+	if !reserved {
+		return nil
+	}
+	result, launchErr := launcher.LaunchProject(ctx, session, candidate, grant, prepared.ID)
+	result.LaunchID, result.ProjectID = prepared.ID, candidate.ID
+	if launchErr != nil {
+		if result.ThreadID != "" {
+			result.State = "uncertain"
+		} else {
+			result.State = "failed"
+		}
+		result.Error = "Codex task launch did not complete; review this task before retrying."
+	} else {
+		result.State = "task_created"
+	}
+	_, err = repository.CompleteArchaeologyTaskLaunch(ctx, result)
+	return err
 }
 func (s *Service) PauseProjectArchaeology(ctx context.Context, principal, requestID string, input ArchaeologyTransitionRequest) (ArchaeologySession, error) {
 	repository, err := s.archaeologyRepository()
@@ -458,6 +619,74 @@ func (s *Service) ReportProjectArchaeology(ctx context.Context, handoffID, reque
 	}
 	value, err := repository.ReportArchaeologyHandoff(ctx, domain.ArchaeologyHandoffReport{HandoffID: handoffID, RequestID: requestID, SessionID: sessionID, Outcomes: outcomes})
 	return s.archaeologySessionView(value), err
+}
+
+func (s *Service) ClaimProjectArchaeologyTask(ctx context.Context, input ArchaeologyTaskClaimRequest) (ArchaeologyTaskClaimResponse, error) {
+	repository, err := s.archaeologyRepository()
+	if err != nil {
+		return ArchaeologyTaskClaimResponse{}, err
+	}
+	if len(input.Grant) < 32 || len(input.Grant) > 100 || strings.TrimSpace(input.Grant) != input.Grant {
+		return ArchaeologyTaskClaimResponse{}, domain.ErrInvalid
+	}
+	var raw [32]byte
+	if _, err = rand.Read(raw[:]); err != nil {
+		return ArchaeologyTaskClaimResponse{}, domain.ErrUnavailable
+	}
+	token := base64.RawURLEncoding.EncodeToString(raw[:])
+	expires := s.clock.Now().UTC().Add(30 * time.Minute)
+	claim, err := repository.ClaimArchaeologyTaskLaunch(ctx, domain.ArchaeologyTaskClaim{
+		LaunchID: input.LaunchID, ProjectID: input.ProjectID, ThreadID: input.ThreadID, CodexSessionID: input.CodexSessionID,
+		GrantDigest: sha256.Sum256([]byte(input.Grant)), ReportDigest: sha256.Sum256([]byte(token)), ReportExpiresAt: expires,
+	})
+	if err != nil {
+		return ArchaeologyTaskClaimResponse{}, err
+	}
+	return ArchaeologyTaskClaimResponse{LaunchID: claim.LaunchID, ProjectID: claim.ProjectID, ThreadID: claim.ThreadID, CodexSessionID: claim.CodexSessionID, ReportToken: token, ReportExpiresAt: claim.ReportExpiresAt}, nil
+}
+
+func (s *Service) ReportProjectArchaeologyTask(ctx context.Context, requestID string, input ArchaeologyTaskReportEnvelope) (ArchaeologySession, error) {
+	repository, err := s.archaeologyRepository()
+	if err != nil {
+		return ArchaeologySession{}, err
+	}
+	if len(input.ReportToken) < 32 || len(input.ReportToken) > 100 || strings.TrimSpace(input.ReportToken) != input.ReportToken {
+		return ArchaeologySession{}, domain.ErrInvalid
+	}
+	outcomes, err := s.archaeologyReportOutcomes(ctx, input.Outcomes)
+	if err != nil {
+		return ArchaeologySession{}, err
+	}
+	value, err := repository.ReportArchaeologyTaskLaunch(ctx, domain.ArchaeologyTaskReport{
+		LaunchID: input.LaunchID, ProjectID: input.ProjectID, ThreadID: input.ThreadID, CodexSessionID: input.CodexSessionID,
+		RequestID: requestID, ReportDigest: sha256.Sum256([]byte(input.ReportToken)), Outcomes: outcomes,
+	})
+	return s.archaeologySessionView(value), err
+}
+
+func (s *Service) archaeologyReportOutcomes(ctx context.Context, input []ArchaeologyOutcomeReportRequest) ([]domain.ArchaeologyOutcome, error) {
+	outcomes := make([]domain.ArchaeologyOutcome, 0, len(input))
+	for _, item := range input {
+		if item.HistoricalImport.ConfirmSourceDigest != "" {
+			return nil, domain.ErrInvalid
+		}
+		if _, err := s.PreviewHistoricalTaskImport(ctx, item.ProjectID, item.HistoricalImport, ProjectCoreActor{}); err != nil {
+			return nil, err
+		}
+		proposal, err := json.Marshal(item.HistoricalImport)
+		if err != nil {
+			return nil, domain.ErrInvalid
+		}
+		outcome := domain.ArchaeologyOutcome{ID: item.ID, Title: item.Title, Summary: item.Summary, ProjectID: item.ProjectID, SourceCount: item.SourceCount, ProposalJSON: string(proposal)}
+		for _, source := range item.Provenance {
+			outcome.Provenance = append(outcome.Provenance, domain.ArchaeologyProvenance{Kind: source.SourceKind, StableID: source.SourceLabel, Digest: source.Digest, OccurredAt: source.RecordedAt})
+		}
+		for _, member := range item.Contributors {
+			outcome.Contributors = append(outcome.Contributors, domain.ArchaeologyContributor{SessionID: member.SessionID, Contribution: member.Contribution, DemonstratedStrength: member.DemonstratedStrength, Uncertainty: member.Uncertainty, Confidence: member.Confidence})
+		}
+		outcomes = append(outcomes, outcome)
+	}
+	return outcomes, nil
 }
 
 func (s *Service) PreviewArchaeologyImport(ctx context.Context, principal string, input ArchaeologyImportPreviewRequest, actor ProjectCoreActor) (ArchaeologyImportPreview, error) {

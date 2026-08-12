@@ -81,6 +81,33 @@ type Client interface {
 	Close() error
 }
 
+// Workspace is the metadata-only subset of a Codex thread inventory that
+// Commons may use to build a project catalog. Prompt previews and thread names
+// are intentionally not represented here.
+type Workspace struct {
+	CWD       string
+	UpdatedAt time.Time
+	GitOrigin string
+	GitBranch string
+}
+
+type TaskLaunch struct {
+	ThreadID     string
+	SessionID    string
+	TurnID       string
+	ThreadStatus string
+	TurnStatus   string
+}
+
+// ArchaeologyClient is an optional capability implemented by the managed
+// App Server client. Keeping it separate preserves the narrow authentication
+// test doubles while allowing Commons to truthfully advertise task launch.
+type ArchaeologyClient interface {
+	ListWorkspaces(context.Context) ([]Workspace, error)
+	SupportsModel(context.Context, string, string) (bool, error)
+	LaunchTask(context.Context, string, string, string, string, string) (TaskLaunch, error)
+}
+
 // UnavailableClient is the safe server-side fallback when the optional Codex
 // CLI is not installed or its App Server cannot be initialized. Keeping the
 // capability present lets the HTTP status endpoint explain the unavailable
