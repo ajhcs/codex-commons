@@ -99,3 +99,19 @@ test("Codex adapter rejects untrusted verification URLs and malformed poll DTOs"
   });
   await assert.rejects(invalidPoll.pollCodexPairing("attempt"), (error) => error.code === "invalid_payload");
 });
+
+test("Codex adapter explains an active browser pairing instead of a generic content conflict", async () => {
+  const adapter = createHTTPAdapter({
+    fetchImpl: async () => apiResponse(null, {
+      status: 409,
+      ok: false,
+      error: { code: "pairing_attempt_active", message: "active" },
+    }),
+  });
+  await assert.rejects(adapter.startCodexPairing(), (error) => {
+    assert.equal(error.code, "pairing_attempt_active");
+    assert.match(error.message, /already active in this browser/i);
+    assert.doesNotMatch(error.message, /newer Commons activity/i);
+    return true;
+  });
+});

@@ -114,6 +114,7 @@ function responseError(response, envelope) {
   if (code === "authorization_cancelled") message = "Codex sign-in was cancelled.";
   if (code === "authorization_failed") message = "Codex sign-in was not completed.";
   if (code === "pairing_not_found") message = "That Codex sign-in attempt is no longer available.";
+  if (code === "pairing_attempt_active") message = "A Codex sign-in is already active in this browser. Return to its code or cancel it before starting again.";
   return new CommonsAPIError(message, { code, status: response.status, requestID });
 }
 

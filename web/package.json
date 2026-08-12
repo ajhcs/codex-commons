@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build && node scripts/prepare-sites-build.mjs",
     "preview": "vite preview",
-    "test": "node --test src/contracts/authState.test.js src/data/adapter.test.js src/data/authAdapter.test.js src/components/authorIdentity.test.js src/features/project-archaeology/projectArchaeologyState.test.js",
+    "test": "node --test src/contracts/authState.test.js src/data/adapter.test.js src/data/authAdapter.test.js src/browser/copyText.test.js src/components/authorIdentity.test.js src/features/project-archaeology/projectArchaeologyState.test.js",
     "test:sites": "node --test tests/sites-worker.test.mjs"
   },
   "dependencies": {

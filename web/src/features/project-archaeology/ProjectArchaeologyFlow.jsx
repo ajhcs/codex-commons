@@ -6,10 +6,13 @@ import { HistoricalImportPreviewDialog } from "./HistoricalImportPreviewDialog.j
 import { ProjectArchaeologyDialog } from "./ProjectArchaeologyDialog.jsx";
 
 function message(error, fallback) {
+  if (error?.code === "invalid_payload") return "Commons returned project-history data this version cannot safely use.";
+  if (error?.code === "unavailable" || error?.status === 503) return "Project history is not available on this Commons installation yet.";
+  if (error?.status === 403) return "This Commons account cannot open project history.";
   return error?.message || fallback;
 }
 
-export function ProjectArchaeologyFlow({ open, onClose, onNavigate }) {
+export function ProjectArchaeologyFlow({ open, initialArchaeology = null, onClose, onNavigate }) {
   const auth = useAuthSession();
   const controllerRef = useRef(null);
   const [archaeology, setArchaeology] = useState(null);
@@ -31,6 +34,7 @@ export function ProjectArchaeologyFlow({ open, onClose, onNavigate }) {
   }
 
   async function refresh() {
+    setArchaeology(null);
     setBusy(true);
     setError("");
     try {
@@ -47,9 +51,16 @@ export function ProjectArchaeologyFlow({ open, onClose, onNavigate }) {
 
   useEffect(() => {
     if (!open || !auth.session?.authenticated) return undefined;
+    if (initialArchaeology) {
+      setArchaeology(initialArchaeology);
+      setBusy(false);
+      setError("");
+      return undefined;
+    }
     const controller = new AbortController();
     controllerRef.current?.abort();
     controllerRef.current = controller;
+    setArchaeology(null);
     setBusy(true);
     setError("");
     commonsAdapter.readProjectArchaeology(controller.signal)
@@ -57,7 +68,7 @@ export function ProjectArchaeologyFlow({ open, onClose, onNavigate }) {
       .catch((next) => { if (next?.name !== "AbortError") handleError(next, "Project Archaeology is unavailable."); })
       .finally(() => { if (controllerRef.current === controller) { controllerRef.current = null; setBusy(false); } });
     return () => controller.abort();
-  }, [auth.session?.authenticated, open]);
+  }, [auth.session?.authenticated, initialArchaeology, open]);
 
   useEffect(() => () => controllerRef.current?.abort(), []);
 

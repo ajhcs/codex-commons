@@ -2,8 +2,10 @@ import { useEffect, useId, useRef, useState } from "react";
 import { isValidHumanDisplayName, isValidHumanHandle } from "../contracts/commons.js";
 import { commonsAdapter } from "../data/adapter.js";
 import { useAuthSession } from "../hooks/useAuthSession.js";
-import BookOpen from "../icons/BookOpen.tsx";
+import { copyText, manualCopyShortcut } from "../browser/copyText.js";
+import Members from "../icons/Members.tsx";
 import AuthJourney from "./AuthJourney.jsx";
+import CommonsCompanion from "./CommonsCompanion.jsx";
 
 export function createIdempotencyKey() {
   const browserCrypto = globalThis.crypto;
@@ -240,13 +242,13 @@ export function LoginDialog({ open, onClose, onAuthenticated }) {
   }
 
   async function copyCode() {
-    if (!pairing?.userCode || typeof globalThis.navigator?.clipboard?.writeText !== "function") return;
-    try {
-      await globalThis.navigator.clipboard.writeText(pairing.userCode);
+    const copied = await copyText(pairing?.userCode || "");
+    if (copied) {
       setCopyState("Code copied");
-    } catch {
-      setCopyState("Copy unavailable");
+      return;
     }
+    setCopyState(`Copy didn't work. Press ${manualCopyShortcut()} with the code selected.`);
+    queueMicrotask(() => { codeRef.current?.focus({ preventScroll: true }); codeRef.current?.select(); });
   }
 
   const title = completionMode ? "Welcome to Commons" : profileMode ? "Finish your Commons profile" : pairingMode ? pairing?.userCode ? "Authorize with Codex" : "Connecting to Codex" : flowError ? "Codex sign-in needs attention" : recoveryOpen ? "Use a recovery key" : "Sign in to Commons";
@@ -266,7 +268,7 @@ export function LoginDialog({ open, onClose, onAuthenticated }) {
     <dialog ref={dialogRef} className="auth-dialog auth-dialog--codex" onClose={closed} onCancel={cancel} onKeyDown={keepFocusInside}>
       <form onSubmit={profileMode ? submitProfile : recoveryOpen ? submitRecovery : (event) => { event.preventDefault(); beginCodex(); }}>
         <header>
-          <span className="auth-mark" aria-hidden="true"><BookOpen /></span>
+          <span className="auth-mark"><CommonsCompanion state={completionMode ? "identity-resolved" : pairingMode ? journeyStage === "authorize" ? "authorized" : "connecting" : "idle"} size="small" /></span>
           <div>
             <h2>{title}</h2>
             <p>{description}</p>
@@ -296,7 +298,16 @@ export function LoginDialog({ open, onClose, onAuthenticated }) {
               <>
                 <div className="pairing-code-card">
                   <span>One-time code</span>
-                  <strong ref={codeRef} aria-describedby={pairingHelpID}>{pairing.userCode}</strong>
+                  <input
+                    ref={codeRef}
+                    className="pairing-code-value"
+                    value={pairing.userCode}
+                    readOnly
+                    spellCheck="false"
+                    aria-label="One-time code"
+                    aria-describedby={pairingHelpID}
+                    onFocus={(event) => event.currentTarget.select()}
+                  />
                   <button type="button" className="secondary-button" onClick={copyCode}>Copy code</button>
                   <small role="status">{copyState || "\u00a0"}</small>
                 </div>
@@ -406,7 +417,7 @@ export function ProfileDialog({ open, onClose }) {
     <dialog ref={dialogRef} className="auth-dialog profile-dialog" onClose={close} onCancel={(event) => { event.preventDefault(); close(); }}>
       <form onSubmit={submit}>
         <header>
-          <span className="auth-mark" aria-hidden="true"><BookOpen /></span>
+          <span className="auth-mark"><CommonsCompanion state="authorized" size="small" /></span>
           <div><h2>Edit profile</h2><p>Your dynamic human identity is used for new Commons writing.</p></div>
         </header>
         <ProfileFields value={profile} onChange={setProfile} disabled={state.state === "loading"} />
@@ -422,7 +433,7 @@ export function ProfileDialog({ open, onClose }) {
 
 export function SessionControl({ status, session, onSignIn, onSignOut, onEditProfile, onOpenArchaeology }) {
   if (status === "loading" && !session) return <span className="session-status">Checking session…</span>;
-  if (!session?.authenticated) return <button type="button" className="session-sign-in" onClick={onSignIn}>Sign in</button>;
+  if (!session?.authenticated) return <button type="button" className="session-sign-in" onClick={onSignIn}><Members aria-hidden="true" /><strong>Sign in</strong></button>;
   const name = session.principal.displayName;
   const method = session.authMethod === "codex" ? "Signed in with Codex" : "Signed in with recovery";
   return (

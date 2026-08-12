@@ -24,6 +24,7 @@ type authTestCodexClient struct {
 	pollResults  []codexauth.LoginResult
 	pollIDs      []string
 	cancelledIDs []string
+	startCalls   int
 	handler      func(codexauth.Event)
 }
 
@@ -36,6 +37,7 @@ func (c *authTestCodexClient) Available() bool {
 func (c *authTestCodexClient) StartDeviceCode(context.Context) (codexauth.DeviceCode, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.startCalls++
 	if !c.available {
 		return codexauth.DeviceCode{}, codexauth.ErrUnavailable
 	}
@@ -278,9 +280,23 @@ func TestCodexStartCookieOriginAndAttemptBinding(t *testing.T) {
 		t.Fatalf("start response=%+v", start)
 	}
 	duplicate := codexAuthRequest(handler, http.MethodPost, "http://commons.test/v1/auth/codex/start", `{}`, "http://commons.test", "127.0.0.1:4321", pairingCookie)
-	if duplicate.Code != http.StatusConflict || !strings.Contains(duplicate.Body.String(), `"pairing_attempt_active"`) {
+	if duplicate.Code != http.StatusOK {
 		t.Fatalf("duplicate start code=%d body=%s", duplicate.Code, duplicate.Body.String())
 	}
+	var duplicateResponse struct {
+		Data codexStartResult `json:"data"`
+	}
+	if err := decodeJSONResponse(duplicate, &duplicateResponse); err != nil {
+		t.Fatal(err)
+	}
+	if duplicateResponse.Data.AttemptID != start.AttemptID || duplicateResponse.Data.UserCode != start.UserCode || duplicateResponse.Data.VerificationURL != start.VerificationURL {
+		t.Fatalf("duplicate start did not resume the same attempt: first=%+v duplicate=%+v", start, duplicateResponse.Data)
+	}
+	client.mu.Lock()
+	if client.startCalls != 2 {
+		t.Fatalf("resuming active pairing started another Codex login: calls=%d", client.startCalls)
+	}
+	client.mu.Unlock()
 
 	wrongCookie := &http.Cookie{Name: pairingCookieName, Value: "different-browser"}
 	boundToOtherBrowser := codexAuthRequest(handler, http.MethodPost, "http://commons.test/v1/auth/codex/poll", `{"attempt_id":"`+start.AttemptID+`"}`, "http://commons.test", "127.0.0.1:4321", wrongCookie)
@@ -337,7 +353,7 @@ func TestCodexPairingExpiryPollRateAndAttemptBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !manager.attachLogin(attempt.id, "login-a") {
+	if !manager.attachLogin(attempt.id, "login-a", "https://auth.openai.com/codex/device", "ABCD-EFGH") {
 		t.Fatal("failed to attach login")
 	}
 	if _, found, expired := manager.lookup(attempt.id, "cookie-b"); found || expired {

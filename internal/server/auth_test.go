@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"codex-commons/internal/codexauth"
 	"codex-commons/internal/demodata"
 	"codex-commons/internal/domain"
 	"codex-commons/internal/httpapi"
@@ -20,6 +21,27 @@ import (
 )
 
 const runtimeAdminSecret = "slice-10-disposable-human-secret"
+
+type continuationCodexClient struct {
+	loginID string
+	email   string
+	handler func(codexauth.Event)
+}
+
+func (c *continuationCodexClient) Available() bool { return true }
+func (c *continuationCodexClient) StartDeviceCode(context.Context) (codexauth.DeviceCode, error) {
+	return codexauth.DeviceCode{LoginID: c.loginID, VerificationURL: "https://auth.openai.com/codex/device", UserCode: "TEST-CODE"}, nil
+}
+func (c *continuationCodexClient) PollLogin(context.Context, string) (codexauth.LoginResult, error) {
+	email := c.email
+	return codexauth.LoginResult{State: "success", Account: &codexauth.Account{Type: "chatgpt", Email: &email}}, nil
+}
+func (*continuationCodexClient) CancelLogin(context.Context, string) error { return nil }
+func (*continuationCodexClient) AccountState(context.Context) (codexauth.AccountState, error) {
+	return codexauth.AccountSignedIn, nil
+}
+func (c *continuationCodexClient) SetEventHandler(handler func(codexauth.Event)) { c.handler = handler }
+func (*continuationCodexClient) Close() error                                    { return nil }
 
 func TestShortHumanSecretRequiresExplicitInsecureLANMode(t *testing.T) {
 	config := server.DefaultConfig()
@@ -202,6 +224,163 @@ func runtimeLogin(t *testing.T, handler http.Handler) (*http.Cookie, string) {
 		t.Fatalf("login cookies=%v data=%+v", cookies, response.Data)
 	}
 	return cookies[0], response.Data.CSRFToken
+}
+
+func runtimeCodexRequest(handler http.Handler, method, target, body string, cookie *http.Cookie) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	req.Host = "127.0.0.1:8088"
+	req.RemoteAddr = "127.0.0.1:54321"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "http://127.0.0.1:8088")
+	if cookie != nil {
+		req.AddCookie(cookie)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, req)
+	return response
+}
+
+func runtimeCodexStart(t *testing.T, handler http.Handler) (string, *http.Cookie) {
+	t.Helper()
+	response := runtimeCodexRequest(handler, http.MethodPost, "http://commons.test/v1/auth/codex/start", `{}`, nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("Codex start code=%d body=%s", response.Code, response.Body.String())
+	}
+	var envelope struct {
+		Data struct {
+			AttemptID string `json:"attempt_id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil || envelope.Data.AttemptID == "" {
+		t.Fatalf("Codex start body=%s err=%v", response.Body.String(), err)
+	}
+	cookies := response.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("Codex start cookie count=%d, want 1", len(cookies))
+	}
+	return envelope.Data.AttemptID, cookies[0]
+}
+
+func runtimeCodexPoll(t *testing.T, handler http.Handler, attemptID string, pairing *http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
+	return runtimeCodexRequest(handler, http.MethodPost, "http://commons.test/v1/auth/codex/poll", `{"attempt_id":"`+attemptID+`"}`, pairing)
+}
+
+func humanSessionCookie(t *testing.T, response *httptest.ResponseRecorder) *http.Cookie {
+	t.Helper()
+	for _, cookie := range response.Result().Cookies() {
+		if cookie.Name == httpapi.HumanSessionCookieName && cookie.Value != "" && cookie.MaxAge >= 0 {
+			return cookie
+		}
+	}
+	t.Fatal("human session cookie missing")
+	return nil
+}
+
+func assertArchaeologyContinuation(t *testing.T, handler http.Handler, cookie *http.Cookie) {
+	t.Helper()
+	response := runtimeRequest(handler, http.MethodGet, "http://commons.test/v1/project-archaeology", "", cookie, "", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("archaeology continuation code=%d body=%s", response.Code, response.Body.String())
+	}
+	var envelope struct {
+		Data struct {
+			ID        string `json:"id"`
+			State     string `json:"state"`
+			Discovery struct {
+				State              string            `json:"state"`
+				Candidates         []json.RawMessage `json:"candidates"`
+				SourceRootsScanned int               `json:"source_roots_scanned"`
+				MetadataOnly       bool              `json:"metadata_only"`
+			} `json:"discovery"`
+			Config struct {
+				SelectedProjectIDs []string `json:"selected_project_ids"`
+				Depth              string   `json:"depth"`
+				MaxConcurrency     int      `json:"max_concurrency"`
+			} `json:"config"`
+			Runs         []json.RawMessage          `json:"runs"`
+			Revision     int64                      `json:"revision"`
+			Capabilities map[string]json.RawMessage `json:"capabilities"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode archaeology continuation: %v body=%s", err, response.Body.String())
+	}
+	data := envelope.Data
+	if data.ID != "" || data.State != "draft" || data.Discovery.State != "idle" || !data.Discovery.MetadataOnly || data.Discovery.SourceRootsScanned != 0 || data.Config.Depth != "standard" || data.Config.MaxConcurrency != 2 || data.Revision != 0 {
+		t.Fatalf("unexpected virtual draft: %+v", data)
+	}
+	if data.Discovery.Candidates == nil || data.Config.SelectedProjectIDs == nil || data.Runs == nil {
+		t.Fatalf("bounded response collections must be JSON arrays: %s", response.Body.String())
+	}
+	for _, name := range []string{"discovery", "historian_handoff", "review", "canonical_apply"} {
+		raw, ok := data.Capabilities[name]
+		if !ok {
+			t.Fatalf("missing capability %q: %s", name, response.Body.String())
+		}
+		var capability struct {
+			Configured bool   `json:"configured"`
+			Available  bool   `json:"available"`
+			Mode       string `json:"mode"`
+		}
+		if err := json.Unmarshal(raw, &capability); err != nil || capability.Mode == "" {
+			t.Fatalf("invalid capability %q: %s", name, raw)
+		}
+	}
+}
+
+func TestCodexFirstProfileAndExistingBindingReceiveValidArchaeologyContinuation(t *testing.T) {
+	ctx := context.Background()
+	database := filepath.Join(t.TempDir(), "commons.sqlite")
+	var bindingKey [32]byte
+	for index := range bindingKey {
+		bindingKey[index] = byte(index + 1)
+	}
+	newConfig := func(loginID string) server.Config {
+		config := server.DefaultConfig()
+		config.DatabasePath = database
+		config.WebDir = testWeb(t)
+		config.CodexAuth = true
+		config.CodexBin = "/usr/bin/codex"
+		config.CodexClient = &continuationCodexClient{loginID: loginID, email: "continuation@example.com"}
+		config.CodexBindingKey = bindingKey
+		config.CodexBindingKeySet = true
+		return config
+	}
+
+	first, err := server.New(ctx, newConfig("first-login"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anonymous := runtimeRequest(first.Handler(), http.MethodGet, "http://commons.test/v1/project-archaeology", "", nil, "", "")
+	if anonymous.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous archaeology read code=%d body=%s", anonymous.Code, anonymous.Body.String())
+	}
+	attemptID, pairing := runtimeCodexStart(t, first.Handler())
+	poll := runtimeCodexPoll(t, first.Handler(), attemptID, pairing)
+	if poll.Code != http.StatusOK || !strings.Contains(poll.Body.String(), `"state":"needs_profile"`) {
+		t.Fatalf("first Codex poll code=%d body=%s", poll.Code, poll.Body.String())
+	}
+	profile := runtimeCodexRequest(first.Handler(), http.MethodPost, "http://commons.test/v1/auth/codex/profile", `{"attempt_id":"`+attemptID+`","display_name":"Continuation Admin","handle":"continuation-admin"}`, pairing)
+	if profile.Code != http.StatusOK {
+		t.Fatalf("Codex profile code=%d body=%s", profile.Code, profile.Body.String())
+	}
+	assertArchaeologyContinuation(t, first.Handler(), humanSessionCookie(t, profile))
+	if err = first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := server.New(ctx, newConfig("existing-login"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	attemptID, pairing = runtimeCodexStart(t, second.Handler())
+	poll = runtimeCodexPoll(t, second.Handler(), attemptID, pairing)
+	if poll.Code != http.StatusOK || !strings.Contains(poll.Body.String(), `"auth_method":"codex"`) {
+		t.Fatalf("existing Codex poll code=%d body=%s", poll.Code, poll.Body.String())
+	}
+	assertArchaeologyContinuation(t, second.Handler(), humanSessionCookie(t, poll))
 }
 
 func TestHumanPostCommentStateDurabilityAndSessionRestart(t *testing.T) {

@@ -38,18 +38,20 @@ const (
 )
 
 type pairingAttempt struct {
-	id         string
-	cookieHash string
-	loginID    string
-	createdAt  time.Time
-	expiresAt  time.Time
-	state      pairingState
-	digest     [32]byte
-	hasDigest  bool
-	errorCode  string
-	polls      int
-	lastPoll   time.Time
-	polling    bool
+	id              string
+	cookieHash      string
+	loginID         string
+	verificationURL string
+	userCode        string
+	createdAt       time.Time
+	expiresAt       time.Time
+	state           pairingState
+	digest          [32]byte
+	hasDigest       bool
+	errorCode       string
+	polls           int
+	lastPoll        time.Time
+	polling         bool
 }
 
 type pairingManager struct {
@@ -116,16 +118,34 @@ func (m *pairingManager) reserve(cookieHash, remote string) (*pairingAttempt, er
 	return &snapshot, nil
 }
 
-func (m *pairingManager) attachLogin(id, loginID string) bool {
+func (m *pairingManager) attachLogin(id, loginID, verificationURL, userCode string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	attempt := m.attempts[id]
-	if attempt == nil || attempt.state != pairingCreated || loginID == "" {
+	if attempt == nil || attempt.state != pairingCreated || loginID == "" || verificationURL == "" || userCode == "" {
 		return false
 	}
 	attempt.loginID = loginID
+	attempt.verificationURL = verificationURL
+	attempt.userCode = userCode
 	attempt.state = pairingWaiting
 	return true
+}
+
+func (m *pairingManager) activeForCookie(cookieHash string) (pairingAttempt, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := m.now().UTC()
+	m.cleanupLocked(now)
+	id := m.byCookie[cookieHash]
+	attempt := m.attempts[id]
+	if attempt == nil || attempt.verificationURL == "" || attempt.userCode == "" {
+		return pairingAttempt{}, false
+	}
+	if attempt.state != pairingWaiting && attempt.state != pairingNeedsProfile {
+		return pairingAttempt{}, false
+	}
+	return clonePairing(attempt), true
 }
 
 func (m *pairingManager) lookup(id, cookieHash string) (pairingAttempt, bool, bool) {
@@ -489,7 +509,14 @@ func (h *handler) codexStart(w http.ResponseWriter, r *http.Request, rid string)
 		}
 		setCookie = true
 	}
-	attempt, err := h.pairings.reserve(pairingHash(pairingValue), requestRemoteKey(r))
+	cookieHash := pairingHash(pairingValue)
+	if hasCookie {
+		if active, found := h.pairings.activeForCookie(cookieHash); found {
+			h.write(w, http.StatusOK, envelope{OK: true, Data: codexStartResult{AttemptID: active.id, VerificationURL: active.verificationURL, UserCode: active.userCode, ExpiresAt: active.expiresAt, PollAfterMS: 1500}, Meta: responseMeta{RequestID: rid}})
+			return
+		}
+	}
+	attempt, err := h.pairings.reserve(cookieHash, requestRemoteKey(r))
 	if err != nil {
 		if errors.Is(err, domain.ErrConflict) {
 			h.writeError(w, rid, http.StatusConflict, "pairing_attempt_active", "A Codex sign-in is already active for this browser.")
@@ -506,7 +533,7 @@ func (h *handler) codexStart(w http.ResponseWriter, r *http.Request, rid string)
 		h.writeError(w, rid, http.StatusServiceUnavailable, "codex_unavailable", "Codex authentication is unavailable")
 		return
 	}
-	if !h.pairings.attachLogin(attempt.id, device.LoginID) {
+	if !h.pairings.attachLogin(attempt.id, device.LoginID, device.VerificationURL, device.UserCode) {
 		h.pairings.remove(attempt.id)
 		h.writeError(w, rid, http.StatusServiceUnavailable, "codex_unavailable", "Codex authentication is unavailable")
 		return
