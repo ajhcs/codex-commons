@@ -29,7 +29,7 @@ func TestArchaeologyInventoryUsesStateDBOnlyAndDoesNotDeserializePrompts(t *test
 	if err := json.Unmarshal(request.Params, &params); err != nil {
 		t.Fatal(err)
 	}
-	if params["useStateDbOnly"] != true || params["limit"] != float64(100) {
+	if params["useStateDbOnly"] != true || params["limit"] != float64(workspacePageSize) {
 		t.Fatalf("params=%v", params)
 	}
 	if kinds, ok := params["sourceKinds"].([]any); !ok || len(kinds) != 10 {

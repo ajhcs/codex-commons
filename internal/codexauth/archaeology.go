@@ -9,6 +9,7 @@ import (
 )
 
 const maxWorkspaceInventory = 10000
+const workspacePageSize = 10
 
 type workspaceThread struct {
 	CWD       string `json:"cwd"`
@@ -22,8 +23,8 @@ type workspaceThread struct {
 func (c *ClientImpl) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
 	cursor := ""
 	out := make([]Workspace, 0, 100)
-	for page := 0; page < 100 && len(out) < maxWorkspaceInventory; page++ {
-		params := map[string]any{"limit": 100, "useStateDbOnly": true, "sortKey": "updated_at", "sortDirection": "desc", "sourceKinds": []string{
+	for page := 0; page < maxWorkspaceInventory/workspacePageSize && len(out) < maxWorkspaceInventory; page++ {
+		params := map[string]any{"limit": workspacePageSize, "useStateDbOnly": true, "sortKey": "updated_at", "sortDirection": "desc", "sourceKinds": []string{
 			"cli", "vscode", "exec", "appServer", "subAgent", "subAgentReview", "subAgentCompact", "subAgentThreadSpawn", "subAgentOther", "unknown",
 		}}
 		if cursor != "" {
@@ -37,7 +38,7 @@ func (c *ClientImpl) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
 			Data       []workspaceThread `json:"data"`
 			NextCursor *string           `json:"nextCursor"`
 		}
-		if err := decodeOne(raw, &value); err != nil || len(value.Data) > 100 {
+		if err := decodeOne(raw, &value); err != nil || len(value.Data) > workspacePageSize {
 			return nil, ErrProtocol
 		}
 		for _, thread := range value.Data {
