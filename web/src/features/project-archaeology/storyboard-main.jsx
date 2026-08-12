@@ -55,7 +55,7 @@ function Storyboard() {
         identity={archaeologyIdentityFixture}
         archaeology={model}
         busy={busy}
-        onDiscover={() => briefly(() => setModel(archaeologyReadyFixture))}
+        onDiscover={() => briefly(() => setModel((current) => ({ ...archaeologyReadyFixture, revision: (current?.revision || 0) + 1 })))}
         onStart={() => briefly(() => setModel(archaeologyHandoffFixture))}
         onRefresh={() => briefly(() => setModel(archaeologyReviewFixture))}
         onReview={() => briefly(() => setOpen(false))}

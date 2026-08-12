@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  archaeologyConfigVersion,
   archaeologyView,
   canStartArchaeology,
   configFromModel,
@@ -8,6 +9,14 @@ import {
   memberFacts,
   runProgressText,
 } from "./projectArchaeologyState.js";
+
+test("configuration versions change when rediscovery updates the same session", () => {
+  assert.equal(archaeologyConfigVersion({ id: "ARCH-1", revision: 4 }), "ARCH-1:4");
+  assert.notEqual(
+    archaeologyConfigVersion({ id: "ARCH-1", revision: 4 }),
+    archaeologyConfigVersion({ id: "ARCH-1", revision: 5 }),
+  );
+});
 
 test("archaeology view follows real discovery and run state", () => {
   assert.equal(archaeologyView(null), "intro");

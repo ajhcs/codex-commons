@@ -17,6 +17,7 @@ export function ProjectArchaeologyFlow({ open, initialArchaeology = null, onClos
   const controllerRef = useRef(null);
   const [archaeology, setArchaeology] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [refreshingProjects, setRefreshingProjects] = useState(false);
   const [error, setError] = useState("");
   const [previewBridge, setPreviewBridge] = useState(null);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -73,6 +74,7 @@ export function ProjectArchaeologyFlow({ open, initialArchaeology = null, onClos
   useEffect(() => () => controllerRef.current?.abort(), []);
 
   async function discover() {
+    setRefreshingProjects(true);
     setBusy(true);
     setError("");
     try {
@@ -80,6 +82,7 @@ export function ProjectArchaeologyFlow({ open, initialArchaeology = null, onClos
     } catch (next) {
       handleError(next, "Commons could not check project metadata.");
     } finally {
+      setRefreshingProjects(false);
       setBusy(false);
     }
   }
@@ -162,6 +165,7 @@ export function ProjectArchaeologyFlow({ open, initialArchaeology = null, onClos
         identity={auth.session?.principal}
         archaeology={archaeology}
         busy={busy}
+        refreshingProjects={refreshingProjects}
         error={error}
         onDiscover={discover}
         onStart={prepare}

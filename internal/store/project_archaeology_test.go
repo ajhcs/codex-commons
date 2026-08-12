@@ -70,6 +70,50 @@ func TestProjectArchaeologyIdempotencyBoundsAndRestart(t *testing.T) {
 	}
 }
 
+func TestProjectArchaeologyUpgradeReusesUntouchedLegacyHandoffAfterRediscovery(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 12, 14, 0, 0, 0, time.UTC)
+	s, err := Open(ctx, ":memory:", WithClock(func() time.Time { return now }))
+	must(t, err)
+	defer s.Close()
+	legacy := domain.ArchaeologyDiscovery{Candidates: []domain.ArchaeologyCandidate{{ID: "legacy", Name: "Legacy", PathLabel: "Legacy", HasGit: true, DurationMinSeconds: 1, DurationMaxSeconds: 2, RelativeCost: "low"}}}
+	session, err := s.ReplaceArchaeologyDiscovery(ctx, domain.ArchaeologyMutation{Principal: domain.HumanLocalPrincipal, RequestID: "legacy-discover"}, legacy)
+	must(t, err)
+	session, err = s.ConfigureArchaeology(ctx, domain.ArchaeologyMutation{Principal: domain.HumanLocalPrincipal, RequestID: "legacy-config", BaseRevision: session.Revision, Config: domain.ArchaeologyConfig{SelectedProjectIDs: []string{"legacy"}, Depth: "quick", Sources: domain.ArchaeologySources{Git: true}, MaxConcurrency: 1}})
+	must(t, err)
+	session, err = s.StartArchaeology(ctx, domain.ArchaeologyMutation{Principal: domain.HumanLocalPrincipal, RequestID: "legacy-start", BaseRevision: session.Revision})
+	must(t, err)
+	legacyPack := `{"legacy":"preserved audit evidence"}`
+	_, err = s.DB().ExecContext(ctx, `UPDATE archaeology_handoffs SET pack_json=? WHERE id=?`, legacyPack, session.Handoff.ID)
+	must(t, err)
+	var beforeCreated, beforeUpdated string
+	must(t, s.DB().QueryRowContext(ctx, `SELECT created_at,updated_at FROM archaeology_handoffs WHERE id=?`, session.Handoff.ID).Scan(&beforeCreated, &beforeUpdated))
+
+	now = now.Add(time.Hour)
+	fresh := domain.ArchaeologyDiscovery{Candidates: []domain.ArchaeologyCandidate{{ID: "fresh", Name: "Fresh", PathLabel: "Fresh", HasGit: true, HasCodexHistory: true, DurationMinSeconds: 1, DurationMaxSeconds: 2, RelativeCost: "low"}}}
+	session, err = s.ReplaceArchaeologyDiscovery(ctx, domain.ArchaeologyMutation{Principal: domain.HumanLocalPrincipal, RequestID: "native-rediscover"}, fresh)
+	must(t, err)
+	session, err = s.ConfigureArchaeology(ctx, domain.ArchaeologyMutation{Principal: domain.HumanLocalPrincipal, RequestID: "native-config", BaseRevision: session.Revision, Config: domain.ArchaeologyConfig{SelectedProjectIDs: []string{"fresh"}, Depth: "standard", Sources: domain.ArchaeologySources{Git: true}, MaxConcurrency: 1}})
+	must(t, err)
+	session, err = s.StartArchaeology(ctx, domain.ArchaeologyMutation{Principal: domain.HumanLocalPrincipal, RequestID: "native-start", BaseRevision: session.Revision})
+	must(t, err)
+	if session.Handoff == nil || session.Handoff.State != "ready_to_claim" {
+		t.Fatalf("handoff=%+v", session.Handoff)
+	}
+	var count int
+	var afterPack, afterCreated, afterUpdated string
+	must(t, s.DB().QueryRowContext(ctx, `SELECT count(*),pack_json,created_at,updated_at FROM archaeology_handoffs WHERE session_id=?`, session.ID).Scan(&count, &afterPack, &afterCreated, &afterUpdated))
+	if count != 1 || afterPack != legacyPack || afterCreated != beforeCreated || afterUpdated != beforeUpdated {
+		t.Fatalf("legacy handoff changed count=%d pack=%q created=%q updated=%q", count, afterPack, afterCreated, afterUpdated)
+	}
+	var launches, outcomes int
+	must(t, s.DB().QueryRowContext(ctx, `SELECT count(*) FROM archaeology_task_launches WHERE session_id=?`, session.ID).Scan(&launches))
+	must(t, s.DB().QueryRowContext(ctx, `SELECT count(*) FROM archaeology_outcomes o JOIN archaeology_runs r ON r.id=o.run_id WHERE r.session_id=?`, session.ID).Scan(&outcomes))
+	if launches != 0 || outcomes != 0 {
+		t.Fatalf("unexpected launches=%d outcomes=%d", launches, outcomes)
+	}
+}
+
 func TestProjectArchaeologyMigrationProtectsProvenance(t *testing.T) {
 	ctx := context.Background()
 	s, err := Open(ctx, ":memory:")

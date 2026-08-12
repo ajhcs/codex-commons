@@ -398,6 +398,27 @@ func archaeologyView(value domain.ArchaeologySession) ArchaeologySession {
 }
 func (s *Service) archaeologySessionView(value domain.ArchaeologySession) ArchaeologySession {
 	out := archaeologyView(value)
+	if s != nil {
+		_, native := s.archaeologyLauncher.(ArchaeologyTaskLauncher)
+		if native && value.Handoff != nil &&
+			value.Handoff.State == "ready_to_claim" && value.Handoff.ClaimedBy == "" && value.Handoff.ClaimedAt.IsZero() {
+			// An untouched pre-native handoff remains durable audit history, but is
+			// not a second control plane once direct App Server launch is configured.
+			nativeTasks := []ArchaeologyTaskLaunch{}
+			if out.Handoff != nil {
+				nativeTasks = out.Handoff.Tasks
+			}
+			out.Handoff = nil
+			out.Controls.CanStart = len(nativeTasks) == 0 && value.State == "draft" && len(value.Config.SelectedProjectIDs) > 0
+			out.Controls.CanPause, out.Controls.CanResume, out.Controls.CanCancel = false, false, false
+			if len(nativeTasks) > 0 {
+				// Present only the exact direct-task ledger. The compatibility row's ID,
+				// ready-to-claim state, and broad claim action stay server-side.
+				ids := append([]string(nil), out.Config.SelectedProjectIDs...)
+				out.Handoff = &ArchaeologyHandoff{State: "launching", Depth: out.Config.Depth, Sources: out.Config.Sources, Concurrency: out.Config.MaxConcurrency, CandidateIDs: ids, Tasks: nativeTasks, AllowedActions: []string{}}
+			}
+		}
+	}
 	if s != nil && s.archaeologyDiscoverer != nil {
 		out.Capabilities.Discovery = ArchaeologyCapability{Configured: true, Available: true, Mode: "codex_known_metadata", Reason: "Catalog uses bounded Codex thread metadata plus configured roots; message bodies are not read."}
 		out.Capabilities.ProjectCatalog = ArchaeologyCapability{Configured: true, Available: true, Mode: "codex_metadata", Reason: "Projects are grouped from Codex-known workspaces and additive configured roots."}
