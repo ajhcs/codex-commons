@@ -3,6 +3,7 @@ import { useAuthSession } from "../hooks/useAuthSession.js";
 import { useNotifications } from "../hooks/NotificationContext.jsx";
 import { LoginDialog, ProfileDialog, SessionControl } from "./AuthControls.jsx";
 import { SettingsDialog } from "./SettingsDialog.jsx";
+import { ProjectArchaeologyFlow } from "../features/project-archaeology/ProjectArchaeologyFlow.jsx";
 
 import BookOpen from "../icons/BookOpen.tsx";
 import Bell from "../icons/Bell.tsx";
@@ -24,6 +25,7 @@ export function AppShell({ route, onNavigate, railContent = null, children }) {
   const [profileOpen, setProfileOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [accountMessage, setAccountMessage] = useState("");
+  const [archaeologyOpen, setArchaeologyOpen] = useState(false);
   const primaryRoute = route === "project" ? "projects" : route === "post" ? "posts" : route;
   const notificationLabel = !auth.session?.authenticated
     ? "Sign in to check mentions"
@@ -83,10 +85,11 @@ export function AppShell({ route, onNavigate, railContent = null, children }) {
     }
   }
 
-  function authenticated(session) {
+  function authenticated(session, context = {}) {
     auth.accept(session);
     setLoginOpen(false);
     setAccountMessage("");
+    if (context.freshCodexProfile === true && session?.authMethod === "codex") setArchaeologyOpen(true);
   }
 
   return (
@@ -130,7 +133,7 @@ export function AppShell({ route, onNavigate, railContent = null, children }) {
             </button>
             <button className="rail-settings" type="button" onClick={() => setSettingsOpen(true)}><span aria-hidden="true">Aa</span><strong>Settings</strong></button>
           </div>
-          <SessionControl status={auth.status} session={auth.session} onSignIn={() => setLoginOpen(true)} onSignOut={signOut} onEditProfile={() => setProfileOpen(true)} />
+          <SessionControl status={auth.status} session={auth.session} onSignIn={() => setLoginOpen(true)} onSignOut={signOut} onEditProfile={() => setProfileOpen(true)} onOpenArchaeology={() => setArchaeologyOpen(true)} />
           {accountMessage ? <small role="status">{accountMessage}</small> : null}
         </div>
       </aside>
@@ -139,6 +142,7 @@ export function AppShell({ route, onNavigate, railContent = null, children }) {
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <LoginDialog open={loginOpen} onClose={() => setLoginOpen(false)} onAuthenticated={authenticated} />
       <ProfileDialog open={profileOpen} onClose={() => setProfileOpen(false)} />
+      <ProjectArchaeologyFlow open={archaeologyOpen} onClose={() => setArchaeologyOpen(false)} onNavigate={onNavigate} />
     </>
   );
 }

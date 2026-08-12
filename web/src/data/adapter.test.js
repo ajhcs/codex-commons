@@ -690,3 +690,128 @@ test("Slice 13 fixture mode keeps human identity dynamic and project lookup boun
   assert.equal(humanReply.author.principal, session.principal.principal);
   assert.equal(humanReply.author.displayName, session.principal.displayName);
 });
+
+function archaeologyPayload() {
+  const member = { session_id: "SES-4168", display_name: "Integration historian", reachability: "historical_or_unknown", execution: "not_attested", authority: "provenance_only", contribution_count: 6, source_count: 4, collaboration_count: 2, demonstrated_strengths: ["Provenance design"], uncertainties: ["Current reachability was not observed"] };
+  return {
+    id: "ARCH-1",
+    state: "completed",
+    discovery: {
+      state: "ready", metadata_only: true, source_roots_scanned: 4, discovered_at: "2026-08-12T12:00:00Z",
+      candidates: [{
+        id: "codex-commons", name: "Codex Commons", path_label: "~/codex-commons", repository_label: "codex-commons",
+        last_activity_at: "2026-08-12T11:00:00Z", signals: { git: true, docs: true, codex_history: true },
+        estimate: { duration_seconds_min: 240, duration_seconds_max: 480, relative_cost: "medium" },
+        privacy_note: "Only selected sources are read after start.", selected_by_default: false,
+      }],
+    },
+    config: { selected_project_ids: ["codex-commons"], depth: "standard", sources: { git: true, docs: true, codex_history: true }, max_concurrency: 2 },
+    runs: [{ id: "RUN-1", project_id: "codex-commons", state: "completed", phase_label: "Review ready", completed_units: 8, total_units: 8, outcomes_found: 1, sources_examined: 8 }],
+    review: {
+      proposed_outcomes: [{
+        id: "OUT-1", title: "Exact-session provenance", summary: "Connected durable work to its sessions.", project_id: "codex-commons", source_count: 1,
+        provenance: [{ source_kind: "git", source_label: "Repository history", digest: "sha256:source", recorded_at: "2026-08-12T11:00:00Z" }], member_sessions: [member],
+      }],
+      member_sessions: [member], provenance_summary: "Exact digests retained; explicit human approval is required.", can_apply: true, requires_explicit_approval: true,
+    },
+    capabilities: {
+      discovery: { configured: true, available: true, mode: "allowlisted_metadata" },
+      historian_handoff: { configured: true, available: true, mode: "export_claim_report" },
+      review: { configured: true, available: true, mode: "validated_manifest" },
+      canonical_apply: { configured: true, available: true, mode: "preview_digest_confirm" },
+    },
+    handoff: { id: "HAND-1", state: "completed", claimed_by: "SES-4168", depth: "standard", sources: { git: true, docs: true, codex_history: true }, concurrency: 2, candidate_ids: ["codex-commons"], pack: { title: "Codex Commons history", instructions: "Claim and report this bounded pack.", projects: [{ candidate_id: "codex-commons", label: "Codex Commons", task_prompt: "Review the supplied project history." }] }, allowed_actions: [] },
+    controls: { can_start: false, can_pause: false, can_resume: false, can_cancel: false },
+    revision: 7, updated_at: "2026-08-12T12:30:00Z",
+  };
+}
+
+test("Project Archaeology normalizes once and transports explicit human controls", async () => {
+  const calls = [];
+  const adapter = createHTTPAdapter({ fetchImpl: async (url, options) => {
+    calls.push({ url, options });
+    return apiResponse(archaeologyPayload());
+  }});
+  const model = await adapter.readProjectArchaeology();
+  await adapter.discoverProjectArchaeology({ csrfToken: "csrf", idempotencyKey: "arch-discover" });
+  await adapter.updateProjectArchaeologyConfig({ selectedProjectIds: ["codex-commons"], depth: "deep", sources: { git: true, docs: false, codexHistory: true }, maxConcurrency: 1 }, 7, { csrfToken: "csrf", idempotencyKey: "arch-config" });
+  await adapter.startProjectArchaeology(8, { csrfToken: "csrf", idempotencyKey: "arch-start" });
+  await adapter.pauseProjectArchaeology(8, { csrfToken: "csrf", idempotencyKey: "arch-pause" });
+  await adapter.resumeProjectArchaeology(9, { csrfToken: "csrf", idempotencyKey: "arch-resume" });
+  await adapter.cancelProjectArchaeology(10, { csrfToken: "csrf", idempotencyKey: "arch-cancel" });
+
+  assert.equal(model.discovery.metadataOnly, true);
+  assert.equal(model.discovery.candidates[0].pathLabel, "~/codex-commons");
+  assert.equal(model.discovery.candidates[0].signals.codexHistory, true);
+  assert.equal(model.review.proposedOutcomes[0].memberSessions[0].sessionId, "SES-4168");
+  assert.equal(model.review.memberSessions[0].demonstratedStrengths[0], "Provenance design");
+  assert.equal(model.review.memberSessions[0].reachable, undefined, "membership does not synthesize reachability");
+  assert.equal(calls[0].url, "/v1/project-archaeology");
+  assert.equal(calls[0].options.method, "GET");
+  assert.deepEqual(calls.slice(1).map((call) => [call.options.method, call.url]), [
+    ["POST", "/v1/project-archaeology/discover"],
+    ["PUT", "/v1/project-archaeology/config"],
+    ["POST", "/v1/project-archaeology/start"],
+    ["POST", "/v1/project-archaeology/pause"],
+    ["POST", "/v1/project-archaeology/resume"],
+    ["POST", "/v1/project-archaeology/cancel"],
+  ]);
+  assert.deepEqual(JSON.parse(calls[2].options.body), { selected_project_ids: ["codex-commons"], depth: "deep", sources: { git: true, docs: false, codex_history: true }, max_concurrency: 1, base_revision: 7 });
+  assert.equal(calls[2].options.headers["X-Commons-CSRF"], "csrf");
+  assert.equal(calls[2].options.headers["Idempotency-Key"], "arch-config");
+  assert.deepEqual(JSON.parse(calls[4].options.body), { base_revision: 8 });
+});
+
+test("Project Archaeology rejects automatic candidate selection and unreviewed manifests", async () => {
+  for (const mutate of [
+    (payload) => { payload.discovery.candidates[0].selected_by_default = true; },
+    (payload) => { payload.review.requires_explicit_approval = false; },
+  ]) {
+    const payload = archaeologyPayload();
+    mutate(payload);
+    const adapter = createHTTPAdapter({ fetchImpl: async () => apiResponse(payload) });
+    await assert.rejects(adapter.readProjectArchaeology(), (error) => error.code === "invalid_payload");
+  }
+});
+
+test("Project Archaeology accepts the non-mutating initial virtual draft", async () => {
+  const payload = archaeologyPayload();
+  payload.id = "";
+  payload.state = "draft";
+  payload.discovery = { state: "idle", metadata_only: true, source_roots_scanned: 0, candidates: [] };
+  payload.config = { selected_project_ids: [], depth: "standard", sources: { git: true, docs: true, codex_history: false }, max_concurrency: 2 };
+  payload.runs = [];
+  payload.review = null;
+  payload.revision = 0;
+  delete payload.updated_at;
+  const adapter = createHTTPAdapter({ fetchImpl: async () => apiResponse(payload) });
+  const model = await adapter.readProjectArchaeology();
+  assert.equal(model.id, "");
+  assert.equal(model.discovery.state, "idle");
+  assert.equal(model.updatedAt, null);
+});
+
+test("Project Archaeology bridges one validated outcome into exact-digest canonical apply", async () => {
+  const digest = `sha256:${"a".repeat(64)}`;
+  const manifestDigest = `sha256:${"b".repeat(64)}`;
+  const calls = [];
+  const previewResult = {
+    batch_id: "archaeology-batch", source_digest: digest, manifest_digest: manifestDigest, collision_policy: "current_wins",
+    state: "preview", applied: false, tasks: [], counts: { project_thread_aliases: 0, tasks: 0, attributions: 0, events: 0, created: 0, skipped_current: 0, replayed: 0 },
+  };
+  const request = { schema_version: 1, batch_id: "archaeology-batch", source_digest: digest, confirm_source_digest: "", collision_policy: "current_wins", project_thread_aliases: [], tasks: [] };
+  const adapter = createHTTPAdapter({ fetchImpl: async (url, options) => {
+    calls.push({ url, options });
+    if (String(url) === "/v1/project-archaeology/import-preview") return apiResponse({ project_id: "codex-commons", request, preview: previewResult });
+    if (String(url) === "/v1/projects/codex-commons/historical-imports/apply") return apiResponse({ ...previewResult, state: "applied", applied: true, recorded_at: "2026-08-12T14:00:00Z" });
+    throw new Error(`unexpected URL ${url}`);
+  }});
+
+  const bridge = await adapter.previewProjectArchaeologyImport("OUT-1", { csrfToken: "csrf", idempotencyKey: "preview-key" });
+  assert.equal(bridge.preview.collisionPolicy, "current_wins");
+  await assert.rejects(() => adapter.applyHistoricalImport(bridge, "sha256:partial", { csrfToken: "csrf", idempotencyKey: "apply-bad" }), /exact source digest/i);
+  const applied = await adapter.applyHistoricalImport(bridge, digest, { csrfToken: "csrf", idempotencyKey: "apply-key" });
+  assert.equal(applied.applied, true);
+  assert.deepEqual(calls.map((call) => [call.options.method, call.url]), [["POST", "/v1/project-archaeology/import-preview"], ["POST", "/v1/projects/codex-commons/historical-imports/apply"]]);
+  assert.equal(JSON.parse(calls[1].options.body).confirm_source_digest, digest);
+});

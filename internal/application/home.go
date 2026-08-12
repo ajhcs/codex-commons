@@ -34,12 +34,13 @@ type realClock struct{}
 func (realClock) Now() time.Time { return time.Now() }
 
 type Service struct {
-	repository       HomeRepository
-	presence         PresenceRegistry
-	clock            Clock
-	humanDisplayName string
-	humanHandle      string
-	identityMu       sync.RWMutex
+	repository            HomeRepository
+	presence              PresenceRegistry
+	clock                 Clock
+	humanDisplayName      string
+	humanHandle           string
+	identityMu            sync.RWMutex
+	archaeologyDiscoverer ArchaeologyDiscoverer
 }
 
 func New(repository HomeRepository, live PresenceRegistry, clock Clock) *Service {

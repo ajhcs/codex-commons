@@ -154,6 +154,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) route(w http.ResponseWriter, r *http.Request, meta RequestMeta) {
+	if h.projectArchaeologyRoute(w, r, meta) {
+		return
+	}
 	if h.projectCoreRoute(w, r, meta) {
 		return
 	}

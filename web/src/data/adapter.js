@@ -1,8 +1,10 @@
-import { ATTACHMENT_KINDS, ATTENTION_SEVERITIES, AUTH_PAIRING_STATES, COMMENT_INTENTS, EXECUTION_STATES, HUMAN_HANDLE_PATTERN, isValidHumanDisplayName, isValidHumanHandle, PERSPECTIVE_SCOPES, MAX_BROWSE_LIMIT, MAX_NOTIFICATIONS, MAX_OVERVIEW_LIMIT, POST_KINDS, POST_STATES } from "../contracts/commons.js";
+import { ATTACHMENT_KINDS, ATTENTION_SEVERITIES, AUTH_PAIRING_STATES, COMMENT_INTENTS, EXECUTION_STATES, HUMAN_HANDLE_PATTERN, isValidHumanDisplayName, isValidHumanHandle, PERSPECTIVE_SCOPES, MAX_BROWSE_LIMIT, MAX_NOTIFICATIONS, MAX_OVERVIEW_LIMIT, POST_KINDS, POST_STATES, PROJECT_ARCHAEOLOGY_DEPTHS, PROJECT_ARCHAEOLOGY_DISCOVERY_STATES, PROJECT_ARCHAEOLOGY_RUN_STATES, PROJECT_ARCHAEOLOGY_STATES } from "../contracts/commons.js";
 import { contractFixtures, codexAuthFixtures } from "./fixtures.js";
 import { postFixtures, slice13FixtureTimes } from "./postFixtures.js";
 import { createProjectCoreHTTPMethods, projectCoreFixtureMethods } from "./projectCoreAdapter.js";
 import { normalizeProvenance } from "./provenance.js";
+import { confirmedHistoricalImportRequest, normalizeArchaeologyCapabilities, normalizeArchaeologyHandoff, normalizeArchaeologyImportPreview, normalizeHistoricalImportResult } from "./projectArchaeologyAdapter.js";
+import { archaeologyHandoffFixture, archaeologyReadyFixture, archaeologyReviewFixture } from "../features/project-archaeology/projectArchaeologyFixtures.js";
 import { CommonsAPIError, createHTTPTransport } from "./transport.js";
 
 function wait(value, signal) {
@@ -544,6 +546,167 @@ function normalizeNotifications(data) {
   };
 }
 
+function archaeologyStringList(value, maximum = 12) {
+  if (!Array.isArray(value) || value.length > maximum) throw invalidPayload();
+  return value.map(requireString);
+}
+
+function normalizeArchaeologyMember(value) {
+  value = requireRecord(value);
+  if (value.reachability !== "historical_or_unknown" || value.execution !== "not_attested" || value.authority !== "provenance_only") throw invalidPayload();
+  return {
+    sessionId: requireString(value.session_id),
+    displayName: typeof value.display_name === "string" ? value.display_name : "",
+    reachability: value.reachability,
+    execution: value.execution,
+    authority: value.authority,
+    contributionCount: requireInteger(value.contribution_count),
+    sourceCount: requireInteger(value.source_count),
+    collaborationCount: requireInteger(value.collaboration_count),
+    demonstratedStrengths: archaeologyStringList(value.demonstrated_strengths),
+    uncertainties: archaeologyStringList(value.uncertainties),
+  };
+}
+
+function normalizeArchaeologyProvenance(value) {
+  value = requireRecord(value);
+  return {
+    sourceKind: requireString(value.source_kind),
+    sourceLabel: requireString(value.source_label),
+    digest: requireString(value.digest),
+    recordedAt: value.recorded_at == null ? null : timestampLabel(value.recorded_at),
+  };
+}
+
+function normalizeArchaeologyOutcome(value) {
+  value = requireRecord(value);
+  if (!Array.isArray(value.provenance) || value.provenance.length > 40 || !Array.isArray(value.member_sessions) || value.member_sessions.length > 100) throw invalidPayload();
+  const sourceCount = requireInteger(value.source_count);
+  if (value.provenance.length > sourceCount) throw invalidPayload();
+  return {
+    id: requireString(value.id),
+    title: requireString(value.title),
+    summary: requireString(value.summary),
+    projectId: requireString(value.project_id),
+    sourceCount,
+    provenance: value.provenance.map(normalizeArchaeologyProvenance),
+    memberSessions: value.member_sessions.map(normalizeArchaeologyMember),
+  };
+}
+
+function normalizeProjectArchaeology(data) {
+  data = requireRecord(data);
+  if (typeof data.id !== "string" || !PROJECT_ARCHAEOLOGY_STATES.includes(data.state)) throw invalidPayload();
+  const discovery = requireRecord(data.discovery);
+  if (!PROJECT_ARCHAEOLOGY_DISCOVERY_STATES.includes(discovery.state) || discovery.metadata_only !== true || !Array.isArray(discovery.candidates) || discovery.candidates.length > 100) throw invalidPayload();
+  const candidates = discovery.candidates.map((rawCandidate) => {
+    const candidate = requireRecord(rawCandidate);
+    const signals = requireRecord(candidate.signals);
+    const estimate = requireRecord(candidate.estimate);
+    if (typeof signals.git !== "boolean" || typeof signals.docs !== "boolean" || typeof signals.codex_history !== "boolean" || !["low", "medium", "high"].includes(estimate.relative_cost) || candidate.selected_by_default !== false) throw invalidPayload();
+    const durationSecondsMin = requireInteger(estimate.duration_seconds_min);
+    const durationSecondsMax = requireInteger(estimate.duration_seconds_max);
+    if (durationSecondsMax < durationSecondsMin) throw invalidPayload();
+    return {
+      id: requireString(candidate.id),
+      name: requireString(candidate.name),
+      pathLabel: requireString(candidate.path_label),
+      repositoryLabel: candidate.repository_label == null ? "" : requireString(candidate.repository_label),
+      lastActivity: candidate.last_activity_at == null ? null : timestampLabel(candidate.last_activity_at),
+      signals: { git: signals.git, docs: signals.docs, codexHistory: signals.codex_history },
+      estimate: { durationSecondsMin, durationSecondsMax, relativeCost: estimate.relative_cost },
+      privacyNote: requireString(candidate.privacy_note),
+      selectedByDefault: false,
+    };
+  });
+  if (new Set(candidates.map((candidate) => candidate.id)).size !== candidates.length) throw invalidPayload();
+
+  const rawConfig = requireRecord(data.config);
+  const rawSources = requireRecord(rawConfig.sources);
+  if (!PROJECT_ARCHAEOLOGY_DEPTHS.includes(rawConfig.depth) || typeof rawSources.git !== "boolean" || typeof rawSources.docs !== "boolean" || typeof rawSources.codex_history !== "boolean" || ![1, 2].includes(rawConfig.max_concurrency)) throw invalidPayload();
+  const selectedProjectIds = archaeologyStringList(rawConfig.selected_project_ids, 100);
+  if (new Set(selectedProjectIds).size !== selectedProjectIds.length) throw invalidPayload();
+
+  if (!Array.isArray(data.runs) || data.runs.length > 100) throw invalidPayload();
+  const runs = data.runs.map((rawRun) => {
+    const run = requireRecord(rawRun);
+    if (!PROJECT_ARCHAEOLOGY_RUN_STATES.includes(run.state)) throw invalidPayload();
+    const totalUnits = run.total_units == null ? null : requireInteger(run.total_units);
+    const completedUnits = requireInteger(run.completed_units);
+    if (totalUnits != null && completedUnits > totalUnits) throw invalidPayload();
+    return {
+      id: requireString(run.id),
+      projectId: requireString(run.project_id),
+      state: run.state,
+      phaseLabel: requireString(run.phase_label),
+      completedUnits,
+      totalUnits,
+      outcomesFound: requireInteger(run.outcomes_found),
+      sourcesExamined: requireInteger(run.sources_examined),
+      error: typeof run.error === "string" ? run.error : "",
+    };
+  });
+
+  let review = null;
+  if (data.review != null) {
+    const rawReview = requireRecord(data.review);
+    if (!Array.isArray(rawReview.proposed_outcomes) || rawReview.proposed_outcomes.length > 200 || !Array.isArray(rawReview.member_sessions) || rawReview.member_sessions.length > 300 || typeof rawReview.can_apply !== "boolean" || rawReview.requires_explicit_approval !== true) throw invalidPayload();
+    review = {
+      proposedOutcomes: rawReview.proposed_outcomes.map(normalizeArchaeologyOutcome),
+      memberSessions: rawReview.member_sessions.map(normalizeArchaeologyMember),
+      provenanceSummary: requireString(rawReview.provenance_summary),
+      canApply: rawReview.can_apply,
+      requiresExplicitApproval: true,
+    };
+  }
+
+  const controls = requireRecord(data.controls);
+  if (typeof controls.can_start !== "boolean" || typeof controls.can_pause !== "boolean" || typeof controls.can_resume !== "boolean" || typeof controls.can_cancel !== "boolean") throw invalidPayload();
+  return {
+    id: data.id,
+    state: data.state,
+    discovery: {
+      state: discovery.state,
+      candidates,
+      discoveredAt: discovery.discovered_at == null ? null : timestampLabel(discovery.discovered_at),
+      sourceRootsScanned: requireInteger(discovery.source_roots_scanned),
+      metadataOnly: true,
+      error: typeof discovery.error === "string" ? discovery.error : "",
+    },
+    config: {
+      selectedProjectIds,
+      depth: rawConfig.depth,
+      sources: { git: rawSources.git, docs: rawSources.docs, codexHistory: rawSources.codex_history },
+      maxConcurrency: rawConfig.max_concurrency,
+    },
+    runs,
+    review,
+    capabilities: normalizeArchaeologyCapabilities(data.capabilities),
+    handoff: normalizeArchaeologyHandoff(data.handoff, timestampLabel),
+    controls: { canStart: controls.can_start, canPause: controls.can_pause, canResume: controls.can_resume, canCancel: controls.can_cancel },
+    revision: requireInteger(data.revision),
+    updatedAt: data.updated_at == null ? null : timestampLabel(data.updated_at),
+  };
+}
+
+function archaeologyRevision(value) {
+  if (!Number.isInteger(value) || value < 0) throw new CommonsAPIError("A current archaeology revision is required.", { code: "invalid_archaeology_revision" });
+  return value;
+}
+
+function archaeologyConfigInput(config, baseRevision) {
+  if (config === null || typeof config !== "object" || Array.isArray(config) || !Array.isArray(config.selectedProjectIds) || config.selectedProjectIds.length > 100 || !PROJECT_ARCHAEOLOGY_DEPTHS.includes(config.depth) || ![1, 2].includes(config.maxConcurrency)) throw new CommonsAPIError("Choose valid Project Archaeology settings.", { code: "invalid_archaeology_config" });
+  const sources = config.sources;
+  if (sources === null || typeof sources !== "object" || typeof sources.git !== "boolean" || typeof sources.docs !== "boolean" || typeof sources.codexHistory !== "boolean" || !config.selectedProjectIds.every((id) => typeof id === "string" && id)) throw new CommonsAPIError("Choose valid Project Archaeology settings.", { code: "invalid_archaeology_config" });
+  return {
+    selected_project_ids: [...config.selectedProjectIds],
+    depth: config.depth,
+    sources: { git: sources.git, docs: sources.docs, codex_history: sources.codexHistory },
+    max_concurrency: config.maxConcurrency,
+    base_revision: archaeologyRevision(baseRevision),
+  };
+}
+
 function safelyNormalize(normalize, data) {
   try {
     return normalize(data);
@@ -588,6 +751,47 @@ export function createHTTPAdapter(options) {
       const normalized = normalizeProfileInput({ display_name: profile?.displayName, handle: profile?.handle });
       if (!Number.isInteger(profileRevision) || profileRevision < 1) throw new CommonsAPIError("A current profile revision is required.", { code: "invalid_profile_revision" });
       return safelyNormalize(normalizeSession, await transport.updateProfile({ display_name: normalized.displayName, handle: normalized.handle, base_revision: profileRevision }, csrfToken, idempotencyKey, signal));
+    },
+    async readProjectArchaeology(signal) {
+      return safelyNormalize(normalizeProjectArchaeology, await transport.readProjectArchaeology(signal));
+    },
+    async discoverProjectArchaeology(writeOptions, signal) {
+      return safelyNormalize(normalizeProjectArchaeology, await transport.discoverProjectArchaeology(writeOptions, signal));
+    },
+    async updateProjectArchaeologyConfig(config, baseRevision, writeOptions, signal) {
+      return safelyNormalize(normalizeProjectArchaeology, await transport.updateProjectArchaeologyConfig(archaeologyConfigInput(config, baseRevision), writeOptions, signal));
+    },
+    async startProjectArchaeology(baseRevision, writeOptions, signal) {
+      return safelyNormalize(normalizeProjectArchaeology, await transport.startProjectArchaeology({ base_revision: archaeologyRevision(baseRevision) }, writeOptions, signal));
+    },
+    async pauseProjectArchaeology(baseRevision, writeOptions, signal) {
+      return safelyNormalize(normalizeProjectArchaeology, await transport.pauseProjectArchaeology({ base_revision: archaeologyRevision(baseRevision) }, writeOptions, signal));
+    },
+    async resumeProjectArchaeology(baseRevision, writeOptions, signal) {
+      return safelyNormalize(normalizeProjectArchaeology, await transport.resumeProjectArchaeology({ base_revision: archaeologyRevision(baseRevision) }, writeOptions, signal));
+    },
+    async cancelProjectArchaeology(baseRevision, writeOptions, signal) {
+      return safelyNormalize(normalizeProjectArchaeology, await transport.cancelProjectArchaeology({ base_revision: archaeologyRevision(baseRevision) }, writeOptions, signal));
+    },
+    async previewProjectArchaeologyImport(outcomeID, writeOptions, signal) {
+      if (typeof outcomeID !== "string" || !outcomeID) throw new CommonsAPIError("Choose a proposed outcome to preview.", { code: "invalid_archaeology_outcome" });
+      return safelyNormalize(
+        (value) => normalizeArchaeologyImportPreview(value, timestampLabel),
+        await transport.previewProjectArchaeologyImport({ outcome_id: outcomeID }, writeOptions, signal),
+      );
+    },
+    async applyHistoricalImport(previewBridge, confirmation, writeOptions, signal) {
+      if (typeof previewBridge?.projectId !== "string" || !previewBridge.projectId) throw new CommonsAPIError("A canonical project is required.", { code: "invalid_historical_import" });
+      let input;
+      try {
+        input = confirmedHistoricalImportRequest(previewBridge.request, confirmation);
+      } catch {
+        throw new CommonsAPIError("Enter the exact source digest to approve this import.", { code: "digest_confirmation_required" });
+      }
+      return safelyNormalize(
+        (value) => normalizeHistoricalImportResult(value, timestampLabel),
+        await transport.applyHistoricalImport(previewBridge.projectId, input, writeOptions, signal),
+      );
     },
     async readPosts(query, signal) {
       return safelyNormalize(normalizePostsPage, await transport.readPosts(query, signal));
@@ -639,6 +843,7 @@ const fixtureHuman = Object.freeze({
 });
 let fixtureHumanIdentity = { ...fixtureHuman };
 const fixtureCodexState = { attemptID: "", pollCount: 0, needsProfile: false, authMethod: "recovery", profileRevision: 0 };
+let fixtureArchaeology = archaeologyReadyFixture;
 const fixtureNotificationReads = new Map();
 const fixtureNotificationRecords = Object.freeze([{
   id: "NOTIFICATION-2411-61",
@@ -655,24 +860,24 @@ const fixtureSlice13Contributors = Object.freeze([
 
 export const fixtureAdapter = {
   async readCodexStatus(signal) {
-    return wait({
+    return wait(normalizeCodexStatus({
       ...codexAuthFixtures.status,
       binding_state: fixtureHumanIdentity.principal === "human:local-admin" ? "bound" : codexAuthFixtures.status.binding_state,
       account_state: fixtureHumanIdentity.principal === "human:local-admin" ? "signed_in" : codexAuthFixtures.status.account_state,
-    }, signal);
+    }), signal);
   },
   async startCodexPairing(signal) {
     fixtureCodexState.attemptID = codexAuthFixtures.start.attempt_id;
     fixtureCodexState.pollCount = 0;
     fixtureCodexState.needsProfile = false;
-    return wait(codexAuthFixtures.start, signal);
+    return wait(normalizeCodexStart(codexAuthFixtures.start), signal);
   },
   async pollCodexPairing(attemptID, signal) {
     if (attemptID !== fixtureCodexState.attemptID) throw new CommonsAPIError("That Codex sign-in attempt is no longer available.", { code: "pairing_not_found", status: 404 });
     fixtureCodexState.pollCount += 1;
     const result = fixtureCodexState.pollCount < 2 ? codexAuthFixtures.poll_waiting : codexAuthFixtures.poll_needs_profile;
     fixtureCodexState.needsProfile = fixtureCodexState.pollCount >= 2;
-    return wait(result, signal);
+    return wait(normalizeCodexPoll(result), signal);
   },
   async completeCodexProfile(attemptID, profile, signal) {
     if (attemptID !== fixtureCodexState.attemptID || !fixtureCodexState.needsProfile) throw new CommonsAPIError("This Codex setup step is no longer available.", { code: "profile_unavailable", status: 409 });
@@ -718,6 +923,36 @@ export const fixtureAdapter = {
     fixtureCodexState.authMethod = "codex";
     fixtureCodexState.profileRevision = Math.max(1, fixtureCodexState.profileRevision);
     return wait(normalizeSession({ authenticated: true, principal: { ...fixtureHumanIdentity }, csrf_token: "fixture-csrf", auth_method: "codex", profile_revision: fixtureCodexState.profileRevision }), signal);
+  },
+  async readProjectArchaeology(signal) {
+    return wait(fixtureArchaeology, signal);
+  },
+  async discoverProjectArchaeology(_writeOptions, signal) {
+    fixtureArchaeology = archaeologyReadyFixture;
+    return wait(fixtureArchaeology, signal);
+  },
+  async updateProjectArchaeologyConfig(config, _baseRevision, _writeOptions, signal) {
+    fixtureArchaeology = { ...fixtureArchaeology, config, revision: fixtureArchaeology.revision + 1 };
+    return wait(fixtureArchaeology, signal);
+  },
+  async startProjectArchaeology(_baseRevision, _writeOptions, signal) {
+    fixtureArchaeology = { ...archaeologyHandoffFixture, config: fixtureArchaeology.config };
+    return wait(fixtureArchaeology, signal);
+  },
+  async pauseProjectArchaeology() { throw new CommonsAPIError("Exported Codex task packs cannot be paused from Commons.", { code: "unavailable", status: 503 }); },
+  async resumeProjectArchaeology() { throw new CommonsAPIError("Exported Codex task packs cannot be resumed from Commons.", { code: "unavailable", status: 503 }); },
+  async cancelProjectArchaeology() { throw new CommonsAPIError("Exported Codex task packs cannot be cancelled from Commons.", { code: "unavailable", status: 503 }); },
+  async previewProjectArchaeologyImport(outcomeID, _writeOptions, signal) {
+    if (outcomeID !== "OUT-1") throw new CommonsAPIError("Choose a proposed outcome to preview.", { code: "invalid_archaeology_outcome" });
+    const sourceDigest = `sha256:${"a".repeat(64)}`;
+    const manifestDigest = `sha256:${"b".repeat(64)}`;
+    const request = { schema_version: 1, batch_id: "archaeology-codex-commons", source_digest: sourceDigest, confirm_source_digest: "", collision_policy: "current_wins", project_thread_aliases: [], tasks: [] };
+    const preview = { batchId: "archaeology-codex-commons", sourceDigest, manifestDigest, collisionPolicy: "current_wins", state: "preview", applied: false, recordedAt: null, tasks: [], counts: { projectThreadAliases: 0, tasks: 20, attributions: 41, events: 20, created: 20, skippedCurrent: 0, replayed: 0 } };
+    return wait({ projectId: "codex-commons", request, preview }, signal);
+  },
+  async applyHistoricalImport(bridge, confirmation, _writeOptions, signal) {
+    confirmedHistoricalImportRequest(bridge.request, confirmation);
+    return wait({ ...bridge.preview, state: "applied", applied: true, counts: { ...bridge.preview.counts, created: 20, skippedCurrent: 0, replayed: 0 }, recordedAt: timestampLabel(new Date().toISOString()) }, signal);
   },
   async readNotifications(query, signal) {
     let records = fixtureNotificationRecords.map((item) => fixtureNotificationReads.has(item.id) ? { ...item, read_at: fixtureNotificationReads.get(item.id) } : item);

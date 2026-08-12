@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { codexAuthFixtures } from "./fixtures.js";
-import { createHTTPAdapter } from "./adapter.js";
+import { createHTTPAdapter, fixtureAdapter } from "./adapter.js";
 
 function apiResponse(data, { status = 200, ok = status >= 200 && status < 300, error } = {}) {
   return new Response(JSON.stringify({
@@ -69,6 +69,23 @@ test("HTTP adapter validates and transports the complete Codex pairing flow", as
   assert.equal(updateCall.options.headers["X-Commons-CSRF"], "csrf-codex");
   assert.equal(updateCall.options.headers["Idempotency-Key"], "profile-key");
   assert.deepEqual(JSON.parse(updateCall.options.body), { display_name: "Alex Updated", handle: "alex-updated", base_revision: 1 });
+});
+
+test("fixture adapter exposes the same normalized Codex pairing contract as HTTP", async () => {
+  const status = await fixtureAdapter.readCodexStatus();
+  const start = await fixtureAdapter.startCodexPairing();
+  const waiting = await fixtureAdapter.pollCodexPairing(start.attemptID);
+  const needsProfile = await fixtureAdapter.pollCodexPairing(start.attemptID);
+
+  assert.equal(status.bindingState, "unbound");
+  assert.equal(start.attemptID, codexAuthFixtures.start.attempt_id);
+  assert.equal(start.userCode, codexAuthFixtures.start.user_code);
+  assert.equal(Object.hasOwn(start, "attempt_id"), false);
+  assert.equal(waiting.state, "waiting_for_user");
+  assert.equal(needsProfile.state, "needs_profile");
+
+  const cancelled = await fixtureAdapter.cancelCodexPairing(start.attemptID);
+  assert.equal(cancelled.authenticated, false);
 });
 
 test("Codex adapter rejects untrusted verification URLs and malformed poll DTOs", async () => {
