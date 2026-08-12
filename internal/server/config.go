@@ -43,6 +43,8 @@ type Config struct {
 	AllowAnonymousLAN      bool
 	AllowInsecureHumanLAN  bool
 	DemoSeed               bool
+	ArchaeologyRootsFile   string
+	ArchaeologyRoots       []ArchaeologyRoot
 	ReadTimeout            time.Duration
 	ReadHeaderTimeout      time.Duration
 	WriteTimeout           time.Duration
@@ -75,6 +77,7 @@ func ParseConfig(args []string, getenv func(string) string, stderr io.Writer) (C
 	config.AllowAnonymousLAN = envBool(getenv, "COMMONS_ALLOW_ANONYMOUS_LAN")
 	config.AllowInsecureHumanLAN = envBool(getenv, "COMMONS_ALLOW_INSECURE_HUMAN_LAN")
 	config.DemoSeed = envBool(getenv, "COMMONS_DEMO_SEED")
+	config.ArchaeologyRootsFile = strings.TrimSpace(getenv("COMMONS_ARCHAEOLOGY_ROOTS_FILE"))
 	config.CodexAuth = envBool(getenv, "COMMONS_CODEX_AUTH")
 	config.CodexBin = strings.TrimSpace(getenv("COMMONS_CODEX_BIN"))
 	config.CodexBindingKeyFile = strings.TrimSpace(getenv("COMMONS_CODEX_BINDING_KEY_FILE"))
@@ -97,6 +100,7 @@ func ParseConfig(args []string, getenv func(string) string, stderr io.Writer) (C
 	flags.BoolVar(&config.AllowAnonymousLAN, "allow-anonymous-lan", config.AllowAnonymousLAN, "acknowledge anonymous-read on a non-loopback literal address")
 	flags.BoolVar(&config.AllowInsecureHumanLAN, "allow-insecure-human-lan", config.AllowInsecureHumanLAN, "acknowledge plaintext human-session cookies on a non-loopback evaluation listener")
 	flags.BoolVar(&config.DemoSeed, "demo-seed", config.DemoSeed, "idempotently seed explicit prototype data before listening")
+	flags.StringVar(&config.ArchaeologyRootsFile, "archaeology-roots-file", config.ArchaeologyRootsFile, "mode-0600 JSON allowlist of project roots eligible for metadata discovery")
 	flags.BoolVar(&config.CodexAuth, "codex-auth", config.CodexAuth, "enable managed Codex account authentication")
 	flags.StringVar(&config.CodexBin, "codex-bin", config.CodexBin, "absolute Codex executable path")
 	flags.StringVar(&config.CodexBindingKeyFile, "codex-binding-key-file", config.CodexBindingKeyFile, "mode-0600 private binding-key file")
@@ -140,6 +144,10 @@ func ParseConfig(args []string, getenv func(string) string, stderr io.Writer) (C
 			CodexEnabled:    config.CodexAuth,
 		}
 	}
+	config.ArchaeologyRoots, err = readArchaeologyRoots(config.ArchaeologyRootsFile)
+	if err != nil {
+		return Config{}, err
+	}
 	if err := config.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -152,6 +160,20 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.WebDir) == "" {
 		return errors.New("web directory required")
+	}
+	if len(c.ArchaeologyRoots) > 100 {
+		return errors.New("at most 100 archaeology roots are allowed")
+	}
+	seenArchaeologyRoots := map[string]bool{}
+	for _, root := range c.ArchaeologyRoots {
+		if !archaeologyRootID.MatchString(root.ID) || seenArchaeologyRoots[root.ID] || strings.TrimSpace(root.Name) == "" || len(root.Name) > 200 || !filepath.IsAbs(root.Path) || filepath.Clean(root.Path) != root.Path || strings.TrimSpace(root.PathLabel) == "" || len(root.PathLabel) > 300 || len(root.RepositoryLabel) > 300 {
+			return errors.New("invalid archaeology root allowlist entry")
+		}
+		info, statErr := os.Stat(root.Path)
+		if statErr != nil || !info.IsDir() {
+			return errors.New("archaeology root must be an existing directory")
+		}
+		seenArchaeologyRoots[root.ID] = true
 	}
 	host, port, err := net.SplitHostPort(c.Listen)
 	if err != nil || strings.TrimSpace(host) == "" || port == "" {

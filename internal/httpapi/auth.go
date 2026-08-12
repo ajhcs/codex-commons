@@ -328,6 +328,7 @@ func sameOrigin(r *http.Request) bool {
 
 func isHumanWritePath(path string) bool {
 	if path == "/v1/projects" || strings.HasPrefix(path, "/v1/projects/") ||
+		strings.HasPrefix(path, "/v1/project-archaeology/") ||
 		strings.HasPrefix(path, "/v1/milestones/") || strings.HasPrefix(path, "/v1/tasks/") {
 		return true
 	}

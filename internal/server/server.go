@@ -61,6 +61,9 @@ func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
+	if err := store.ReconcileArchaeology(ctx); err != nil {
+		return nil, fmt.Errorf("reconcile project archaeology: %w", err)
+	}
 	failed := true
 	var codexClient codexauth.Client = config.CodexClient
 	if config.CodexAuth && codexClient == nil {
@@ -124,6 +127,9 @@ func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
 		return nil, err
 	}
 	service := application.New(store, live, nil)
+	if len(config.ArchaeologyRoots) > 0 {
+		service.ConfigureProjectArchaeology(allowlistedArchaeologyDiscoverer{roots: config.ArchaeologyRoots}, nil)
+	}
 	if config.HumanAuth != nil {
 		config.HumanAuth.DisplayName = humanDisplayName
 		config.HumanAuth.Handle = humanHandle

@@ -213,6 +213,33 @@ export function createHTTPTransport({
     updateProfile(input, csrfToken, idempotencyKey, signal) {
       return replace("/v1/auth/profile", input, { csrfToken, idempotencyKey }, signal);
     },
+    readProjectArchaeology(signal) {
+      return read("/v1/project-archaeology", {}, signal);
+    },
+    discoverProjectArchaeology(writeOptions, signal) {
+      return write("/v1/project-archaeology/discover", {}, writeOptions, signal);
+    },
+    updateProjectArchaeologyConfig(input, writeOptions, signal) {
+      return replace("/v1/project-archaeology/config", input, writeOptions, signal);
+    },
+    startProjectArchaeology(input, writeOptions, signal) {
+      return write("/v1/project-archaeology/start", input, writeOptions, signal);
+    },
+    pauseProjectArchaeology(input, writeOptions, signal) {
+      return write("/v1/project-archaeology/pause", input, writeOptions, signal);
+    },
+    resumeProjectArchaeology(input, writeOptions, signal) {
+      return write("/v1/project-archaeology/resume", input, writeOptions, signal);
+    },
+    cancelProjectArchaeology(input, writeOptions, signal) {
+      return write("/v1/project-archaeology/cancel", input, writeOptions, signal);
+    },
+    previewProjectArchaeologyImport(input, writeOptions, signal) {
+      return write("/v1/project-archaeology/import-preview", input, writeOptions, signal);
+    },
+    applyHistoricalImport(projectID, input, writeOptions, signal) {
+      return write(`/v1/projects/${encodeURIComponent(projectID)}/historical-imports/apply`, input, writeOptions, signal);
+    },
     readPosts(query, signal) {
       return read("/v1/posts", {
         q: boundedText(query.q), topic: query.topic, project: query.project,

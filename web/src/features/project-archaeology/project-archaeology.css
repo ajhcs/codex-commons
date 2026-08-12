@@ -1,0 +1,180 @@
+.archaeology-dialog {
+  width: min(760px, calc(100vw - 32px));
+  max-height: min(860px, calc(100dvh - 32px));
+  padding: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: var(--shadow-overlay);
+}
+.archaeology-dialog::backdrop { background: rgba(0, 0, 0, .30); }
+.archaeology-dialog :is(button, input) { font: inherit; }
+.archaeology-dialog h2 { margin: 0; font-size: 21px; line-height: 28px; font-weight: 600; letter-spacing: -.025em; }
+.archaeology-dialog h3 { margin: 0; font-size: 13px; line-height: 19px; }
+.archaeology-close { position: absolute; z-index: 2; top: 18px; right: 20px; min-height: 30px; padding: 0 7px; border: 0; border-radius: 7px; background: transparent; color: var(--text-secondary); font-size: 11px; }
+.archaeology-close:hover { background: var(--surface-soft); color: var(--text); }
+.archaeology-intro { display: grid; padding: 28px; }
+.archaeology-identity { display: grid; grid-template-columns: 38px minmax(0, 1fr); column-gap: 11px; align-items: center; }
+.archaeology-identity > span { grid-row: 1 / 3; width: 38px; height: 38px; display: grid; place-items: center; border: 1px solid var(--border-strong); border-radius: 11px; background: var(--surface-subtle); font-size: 13px; font-weight: 650; }
+.archaeology-identity strong { align-self: end; font-size: 12px; }
+.archaeology-identity small { align-self: start; color: var(--green); font-size: 10px; }
+.archaeology-intro-copy { max-width: 560px; margin-top: 34px; }
+.archaeology-intro-copy p, .archaeology-content-heading p, .archaeology-centered-state p { margin: 7px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 18px; }
+.archaeology-privacy-note, .archaeology-truth-note { display: grid; gap: 4px; margin-top: 22px; padding: 14px 15px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-subtle); }
+.archaeology-privacy-note strong, .archaeology-truth-note strong { font-size: 11px; }
+.archaeology-privacy-note span, .archaeology-truth-note span { color: var(--text-secondary); font-size: 10px; line-height: 15px; }
+.archaeology-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 26px; }
+.archaeology-footer--between { justify-content: space-between; }
+.archaeology-footer--between > div { display: flex; gap: 8px; }
+.archaeology-footer :is(.primary-button, .secondary-button) svg { width: 13px; height: 13px; }
+.archaeology-centered-state { min-height: 380px; display: grid; place-content: center; justify-items: center; padding: 36px; text-align: center; }
+.archaeology-centered-state p { max-width: 520px; }
+.archaeology-state-mark { width: 40px; height: 40px; display: grid; place-items: center; margin-bottom: 17px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-subtle); color: var(--text-secondary); animation: archaeology-breathe 1800ms ease-in-out infinite; }
+.archaeology-state-mark.is-error { color: var(--red); animation: none; }
+.archaeology-state-mark svg { width: 18px; height: 18px; }
+.archaeology-inline-actions { display: flex; gap: 8px; margin-top: 22px; }
+.archaeology-configure, .archaeology-runs, .archaeology-review { padding: 26px 28px 28px; }
+.archaeology-content-heading { padding-right: 58px; }
+.archaeology-content-heading > div > span { display: block; margin-bottom: 5px; color: var(--text-tertiary); font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.archaeology-projects, .archaeology-review-section { margin-top: 24px; padding-top: 21px; border-top: 1px solid var(--border); }
+.archaeology-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 11px; }
+.archaeology-section-heading p { margin: 2px 0 0; color: var(--text-tertiary); font-size: 10px; }
+.archaeology-section-heading > button { min-height: 28px; padding: 0 7px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); font-size: 10px; font-weight: 600; }
+.archaeology-section-heading > button:hover:not(:disabled) { background: var(--surface-soft); color: var(--text); }
+.archaeology-candidate-list { overflow: hidden; border: 1px solid var(--border); border-radius: 10px; }
+.archaeology-candidate { min-height: 76px; display: grid; grid-template-columns: 18px 32px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--border); background: var(--bg); transition: background var(--motion-fast); }
+.archaeology-candidate:last-child { border-bottom: 0; }
+.archaeology-candidate:hover, .archaeology-candidate.is-selected { background: var(--surface-subtle); }
+.archaeology-candidate > input { width: 16px; height: 16px; margin: 0; accent-color: var(--blue); }
+.archaeology-candidate-mark, .archaeology-run-mark, .archaeology-outcome-mark { width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 9px; background: var(--bg); color: var(--text-secondary); }
+.archaeology-candidate-mark svg, .archaeology-run-mark svg, .archaeology-outcome-mark svg { width: 15px; height: 15px; }
+.archaeology-candidate-copy { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 9px; align-items: baseline; }
+.archaeology-candidate-copy strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.archaeology-candidate-copy small { overflow: hidden; color: var(--text-tertiary); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.archaeology-candidate-copy > span { grid-column: 1 / -1; color: var(--text-secondary); font-size: 10px; }
+.archaeology-candidate-copy > em { grid-column: 1 / -1; color: var(--text-tertiary); font-size: 9px; font-style: normal; }
+.archaeology-candidate-estimate { display: grid; justify-items: end; gap: 2px; color: var(--text-tertiary); font-size: 9px; white-space: nowrap; }
+.archaeology-candidate-estimate > span { display: inline-flex; align-items: center; gap: 5px; }
+.archaeology-candidate-estimate > small { font-size: 9px; }
+.archaeology-candidate-estimate svg { width: 12px; height: 12px; }
+.archaeology-empty { display: grid; justify-items: center; gap: 3px; padding: 34px 18px; border: 1px solid var(--border); border-radius: 10px; color: var(--text-tertiary); text-align: center; }
+.archaeology-empty strong { color: var(--text); font-size: 12px; }
+.archaeology-empty span { font-size: 10px; }
+.archaeology-configuration { display: grid; grid-template-columns: 1.1fr 1.5fr .8fr; gap: 18px; margin-top: 22px; }
+.archaeology-configuration fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.archaeology-configuration legend { margin-bottom: 8px; color: var(--text-secondary); font-size: 10px; font-weight: 600; }
+.archaeology-configuration fieldset > p { margin: 7px 0 0; color: var(--text-tertiary); font-size: 9px; line-height: 14px; }
+.archaeology-segmented { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; padding: 3px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-subtle); }
+.archaeology-segmented--short { grid-template-columns: repeat(2, 1fr); }
+.archaeology-segmented button { min-height: 32px; padding: 0 7px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); font-size: 10px; }
+.archaeology-segmented button[aria-pressed="true"] { background: var(--bg); color: var(--text); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.10); }
+.archaeology-source-options { display: grid; gap: 4px; }
+.archaeology-source-options label { min-height: 32px; display: grid; grid-template-columns: 16px 15px minmax(0, 1fr); gap: 7px; align-items: center; padding: 0 9px; border: 1px solid var(--border); border-radius: 7px; color: var(--text-secondary); font-size: 10px; }
+.archaeology-source-options input { width: 14px; height: 14px; margin: 0; accent-color: var(--blue); }
+.archaeology-source-options svg { width: 13px; height: 13px; }
+.archaeology-truth-note { margin-top: 20px; }
+.archaeology-message { margin: 12px 0 0; font-size: 10px; }
+.archaeology-message--error { color: var(--red); }
+.archaeology-run-list { display: grid; gap: 8px; margin-top: 24px; }
+.archaeology-run { min-height: 74px; display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); animation: archaeology-row-enter 240ms cubic-bezier(.19,1,.22,1) both; }
+.archaeology-run > div { min-width: 0; display: grid; gap: 2px; }
+.archaeology-run > div > strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.archaeology-run > div > span { color: var(--text-secondary); font-size: 10px; }
+.archaeology-run > div > small { color: var(--text-tertiary); font-size: 9px; }
+.archaeology-run-facts { justify-items: end; text-align: right; }
+.archaeology-run-facts > span { padding: 3px 7px; border-radius: 6px; background: var(--surface-soft); color: var(--text-secondary); font-size: 9px; font-weight: 600; }
+.archaeology-run--completed .archaeology-run-mark { color: var(--green); }
+.archaeology-background-note { margin: 14px 0 0; color: var(--text-tertiary); font-size: 9px; }
+.archaeology-outcomes { overflow: hidden; border: 1px solid var(--border); border-radius: 10px; }
+.archaeology-outcomes > article { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; padding: 14px; border-bottom: 1px solid var(--border); }
+.archaeology-outcomes > article:last-child { border-bottom: 0; }
+.archaeology-outcome-mark { color: var(--green); }
+.archaeology-outcomes article > div > strong { font-size: 12px; }
+.archaeology-outcomes article p { margin: 3px 0 0; color: var(--text-secondary); font-size: 10px; line-height: 15px; }
+.archaeology-outcomes article small { display: block; margin-top: 5px; color: var(--text-tertiary); font-size: 9px; }
+.archaeology-outcome-review { min-height: 30px; margin-top: 10px; }
+.archaeology-provenance { margin-top: 8px; }
+.archaeology-provenance summary { width: fit-content; color: var(--text-secondary); font-size: 9px; cursor: pointer; }
+.archaeology-provenance ul { display: grid; gap: 6px; margin: 8px 0 0; padding: 9px 10px; border-radius: 8px; background: var(--surface-subtle); list-style: none; }
+.archaeology-provenance li { display: flex; justify-content: space-between; gap: 12px; font-size: 9px; }
+.archaeology-provenance li span { color: var(--text-tertiary); }
+.archaeology-members { overflow: hidden; border: 1px solid var(--border); border-radius: 10px; }
+.archaeology-members details { border-bottom: 1px solid var(--border); }
+.archaeology-members details:last-child { border-bottom: 0; }
+.archaeology-members summary { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 12px 14px; cursor: pointer; }
+.archaeology-members summary > span:first-child { display: grid; gap: 1px; }
+.archaeology-members summary strong { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.archaeology-members summary small, .archaeology-members summary > span:last-child { color: var(--text-tertiary); font-size: 9px; }
+.archaeology-members dl { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 18px; margin: 0; padding: 12px 14px 14px; border-top: 1px solid var(--border); background: var(--surface-subtle); }
+.archaeology-members dl > div { min-width: 0; display: grid; gap: 2px; }
+.archaeology-members dt { color: var(--text-tertiary); font-size: 9px; }
+.archaeology-members dd { margin: 0; font-size: 10px; overflow-wrap: anywhere; }
+.archaeology-review-note { margin: 16px 0 0; color: var(--text-tertiary); font-size: 9px; line-height: 14px; }
+.archaeology-handoff-id { display: flex; align-items: center; gap: 9px; margin-top: 22px; color: var(--text-tertiary); font-size: 9px; }
+.archaeology-handoff-id code { min-width: 0; overflow-wrap: anywhere; color: var(--text-secondary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
+.archaeology-task-prompt { max-width: 190px; justify-self: end; }
+.archaeology-task-prompt summary { color: var(--text-secondary); font-size: 9px; cursor: pointer; }
+.archaeology-task-prompt p { max-height: 116px; margin: 8px 0 0; padding: 9px; overflow: auto; border-radius: 7px; background: var(--surface-subtle); color: var(--text-secondary); font-size: 9px; line-height: 14px; white-space: pre-wrap; }
+.historical-import-dialog { width: min(650px, calc(100vw - 32px)); }
+.historical-import-preview, .historical-import-success { padding: 28px; }
+.historical-import-summary { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--border); }
+.historical-import-summary > div { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; }
+.historical-import-summary h3 { margin: 0; font-size: 13px; }
+.historical-import-summary > div > span { color: var(--text-tertiary); font-size: 9px; }
+.historical-import-counts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 14px 0 0; }
+.historical-import-counts > div { min-width: 0; display: grid; gap: 3px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; }
+.historical-import-counts dt { color: var(--text-tertiary); font-size: 9px; }
+.historical-import-counts dd { margin: 0; color: var(--text); font-size: 15px; font-weight: 600; }
+.historical-import-confirmation { display: grid; gap: 7px; margin-top: 20px; }
+.historical-import-confirmation > span { color: var(--text-secondary); font-size: 10px; font-weight: 600; }
+.historical-import-confirmation code { display: block; padding: 10px; overflow-wrap: anywhere; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-subtle); color: var(--text-secondary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9px; line-height: 14px; }
+.historical-import-confirmation input { width: 100%; min-height: 38px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg); color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
+.historical-import-confirmation small { color: var(--text-tertiary); font-size: 9px; }
+.historical-import-success { min-height: 390px; display: grid; place-content: center; justify-items: center; text-align: center; }
+.historical-import-success .archaeology-state-mark { color: var(--green); animation: none; }
+.historical-import-success > p { max-width: 440px; margin: 7px 0 0; color: var(--text-secondary); font-size: 11px; line-height: 17px; }
+.historical-import-success .historical-import-counts { width: min(420px, 100%); grid-template-columns: repeat(3, 1fr); }
+.historical-import-success .archaeology-footer { width: 100%; }
+@keyframes archaeology-breathe { 0%, 100% { opacity: .72; transform: scale(.98); } 50% { opacity: 1; transform: scale(1); } }
+@keyframes archaeology-row-enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@media (max-width: 760px) {
+  .archaeology-dialog { max-height: calc(100dvh - 20px); }
+  .archaeology-intro, .archaeology-configure, .archaeology-runs, .archaeology-review { padding: 22px; }
+  .archaeology-configuration { grid-template-columns: 1fr; }
+  .archaeology-candidate { grid-template-columns: 18px 30px minmax(0, 1fr); }
+  .archaeology-candidate-estimate { grid-column: 3; }
+}
+@media (max-width: 420px) {
+  .archaeology-dialog { width: calc(100vw - 20px); max-height: calc(100dvh - 20px); }
+  .archaeology-intro, .archaeology-configure, .archaeology-runs, .archaeology-review { padding: 20px 16px 16px; }
+  .archaeology-close { top: 12px; right: 12px; }
+  .archaeology-content-heading { padding-right: 42px; }
+  .archaeology-dialog h2 { font-size: 19px; line-height: 25px; }
+  .archaeology-candidate { grid-template-columns: 18px minmax(0, 1fr); gap: 8px; padding: 12px; }
+  .archaeology-candidate-mark { display: none; }
+  .archaeology-candidate-estimate { grid-column: 2; }
+  .archaeology-run { grid-template-columns: 30px minmax(0, 1fr); }
+  .archaeology-run-facts { grid-column: 2; justify-items: start; text-align: left; }
+  .archaeology-task-prompt { grid-column: 2; max-width: none; justify-self: stretch; }
+  .historical-import-preview, .historical-import-success { padding: 20px 16px 16px; }
+  .historical-import-counts { grid-template-columns: 1fr 1fr; }
+  .historical-import-success .historical-import-counts { grid-template-columns: 1fr; }
+  .historical-import-summary > div { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .historical-import-confirmation code { font-size: 8px; }
+  .archaeology-footer, .archaeology-footer--between { flex-direction: column-reverse; }
+  .archaeology-footer--between > div { display: grid; }
+  .archaeology-footer :is(.primary-button, .secondary-button) { width: 100%; justify-content: center; }
+  .archaeology-members summary { align-items: flex-start; flex-direction: column; }
+  .archaeology-members dl { grid-template-columns: 1fr; }
+  .archaeology-provenance li { flex-direction: column; gap: 1px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .archaeology-state-mark, .archaeology-run { animation: none; }
+}
+.storyboard-canvas { min-height: 100vh; padding: 32px; background: var(--surface-subtle); }
+.storyboard-canvas h1 { margin: 0; font-size: 22px; }
+.storyboard-canvas > p { margin: 5px 0 18px; color: var(--text-secondary); }
+.storyboard-canvas nav { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 18px; }
+.storyboard-canvas nav button { min-height: 32px; padding: 0 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); font-size: 11px; text-transform: capitalize; }

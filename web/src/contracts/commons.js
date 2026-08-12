@@ -75,6 +75,10 @@ export const MAX_TASK_DEPENDENCIES = 20;
 export const MAX_TASK_EVENTS = 50;
 export const MAX_WIKI_REVISIONS = 100;
 export const MAX_API_RESPONSE_BYTES = 1 << 20;
+export const PROJECT_ARCHAEOLOGY_DEPTHS = /** @type {const} */ (["quick", "standard", "deep"]);
+export const PROJECT_ARCHAEOLOGY_DISCOVERY_STATES = /** @type {const} */ (["idle", "discovering", "ready", "failed"]);
+export const PROJECT_ARCHAEOLOGY_STATES = /** @type {const} */ (["draft", "running", "pause_requested", "paused", "cancel_requested", "canceled", "completed", "failed"]);
+export const PROJECT_ARCHAEOLOGY_RUN_STATES = /** @type {const} */ (["queued", "running", "pause_requested", "paused", "cancel_requested", "canceled", "completed", "failed"]);
 
 /**
  * Slice 14 keeps the browser auth machine explicit. These values are UI state,

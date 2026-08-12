@@ -914,21 +914,58 @@ textarea:focus-visible, select:focus-visible, summary:focus-visible { outline: 2
 .auth-dialog input:focus, .state-dialog input:focus { border-color: rgba(11, 103, 216, .55); outline: 0; box-shadow: 0 0 0 3px rgba(11, 103, 216,.1); }
 .auth-privacy, .immutability-note { margin: 8px 0 0; color: var(--text-tertiary); font-size: 9px; line-height: 14px; }
 .auth-dialog footer, .state-dialog footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; }
-.auth-dialog--codex { width: min(520px, calc(100vw - 32px)); }
+.auth-dialog--codex { width: min(560px, calc(100vw - 32px)); max-height: calc(100dvh - 24px); overflow-y: auto; }
 .auth-dialog--codex form { gap: 0; }
+.auth-journey { margin-top: 22px; }
+.auth-connection-scene { display: grid; grid-template-columns: minmax(88px, auto) minmax(64px, 1fr) minmax(148px, auto); gap: 12px; align-items: center; }
+.auth-connection-endpoint { min-width: 0; display: flex; align-items: center; gap: 9px; }
+.auth-connection-endpoint > span:last-child { min-width: 0; display: grid; gap: 1px; }
+.auth-connection-endpoint strong, .auth-connection-endpoint small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.auth-connection-endpoint strong { color: var(--text); font-size: 11px; line-height: 15px; }
+.auth-connection-endpoint small { color: var(--text-tertiary); font-size: 9px; line-height: 13px; }
+.auth-endpoint-glyph { width: 30px; height: 30px; flex: 0 0 30px; display: grid; place-items: center; border: 1px solid var(--border-strong); border-radius: 9px; background: var(--bg); color: var(--text-secondary); font-size: 11px; font-weight: 650; }
+.auth-endpoint-glyph svg { width: 14px; height: 14px; }
+.auth-thread { position: relative; height: 16px; }
+.auth-thread::before, .auth-thread-progress { position: absolute; top: 7px; right: 0; left: 0; height: 2px; border-radius: 999px; }
+.auth-thread::before { content: ""; background: var(--border); }
+.auth-thread-progress { right: auto; width: 0; background: color-mix(in srgb, var(--blue) 72%, var(--text)); transition: width 420ms ease; }
+.auth-thread-signal { position: absolute; top: 4px; left: 0; width: 8px; height: 8px; border: 2px solid var(--bg); border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 1px color-mix(in srgb, var(--blue) 24%, transparent); opacity: 0; transform: translateX(-50%); }
+.auth-thread[data-stage="connecting"] .auth-thread-progress { width: 42%; animation: auth-thread-breathe 1500ms ease-in-out infinite alternate; }
+.auth-thread[data-stage="connecting"] .auth-thread-signal { opacity: 1; animation: auth-thread-travel 1500ms ease-in-out infinite alternate; }
+.auth-thread[data-stage="authorize"] .auth-thread-progress { width: 68%; }
+.auth-thread[data-stage="authorize"] .auth-thread-signal { left: 68%; opacity: 1; }
+.auth-thread[data-stage="profile"] .auth-thread-progress,
+.auth-thread[data-stage="complete"] .auth-thread-progress { width: 100%; background: color-mix(in srgb, var(--green) 70%, var(--text)); }
+.auth-thread[data-stage="profile"] .auth-thread-signal,
+.auth-thread[data-stage="complete"] .auth-thread-signal { left: 100%; opacity: 1; background: var(--green); }
+.auth-journey--profile .auth-connection-endpoint--commons,
+.auth-journey--complete .auth-connection-endpoint--commons { padding: 6px 8px; margin: -7px -9px; border: 1px solid color-mix(in srgb, var(--green) 28%, var(--border)); border-radius: 10px; background: color-mix(in srgb, var(--green) 5%, var(--bg)); }
+.auth-journey-steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 14px 0 0; padding: 0; list-style: none; }
+.auth-journey-steps li { min-width: 0; display: flex; align-items: center; gap: 6px; color: var(--text-tertiary); }
+.auth-journey-steps li > span { width: 6px; height: 6px; flex: 0 0 6px; border: 1px solid var(--border-strong); border-radius: 50%; background: var(--bg); }
+.auth-journey-steps strong { overflow: hidden; font-size: 9px; font-weight: 550; line-height: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.auth-journey-steps li[data-state="current"] { color: var(--text); }
+.auth-journey-steps li[data-state="current"] > span { border-color: var(--blue); background: var(--blue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 10%, transparent); }
+.auth-journey-steps li[data-state="complete"] { color: var(--text-secondary); }
+.auth-journey-steps li[data-state="complete"] > span { border-color: var(--green); background: var(--green); }
+.auth-handshake-state { display: grid; gap: 4px; min-height: 69px; align-content: center; margin-top: 18px; padding: 14px 16px; border-block: 1px solid var(--border); }
+.auth-handshake-state strong { color: var(--text); font-size: 12px; }
+.auth-handshake-state span { color: var(--text-tertiary); font-size: 10px; line-height: 15px; }
+.auth-complete-status { margin: 20px 0 2px; color: var(--green); font-size: 11px; font-weight: 600; text-align: center; }
 .auth-primary-card, .auth-error-card, .pairing-code-card { display: grid; gap: 7px; margin-top: 22px; padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-subtle); }
 .auth-primary-card strong, .auth-error-card strong { font-size: 13px; }
 .auth-primary-card span, .auth-error-card span { color: var(--text-secondary); font-size: 11px; line-height: 16px; }
 .auth-primary-card .primary-button { width: fit-content; margin-top: 7px; }
 .auth-error-card { border-color: color-mix(in srgb, var(--red) 35%, var(--border)); background: var(--red-soft); }
-.pairing-code-card { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.pairing-code-card { grid-template-columns: minmax(0, 1fr) auto; align-items: center; border-color: color-mix(in srgb, var(--blue) 22%, var(--border)); background: var(--bg); box-shadow: 0 8px 28px rgba(0, 0, 0, .055); }
 .pairing-code-card > span { grid-column: 1 / -1; color: var(--text-tertiary); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
 .pairing-code-card strong { min-width: 0; color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 22px; letter-spacing: .12em; }
 .pairing-code-card .secondary-button { grid-column: 2; grid-row: 2; min-height: 32px; font-size: 10px; }
-.pairing-code-card small { grid-column: 1 / -1; color: var(--green); font-size: 10px; }
+.pairing-code-card small { min-height: 14px; grid-column: 1 / -1; color: var(--green); font-size: 10px; }
 .pairing-link { display: inline-flex; align-items: center; gap: 6px; margin-top: 16px; color: var(--blue); font-size: 12px; font-weight: 600; text-decoration: none; }
 .pairing-link:hover { text-decoration: underline; }
 .pairing-status { margin: 9px 0 0; color: var(--text-tertiary); font-size: 10px; line-height: 15px; }
+.pairing-status strong { color: var(--text-secondary); font-weight: 600; }
 .auth-recovery-link { justify-self: start; margin-top: 14px; padding: 0; border: 0; background: transparent; color: var(--text-tertiary); font-size: 10px; text-decoration: underline; text-underline-offset: 2px; }
 .auth-recovery-link:hover { color: var(--text); }
 .auth-profile-fields { display: grid; gap: 14px; margin-top: 20px; }
@@ -986,8 +1023,28 @@ textarea:focus-visible, select:focus-visible, summary:focus-visible { outline: 2
   .comment-composer fieldset { flex-wrap: wrap; }
   .auth-dialog form, .state-dialog form { padding: 20px; }
 }
+@media (max-width: 480px) {
+  .auth-dialog--codex { width: calc(100vw - 20px); max-height: calc(100dvh - 20px); overflow-y: auto; }
+  .auth-connection-scene { grid-template-columns: minmax(74px, auto) minmax(38px, 1fr) minmax(108px, auto); gap: 7px; }
+  .auth-connection-endpoint { gap: 6px; }
+  .auth-endpoint-glyph { width: 28px; height: 28px; flex-basis: 28px; }
+  .auth-connection-endpoint small { display: none; }
+  .auth-journey-steps { gap: 7px; }
+  .auth-journey-steps li { gap: 4px; }
+  .pairing-code-card strong { font-size: 19px; letter-spacing: .08em; }
+}
+@keyframes auth-thread-breathe {
+  from { width: 24%; }
+  to { width: 58%; }
+}
+@keyframes auth-thread-travel {
+  from { left: 24%; }
+  to { left: 58%; }
+}
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  .auth-thread[data-stage="connecting"] .auth-thread-progress { width: 42%; }
+  .auth-thread[data-stage="connecting"] .auth-thread-signal { left: 42%; }
 }
 
 /* Project Core · durable human project workspace. */

@@ -48,7 +48,7 @@ func TestSevenToEightUpgradeBackfillsCanonicalMentions(t *testing.T) {
 	var count, migrationsApplied int
 	must(t, store.DB().QueryRowContext(ctx, `SELECT count(*) FROM content_mentions WHERE source_kind='comment' AND source_id='R-old' AND recipient_principal='agent-b'`).Scan(&count))
 	must(t, store.DB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationsApplied))
-	if count != 1 || migrationsApplied != 9 {
+	if count != 1 || migrationsApplied != 11 {
 		t.Fatalf("backfill=%d migrations=%d", count, migrationsApplied)
 	}
 	if _, err := store.DB().ExecContext(ctx, `INSERT INTO content_mentions(source_kind,source_id,position,recipient_kind,recipient_principal,recipient_session_id,created_at) VALUES('post','P-missing',0,'agent','agent-b','agent-b','2026-08-01T00:03:00Z')`); err == nil {

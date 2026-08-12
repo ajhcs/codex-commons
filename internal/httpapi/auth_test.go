@@ -10,6 +10,14 @@ import (
 	"time"
 )
 
+func TestProjectArchaeologyHumanWritePaths(t *testing.T) {
+	for _, path := range []string{"/v1/project-archaeology/discover", "/v1/project-archaeology/config", "/v1/project-archaeology/start", "/v1/project-archaeology/pause", "/v1/project-archaeology/resume", "/v1/project-archaeology/cancel"} {
+		if !isHumanWritePath(path) {
+			t.Fatalf("path %q not CSRF-protected human write", path)
+		}
+	}
+}
+
 const testAdminSecret = "correct-horse-battery-staple-commons"
 
 func humanTestHandler(backend Backend) http.Handler {
