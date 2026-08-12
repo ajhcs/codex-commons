@@ -1,4 +1,4 @@
-import BookOpen from "../icons/BookOpen.tsx";
+import Branch from "../icons/Branch.tsx";
 
 const JOURNEY_STEPS = ["Connect", "Authorize", "Enter Commons"];
 
@@ -40,7 +40,7 @@ export default function AuthJourney({ stage = "ready", identity = null }) {
           <span className="auth-thread-signal" />
         </div>
         <div className="auth-connection-endpoint auth-connection-endpoint--commons">
-          <span className="auth-endpoint-glyph"><BookOpen /></span>
+          <span className="auth-endpoint-glyph"><Branch /></span>
           <span><strong>{displayName}</strong><small>{handle}</small></span>
         </div>
       </div>

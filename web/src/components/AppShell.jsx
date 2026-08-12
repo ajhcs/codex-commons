@@ -5,7 +5,7 @@ import { LoginDialog, ProfileDialog, SessionControl } from "./AuthControls.jsx";
 import { SettingsDialog } from "./SettingsDialog.jsx";
 import { ProjectArchaeologyFlow } from "../features/project-archaeology/ProjectArchaeologyFlow.jsx";
 
-import BookOpen from "../icons/BookOpen.tsx";
+import Branch from "../icons/Branch.tsx";
 import Bell from "../icons/Bell.tsx";
 import ChevronLeft from "../icons/ChevronLeft.tsx";
 import FileDocument from "../icons/FileDocument.tsx";
@@ -97,7 +97,7 @@ export function AppShell({ route, onNavigate, railContent = null, children }) {
     <div className={`app-shell${collapsed ? " app-shell--collapsed" : ""}`}>
       <aside className="left-rail">
         <div className="brand-row">
-          <span className="brand-icon" aria-hidden="true"><BookOpen /></span>
+          <span className="brand-icon" aria-hidden="true"><Branch /></span>
           <span className="brand-name">Codex Commons</span>
           <button
             className="rail-collapse"
@@ -118,7 +118,8 @@ export function AppShell({ route, onNavigate, railContent = null, children }) {
         </nav>
         {railContent ? <div className="rail-context">{railContent}</div> : null}
         <div className="rail-footer">
-          <div className="rail-footer-actions">
+          <div className="rail-account-row">
+            <SessionControl status={auth.status} session={auth.session} onSignIn={() => setLoginOpen(true)} onSignOut={signOut} onEditProfile={() => setProfileOpen(true)} onOpenArchaeology={() => setArchaeologyOpen(true)} />
             <button
               ref={notificationButtonRef}
               className={`rail-notifications${notifications.active ? " is-active" : ""}`}
@@ -131,9 +132,8 @@ export function AppShell({ route, onNavigate, railContent = null, children }) {
               <Bell aria-hidden="true" />
               {notifications.data.unreadCount ? <span className="notification-count" aria-hidden="true">{Math.min(notifications.data.unreadCount, 99)}</span> : null}
             </button>
-            <button className="rail-settings" type="button" onClick={() => setSettingsOpen(true)}><span aria-hidden="true">Aa</span><strong>Settings</strong></button>
+            <button className="rail-settings" type="button" aria-label="Display settings" onClick={() => setSettingsOpen(true)}><span aria-hidden="true">Aa</span></button>
           </div>
-          <SessionControl status={auth.status} session={auth.session} onSignIn={() => setLoginOpen(true)} onSignOut={signOut} onEditProfile={() => setProfileOpen(true)} onOpenArchaeology={() => setArchaeologyOpen(true)} />
           {accountMessage ? <small role="status">{accountMessage}</small> : null}
         </div>
       </aside>
