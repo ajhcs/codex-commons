@@ -515,23 +515,22 @@ func archaeologyLaunchProgress(tasks []ArchaeologyTaskLaunch) ArchaeologyLaunchP
 func (s *Service) archaeologySessionView(value domain.ArchaeologySession) ArchaeologySession {
 	out := archaeologyView(value)
 	if s != nil {
-		_, native := s.archaeologyLauncher.(ArchaeologyTaskLauncher)
-		if native && value.Handoff != nil &&
+		schedulerNative := s.archaeologyScheduler != nil
+		_, directTaskNative := s.archaeologyLauncher.(ArchaeologyTaskLauncher)
+		if (schedulerNative || directTaskNative) && len(value.NativeBatches) == 0 && value.Handoff != nil &&
 			value.Handoff.State == "ready_to_claim" && value.Handoff.ClaimedBy == "" && value.Handoff.ClaimedAt.IsZero() {
 			// An untouched pre-native handoff remains durable audit history, but is
 			// not a second control plane once direct App Server launch is configured.
-			nativeTasks := []ArchaeologyTaskLaunch{}
+			legacyTasks := []ArchaeologyTaskLaunch{}
 			if out.Handoff != nil {
-				nativeTasks = out.Handoff.Tasks
+				legacyTasks = out.Handoff.Tasks
 			}
 			out.Handoff = nil
-			out.Controls.CanStart = len(nativeTasks) == 0 && value.State == "draft" && archaeologyNativeMappingReady(value)
+			out.Controls.CanStart = (schedulerNative || len(legacyTasks) == 0) && value.State == "draft" && archaeologyNativeMappingReady(value)
 			out.Controls.CanPause, out.Controls.CanResume, out.Controls.CanCancel = false, false, false
-			if len(nativeTasks) > 0 {
-				// Present only the exact direct-task ledger. The compatibility row's ID,
-				// ready-to-claim state, and broad claim action stay server-side.
+			if directTaskNative && !schedulerNative && len(legacyTasks) > 0 {
 				ids := append([]string(nil), out.Config.SelectedProjectIDs...)
-				out.Handoff = &ArchaeologyHandoff{State: "launching", Depth: out.Config.Depth, Sources: out.Config.Sources, Concurrency: out.Config.MaxConcurrency, CandidateIDs: ids, Tasks: nativeTasks, AllowedActions: []string{}}
+				out.Handoff = &ArchaeologyHandoff{State: "launching", Depth: out.Config.Depth, Sources: out.Config.Sources, Concurrency: out.Config.MaxConcurrency, CandidateIDs: ids, Tasks: legacyTasks, AllowedActions: []string{}}
 			}
 		}
 	}
