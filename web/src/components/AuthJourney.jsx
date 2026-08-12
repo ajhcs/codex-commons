@@ -1,4 +1,4 @@
-import Branch from "../icons/Branch.tsx";
+import CommonsCompanion from "./CommonsCompanion.jsx";
 
 const JOURNEY_STEPS = ["Connect", "Authorize", "Enter Commons"];
 
@@ -25,6 +25,13 @@ function announcement(stage, identity) {
 
 export default function AuthJourney({ stage = "ready", identity = null }) {
   const activeStep = currentStep(stage);
+  const companionState = stage === "connecting"
+    ? "connecting"
+    : stage === "authorize" || stage === "profile"
+      ? "authorized"
+      : stage === "complete"
+        ? "identity-resolved"
+        : "idle";
   const displayName = identity?.displayName?.trim() || (stage === "profile" ? "Your Commons identity" : "Commons");
   const handle = identity?.handle?.trim() ? `@${identity.handle.trim().replace(/^@/, "")}` : (stage === "profile" ? "Choose your handle" : "Durable project memory");
 
@@ -40,7 +47,7 @@ export default function AuthJourney({ stage = "ready", identity = null }) {
           <span className="auth-thread-signal" />
         </div>
         <div className="auth-connection-endpoint auth-connection-endpoint--commons">
-          <span className="auth-endpoint-glyph"><Branch /></span>
+          <CommonsCompanion state={companionState} size="small" className="auth-endpoint-companion" />
           <span><strong>{displayName}</strong><small>{handle}</small></span>
         </div>
       </div>

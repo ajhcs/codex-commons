@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useAuthSession } from "../hooks/useAuthSession.js";
 import { useNotifications } from "../hooks/NotificationContext.jsx";
+import { commonsAdapter } from "../data/adapter.js";
+import CommonsCompanion from "./CommonsCompanion.jsx";
 import { LoginDialog, ProfileDialog, SessionControl } from "./AuthControls.jsx";
 import { SettingsDialog } from "./SettingsDialog.jsx";
 import { ProjectArchaeologyFlow } from "../features/project-archaeology/ProjectArchaeologyFlow.jsx";
+import { ProjectHistoryOffer } from "../features/project-archaeology/ProjectHistoryOffer.jsx";
 
-import Branch from "../icons/Branch.tsx";
 import Bell from "../icons/Bell.tsx";
 import ChevronLeft from "../icons/ChevronLeft.tsx";
 import FileDocument from "../icons/FileDocument.tsx";
@@ -20,12 +22,17 @@ export function AppShell({ route, onNavigate, railContent = null, children }) {
   const auth = useAuthSession();
   const notifications = useNotifications();
   const notificationButtonRef = useRef(null);
+  const authSessionRef = useRef(auth.session);
+  const historyCheckRef = useRef(0);
   const [collapsed, setCollapsed] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [accountMessage, setAccountMessage] = useState("");
   const [archaeologyOpen, setArchaeologyOpen] = useState(false);
+  const [historyOfferOpen, setHistoryOfferOpen] = useState(false);
+  const [archaeologySeed, setArchaeologySeed] = useState(null);
+  authSessionRef.current = auth.session;
   const primaryRoute = route === "project" ? "projects" : route === "post" ? "posts" : route;
   const notificationLabel = !auth.session?.authenticated
     ? "Sign in to check mentions"
@@ -77,6 +84,7 @@ export function AppShell({ route, onNavigate, railContent = null, children }) {
 
   async function signOut() {
     if (!auth.session?.authenticated) return;
+    historyCheckRef.current += 1;
     try {
       await auth.logout();
       setAccountMessage("Signed out");
@@ -85,11 +93,31 @@ export function AppShell({ route, onNavigate, railContent = null, children }) {
     }
   }
 
-  function authenticated(session, context = {}) {
+  async function authenticated(session, context = {}) {
+    const historyCheck = ++historyCheckRef.current;
+    authSessionRef.current = session;
     auth.accept(session);
     setLoginOpen(false);
     setAccountMessage("");
-    if (context.freshCodexProfile === true && session?.authMethod === "codex") setArchaeologyOpen(true);
+    if (context.freshCodexProfile !== true || session?.authMethod !== "codex") return;
+    const historyCheckIsCurrent = () => {
+      const currentSession = authSessionRef.current;
+      return historyCheck === historyCheckRef.current
+        && currentSession?.authenticated
+        && currentSession.principal?.principal === session.principal?.principal;
+    };
+    try {
+      const model = await commonsAdapter.readProjectArchaeology();
+      if (!historyCheckIsCurrent()) return;
+      if (model.capabilities?.discovery?.available === true) {
+        setArchaeologySeed(model);
+        setHistoryOfferOpen(true);
+      }
+    } catch {
+      if (historyCheckIsCurrent()) {
+        setAccountMessage("Project history setup could not be checked. You can retry from your account menu.");
+      }
+    }
   }
 
   return (
@@ -97,7 +125,7 @@ export function AppShell({ route, onNavigate, railContent = null, children }) {
     <div className={`app-shell${collapsed ? " app-shell--collapsed" : ""}`}>
       <aside className="left-rail">
         <div className="brand-row">
-          <span className="brand-icon" aria-hidden="true"><Branch /></span>
+          <span className="brand-icon"><CommonsCompanion state="idle" size="tiny" /></span>
           <span className="brand-name">Codex Commons</span>
           <button
             className="rail-collapse"
@@ -119,7 +147,7 @@ export function AppShell({ route, onNavigate, railContent = null, children }) {
         {railContent ? <div className="rail-context">{railContent}</div> : null}
         <div className="rail-footer">
           <div className="rail-account-row">
-            <SessionControl status={auth.status} session={auth.session} onSignIn={() => setLoginOpen(true)} onSignOut={signOut} onEditProfile={() => setProfileOpen(true)} onOpenArchaeology={() => setArchaeologyOpen(true)} />
+            <SessionControl status={auth.status} session={auth.session} onSignIn={() => setLoginOpen(true)} onSignOut={signOut} onEditProfile={() => setProfileOpen(true)} onOpenArchaeology={() => { setArchaeologySeed(null); setArchaeologyOpen(true); }} />
             <button
               ref={notificationButtonRef}
               className={`rail-notifications${notifications.active ? " is-active" : ""}`}
@@ -142,7 +170,8 @@ export function AppShell({ route, onNavigate, railContent = null, children }) {
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <LoginDialog open={loginOpen} onClose={() => setLoginOpen(false)} onAuthenticated={authenticated} />
       <ProfileDialog open={profileOpen} onClose={() => setProfileOpen(false)} />
-      <ProjectArchaeologyFlow open={archaeologyOpen} onClose={() => setArchaeologyOpen(false)} onNavigate={onNavigate} />
+      <ProjectHistoryOffer open={historyOfferOpen} identity={auth.session?.principal} onSkip={() => setHistoryOfferOpen(false)} onContinue={() => { setHistoryOfferOpen(false); setArchaeologyOpen(true); }} />
+      <ProjectArchaeologyFlow open={archaeologyOpen} initialArchaeology={archaeologySeed} onClose={() => { setArchaeologyOpen(false); setArchaeologySeed(null); }} onNavigate={onNavigate} />
     </>
   );
 }

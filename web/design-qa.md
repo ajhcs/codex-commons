@@ -1,3 +1,40 @@
+# Commons identity, controls, clipboard, and Project Archaeology QA
+
+## Source truth and normalization
+
+- The user-supplied 1376 × 1177 login image is art direction only: spacious white dialog, calm progress, dimensional identity, one confident blue action, and restrained outlined controls. It is not a pixel-fidelity source and no protected wordmark, Blossom, or third-party identity mark was copied.
+- Current baselines: `/tmp/commons-before-second-polish-login.png` and `/tmp/commons-before-second-polish-desktop.png`, both 1440 × 913. Final primary captures: `/tmp/commons-after-second-polish-login.png` and `/tmp/commons-after-second-polish-desktop.png` at 1440 × 913, device scale factor 1. Combined board: `/tmp/commons-second-polish-comparison.png`.
+- Responsive captures: `/tmp/commons-after-second-polish-mobile.png` at 390 × 844, `/tmp/commons-after-second-polish-320.png` at 320 × 844, and `/tmp/commons-after-second-polish-200pct.png` at a 720 × 456 CSS viewport rendered at 2× device scale for the 200% browser-zoom layout equivalent.
+- No in-app Browser tool was exposed, so installed Playwright 1.58 / Chrome ran against temporary fixture-only Vite listeners on verified-free `127.0.0.1:4173` and `:4174`; no live listener or server state changed. Direct image inspection was blocked by the known filesystem sandbox mount issue, so assets and captures were inspected as temporary data-URL images.
+
+## Design and interaction result
+
+- The original ImageGen companion is a pearl-ceramic and softly metallic convergence object with a small blue signal core. It contains no face, robot, text, letterform, knot/Blossom, watermark, OpenAI mark, or Grok/X mark. Wrapper-only states cover idle, connecting, authorized, identity-resolved, and history-offered; all animation names resolve to `none` under reduced motion.
+- OFL Open Sans is self-hosted from pinned `google/fonts` variable files with `OFL.txt`; exact reviewed SHA-256 values and upstream provenance are recorded in `src/assets/fonts/open-sans/PROVENANCE.md`, and no runtime font request is made. Controls are normalized by hierarchy rather than indiscriminate pills: actions, filters, toggles, tabs, chips, selects, inputs, dialogs, pagination, menus, notices, and empty/error states share restrained geometry and precise blue focus.
+- Connect → Authorize → Enter Commons passed with selectable readonly pairing code, secure copy success, profile entry, identity resolution, capability-gated history offer, and skip. Skip did not start discovery; account menu reopen remained available.
+- Forced clipboard failure rejected `navigator.clipboard.writeText` and returned false from `execCommand`: no false success, the entire visible code remained focused/selected, and `Ctrl+C` guidance appeared. Unit coverage also passed secure success, LAN/insecure synchronous fallback, rejection fallback, absent `execCommand`, selection restoration, and platform shortcut choice.
+- Project Archaeology passed intro, metadata-only discovery, project selection, depth/sources/concurrency, bounded task-pack handoff, review, mobile, unavailable, and malformed-payload states. Strict normalization remains intact; the fixed canonical `selected_project_ids: []` initial response is accepted without null tolerance. No fake execution percentage or agent-start claim appears.
+
+## Rendered and accessibility evidence
+
+- Auth/history: `/tmp/commons-auth-authorize.png`, `/tmp/commons-auth-profile.png`, `/tmp/commons-auth-resolved.png`, `/tmp/commons-after-auth-debug.png` (the capability-gated history offer; no separate `/tmp/commons-history-offer.png` file exists), `/tmp/commons-after-account-menu.png`, and `/tmp/commons-copy-failure.png`.
+- Archaeology: `/tmp/commons-archaeology-intro.png`, `/tmp/commons-archaeology-projects.png`, `/tmp/commons-archaeology-details.png`, `/tmp/commons-archaeology-handoff.png`, `/tmp/commons-archaeology-review.png`, `/tmp/commons-archaeology-intro-mobile.png`, `/tmp/commons-archaeology-unavailable.png`, `/tmp/commons-archaeology-malformed.png`.
+- Theme/motion/input: `/tmp/commons-after-second-polish-dark.png`, `/tmp/commons-after-second-polish-reduced.png`, `/tmp/commons-after-second-polish-keyboard.png`.
+- Desktop, 390 px, 320 px, archaeology mobile, dark, and 200%-equivalent layouts reported zero page-level horizontal overflow. Keyboard traversal stayed inside the native auth dialog with a computed 2 px focus outline. Reduced-motion identity was static.
+
+## Verification and comparison history
+
+1. The first build found an unclosed block at `src/styles.css:1784`; the missing media-query brace was restored and the complete build reran green.
+2. Early browser assertions found duplicate hidden/visible dialog nodes and one wrong history-offer selector; narrowing to the visible native dialog fixed the harness, with no product defect.
+3. Same-input before/after desktop and login review found no actionable P0, P1, or P2 visual difference. The after-desktop fixture is populated while the baseline is empty, so that pair validates shell/control treatment; the login pair is the same interaction state.
+4. Final verification: `npm test` 51/51 passed, `npm run build` passed with Sites artifacts, and `npm run test:sites` 4/4 passed.
+5. Independent review kept the 32 px login companion intentionally restrained: the same generated asset receives the dedicated 150 px identity panel in `/tmp/commons-after-auth-debug.png`, while enlarging both login marks would duplicate emphasis and crowd the verified 320 px flow. The review corrected the baseline dimensions and missing history-offer filename above.
+6. Final static integration review found one truthfulness edge case outside the captured primary states: an initial/read refresh could label a server-state read as “Finding projects…” and preserve an old handoff after a failed refresh. The dialog now uses a dedicated checking/error state that says no discovery or import has started, clears the prior model before the read, and retains close/retry recovery. No in-app Browser was callable for a new transient-state capture, so no new screenshot is claimed; the state reuses the already-rendered centered-state component language and the post-fix unit/build/Sites gates passed.
+
+final result: passed
+
+---
+
 # Slice 13 single-plane attention QA
 
 ## Selected target and implementation state

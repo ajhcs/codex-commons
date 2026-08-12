@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { copyText, manualCopyShortcut } from "../../browser/copyText.js";
+import CommonsCompanion from "../../components/CommonsCompanion.jsx";
 import BookOpen from "../../icons/BookOpen.tsx";
 import Branch from "../../icons/Branch.tsx";
 import CheckCircle from "../../icons/CheckCircle.tsx";
@@ -53,7 +55,7 @@ function Intro({ identity, model, busy, error, onDiscover, onSkip }) {
   return (
     <div className="archaeology-intro">
       <div className="archaeology-identity" aria-label={`Signed in as ${identityLabel(identity)}`}>
-        <span aria-hidden="true">{(identity?.displayName || identity?.handle || "C").slice(0, 1).toUpperCase()}</span>
+        <CommonsCompanion state="history-offered" size="medium" />
         <strong>{identityLabel(identity)}</strong>
         <small>Identity connected</small>
       </div>
@@ -84,6 +86,20 @@ function DiscoveryState({ failed, error, onDiscover, onSkip }) {
       <div className="archaeology-inline-actions">
         <button className="secondary-button" type="button" onClick={onSkip}>Skip for now</button>
         {failed ? <button className="primary-button" type="button" onClick={onDiscover}>Try again</button> : null}
+      </div>
+    </div>
+  );
+}
+
+function ReadingState({ error, onRetry, onClose }) {
+  return (
+    <div className="archaeology-centered-state" role={error ? "alert" : "status"} aria-live="polite">
+      <span className={`archaeology-state-mark${error ? " is-error" : ""}`} aria-hidden="true"><Folder /></span>
+      <h2 id="archaeology-title">{error ? "Project history is unavailable" : "Checking project history"}</h2>
+      <p id="archaeology-description">{error || "Reading the current server state and capability facts. No discovery or import has started."}</p>
+      <div className="archaeology-inline-actions">
+        <button className="secondary-button" type="button" onClick={onClose}>Close</button>
+        {error ? <button className="primary-button" type="button" onClick={onRetry}>Try again</button> : null}
       </div>
     </div>
   );
@@ -161,19 +177,30 @@ function Configuration({ config, disabled, onChange }) {
 function Configure({ model, config, busy, error, onChange, onStart, onSkip }) {
   const candidates = model?.discovery?.candidates || [];
   const valid = canStartArchaeology(config, candidates);
+  const [step, setStep] = useState("projects");
+  const projectsChosen = config.selectedProjectIds.length > 0;
   return (
     <div className="archaeology-configure">
+      <ol className="archaeology-guide" aria-label="Project history setup progress">
+        <li data-state="complete"><span>1</span>Discover</li>
+        <li data-state={step === "projects" ? "current" : "complete"}><span>2</span>Choose projects</li>
+        <li data-state={step === "details" ? "current" : "upcoming"}><span>3</span>Depth &amp; sources</li>
+        <li data-state="upcoming"><span>4</span>Review handoff</li>
+      </ol>
       <header className="archaeology-content-heading">
-        <div><span>Optional setup</span><h2 id="archaeology-title">Choose what Commons should explore</h2><p id="archaeology-description">Nothing is imported from this screen. Commons prepares one bounded Codex task per project and waits for a validated report.</p></div>
+        <div><span>Optional setup</span><h2 id="archaeology-title">{step === "projects" ? "Choose projects" : "Set the exploration boundaries"}</h2><p id="archaeology-description">{step === "projects" ? "Select only the projects whose history should be prepared for review." : "Choose how deeply Commons should look and which canonical sources may be read after you start."}</p></div>
       </header>
-      <CandidateList candidates={candidates} config={config} disabled={busy} onChange={onChange} />
-      <Configuration config={config} disabled={busy} onChange={onChange} />
+      {step === "projects" ? <CandidateList candidates={candidates} config={config} disabled={busy} onChange={onChange} /> : <Configuration config={config} disabled={busy} onChange={onChange} />}
       <div className="archaeology-truth-note"><strong>{formatDurationRange({ durationSecondsMin: config.depth === "quick" ? 60 : config.depth === "deep" ? 480 : 240, durationSecondsMax: config.depth === "quick" ? 240 : config.depth === "deep" ? 1800 : 900 })} per project</strong><span>Time and model usage vary with project history. Commons will show real project states, not a simulated percentage.</span></div>
       {error ? <p className="archaeology-message archaeology-message--error" role="alert">{error}</p> : null}
       {model?.capabilities?.historianHandoff?.available === false ? <p className="archaeology-message" role="status">{model.capabilities.historianHandoff.reason || "Codex task-pack handoff is not available on this installation."}</p> : null}
       <footer className="archaeology-footer">
-        <button className="secondary-button" type="button" disabled={busy} onClick={onSkip}>Skip for now</button>
-        <button className="primary-button" type="button" disabled={busy || !valid || model?.capabilities?.historianHandoff?.available !== true} onClick={() => onStart(config)}>{busy ? "Preparing…" : "Prepare Codex task pack"}</button>
+        {step === "projects" ? <button className="secondary-button" type="button" disabled={busy} onClick={onSkip}>Skip for now</button> : <button className="secondary-button" type="button" disabled={busy} onClick={() => setStep("projects")}>Back</button>}
+        {step === "projects" ? (
+          <button className="primary-button" type="button" disabled={busy || !projectsChosen} onClick={() => setStep("details")}>Continue</button>
+        ) : (
+          <button className="primary-button" type="button" disabled={busy || !valid || model?.capabilities?.historianHandoff?.available !== true} onClick={() => onStart(config)}>{busy ? "Preparing…" : "Prepare Codex task pack"}</button>
+        )}
       </footer>
     </div>
   );
@@ -186,16 +213,10 @@ function Handoff({ model, busy, error, onRefresh, onClose }) {
   const claimed = handoff.state === "claimed";
 
   async function copyPack() {
-    if (typeof globalThis.navigator?.clipboard?.writeText !== "function") {
-      setCopyState("Copy is unavailable in this browser.");
-      return;
-    }
-    try {
-      await globalThis.navigator.clipboard.writeText(taskPackText(handoff));
-      setCopyState("Task pack copied.");
-    } catch {
-      setCopyState("Copy is unavailable in this browser.");
-    }
+    const copied = await copyText(taskPackText(handoff));
+    setCopyState(copied
+      ? "Task pack copied."
+      : `Copy didn't work. Open the project instructions and use ${manualCopyShortcut()} to copy them manually.`);
   }
 
   return (
@@ -303,7 +324,7 @@ export function ProjectArchaeologyDialog({ open, identity, archaeology, busy = f
   const dialogRef = useRef(null);
   const modelIDRef = useRef("");
   const [config, setConfig] = useState(() => configFromModel(archaeology?.config));
-  const view = archaeologyView(archaeology);
+  const view = !archaeology && (busy || error) ? "reading" : archaeologyView(archaeology);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -331,8 +352,9 @@ export function ProjectArchaeologyDialog({ open, identity, archaeology, busy = f
   return (
     <dialog ref={dialogRef} className={`archaeology-dialog archaeology-dialog--${view}`} aria-labelledby="archaeology-title" aria-describedby="archaeology-description" onClose={close} onCancel={(event) => { event.preventDefault(); close(); }}>
       <span className="sr-only" aria-live="polite">{selectedSummary}</span>
-      {view !== "intro" && view !== "discovering" && view !== "discovery_failed" ? <button className="archaeology-close" type="button" onClick={close}>Close</button> : null}
+      {view !== "intro" && view !== "reading" && view !== "discovering" && view !== "discovery_failed" ? <button className="archaeology-close" type="button" onClick={close}>Close</button> : null}
       {view === "intro" ? <Intro identity={identity} model={archaeology} busy={busy} error={error} onDiscover={onDiscover} onSkip={skip} /> : null}
+      {view === "reading" ? <ReadingState error={error} onRetry={onRefresh} onClose={close} /> : null}
       {view === "discovering" || view === "discovery_failed" ? <DiscoveryState failed={view === "discovery_failed"} error={error || archaeology?.discovery?.error} onDiscover={onDiscover} onSkip={skip} /> : null}
       {view === "handoff" ? <Handoff model={archaeology} busy={busy} error={error} onRefresh={onRefresh} onClose={close} /> : null}
       {view === "configure" ? <Configure model={archaeology} config={config} busy={busy} error={error} onChange={setConfig} onStart={onStart} onSkip={skip} /> : null}

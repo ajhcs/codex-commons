@@ -1,12 +1,13 @@
 export async function copyText(text, {
   navigatorObject = globalThis.navigator,
   documentObject = globalThis.document,
+  isSecureContext = globalThis.isSecureContext,
 } = {}) {
   const value = typeof text === "string" ? text : "";
   if (!value) return false;
 
   try {
-    if (typeof navigatorObject?.clipboard?.writeText === "function") {
+    if (isSecureContext !== false && typeof navigatorObject?.clipboard?.writeText === "function") {
       await navigatorObject.clipboard.writeText(value);
       return true;
     }
@@ -18,6 +19,17 @@ export async function copyText(text, {
   if (!documentObject?.body || typeof documentObject.createElement !== "function") return false;
   const textarea = documentObject.createElement("textarea");
   const previousFocus = documentObject.activeElement;
+  const previousInputSelection = previousFocus && typeof previousFocus.selectionStart === "number"
+    ? {
+        start: previousFocus.selectionStart,
+        end: previousFocus.selectionEnd,
+        direction: previousFocus.selectionDirection,
+      }
+    : null;
+  const selection = documentObject.getSelection?.();
+  const previousRanges = selection
+    ? Array.from({ length: selection.rangeCount }, (_, index) => selection.getRangeAt(index).cloneRange())
+    : [];
   textarea.value = value;
   textarea.setAttribute("readonly", "");
   textarea.style.position = "fixed";
@@ -33,6 +45,18 @@ export async function copyText(text, {
     copied = false;
   }
   textarea.remove();
-  previousFocus?.focus?.();
+  previousFocus?.focus?.({ preventScroll: true });
+  if (previousInputSelection && typeof previousFocus?.setSelectionRange === "function") {
+    previousFocus.setSelectionRange(previousInputSelection.start, previousInputSelection.end, previousInputSelection.direction);
+  }
+  if (selection) {
+    selection.removeAllRanges();
+    previousRanges.forEach((range) => selection.addRange(range));
+  }
   return copied;
+}
+
+export function manualCopyShortcut(navigatorObject = globalThis.navigator) {
+  const platform = navigatorObject?.userAgentData?.platform || navigatorObject?.platform || "";
+  return /mac|iphone|ipad|ipod/i.test(platform) ? "Command+C" : "Ctrl+C";
 }
