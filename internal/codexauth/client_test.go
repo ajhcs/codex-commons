@@ -98,9 +98,14 @@ type testRequest struct {
 	ID     json.RawMessage `json:"id"`
 	Method string          `json:"method"`
 	Params json.RawMessage `json:"params"`
+	Error  json.RawMessage `json:"error"`
 }
 
-func newTestClient(t *testing.T) (*ClientImpl, *memoryTransport) {
+func newTestClient(t *testing.T) (*ClientImpl, *memoryTransport) { return newTestClientMode(t, false) }
+func newExperimentalTestClient(t *testing.T) (*ClientImpl, *memoryTransport) {
+	return newTestClientMode(t, true)
+}
+func newTestClientMode(t *testing.T, experimental bool) (*ClientImpl, *memoryTransport) {
 	t.Helper()
 	transport := newMemoryTransport()
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
@@ -112,7 +117,7 @@ func newTestClient(t *testing.T) (*ClientImpl, *memoryTransport) {
 	}
 	ready := make(chan result, 1)
 	go func() {
-		client, err := NewWithTransport(ctx, transport)
+		client, err := NewWithTransportConfig(ctx, transport, experimental)
 		ready <- result{client: client, err: err}
 	}()
 
@@ -134,12 +139,18 @@ func newTestClient(t *testing.T) (*ClientImpl, *memoryTransport) {
 			Title   string `json:"title"`
 			Version string `json:"version"`
 		} `json:"clientInfo"`
+		Capabilities struct {
+			ExperimentalAPI bool `json:"experimentalApi"`
+		} `json:"capabilities"`
 	}
 	if err := json.Unmarshal(request.Params, &params); err != nil {
 		t.Fatalf("decode initialize params: %v", err)
 	}
 	if got := params.ClientInfo; got.Name != "codex_commons" || got.Title != "Codex Commons" || got.Version == "" {
 		t.Fatalf("initialize clientInfo = %+v", got)
+	}
+	if params.Capabilities.ExperimentalAPI != experimental {
+		t.Fatalf("experimentalApi=%v want %v", params.Capabilities.ExperimentalAPI, experimental)
 	}
 	if err := transport.respondResult(request.ID, map[string]any{"serverInfo": map[string]string{"version": "test"}}); err != nil {
 		t.Fatalf("respond to initialize: %v", err)
@@ -200,6 +211,23 @@ func assertParams(t *testing.T, got json.RawMessage, want any) {
 	}
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("params = %#v, want %#v", actual, expected)
+	}
+}
+
+func TestProductionClientRejectsExperimentalServerRequests(t *testing.T) {
+	client, transport := newTestClient(t)
+	if client.ExperimentalDynamicTools() {
+		t.Fatal("production client unexpectedly enables experimental dynamic tools")
+	}
+	if err := transport.respond(map[string]any{"id": 991, "method": "item/tool/call", "params": map[string]any{"callId": "call-1"}}); err != nil {
+		t.Fatal(err)
+	}
+	response := nextRequest(t, transport)
+	if string(bytes.TrimSpace(response.ID)) != "991" || response.Method != "" || len(response.Error) == 0 {
+		t.Fatalf("response=%+v", response)
+	}
+	if !bytes.Contains(response.Error, []byte(`"code":-32601`)) {
+		t.Fatalf("error=%s", response.Error)
 	}
 }
 

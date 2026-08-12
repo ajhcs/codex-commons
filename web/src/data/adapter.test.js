@@ -723,7 +723,12 @@ function archaeologyPayload() {
       review: { configured: true, available: true, mode: "validated_manifest" },
       canonical_apply: { configured: true, available: true, mode: "preview_digest_confirm" },
     },
-    handoff: { id: "HAND-1", state: "completed", depth: "standard", sources: { git: true, docs: true, codex_history: true }, concurrency: 2, candidate_ids: ["codex-commons"], tasks: [{ project_id: "codex-commons", state: "completed", thread_id: "019ff-task", turn_id: "turn-1", created_at: "2026-08-12T12:00:00Z", updated_at: "2026-08-12T12:30:00Z", available_actions: [] }], allowed_actions: [] },
+    handoff: {
+      id: "", batch_id: "BATCH-1", state: "completed", depth: "standard", sources: { git: true, docs: true, codex_history: true }, concurrency: 2, candidate_ids: ["codex-commons"],
+      tasks: [{ job_id: "JOB-1", batch_id: "BATCH-1", candidate_id: "codex-commons", project_id: "project-codex-commons", launch_id: "JOB-1", mode: "app_server_dynamic_tools", state: "completed", phase_label: "Report accepted", sources_examined: 8, duration_ms: 93000, thread_id: "019ff-task", turn_id: "turn-1", created_at: "2026-08-12T12:00:00Z", updated_at: "2026-08-12T12:30:00Z", available_actions: [] }],
+      progress: { queued_count: 0, active_count: 0, attention_count: 0, selected_total: 1, preparing_count: 0, starting_count: 0, task_created_count: 0, claimed_count: 0, running_count: 0, report_ready_count: 0, completed_count: 1, failed_count: 0, uncertain_count: 0, updated_at: "2026-08-12T12:30:00Z" },
+      allowed_actions: [],
+    },
     controls: { can_start: false, can_pause: false, can_resume: false, can_cancel: false },
     revision: 7, updated_at: "2026-08-12T12:30:00Z",
   };
@@ -745,10 +750,18 @@ test("Project Archaeology normalizes once and transports explicit human controls
 
   assert.equal(model.discovery.metadataOnly, true);
   assert.equal(model.discovery.candidates[0].pathLabel, undefined, "raw path labels never enter the frontend model");
+  assert.equal(model.discovery.candidates[0].candidateId, "codex-commons");
   assert.equal(model.discovery.candidates[0].signals.codexHistory, true);
   assert.equal(model.review.proposedOutcomes[0].memberSessions[0].sessionId, "SES-4168");
   assert.equal(model.review.memberSessions[0].demonstratedStrengths[0], "Provenance design");
   assert.equal(model.review.memberSessions[0].reachable, undefined, "membership does not synthesize reachability");
+  assert.equal(model.handoff.batchId, "BATCH-1");
+  assert.equal(model.handoff.tasks[0].candidateId, "codex-commons");
+  assert.equal(model.handoff.tasks[0].projectId, "project-codex-commons");
+  assert.equal(model.handoff.tasks[0].jobId, "JOB-1");
+  assert.equal(model.handoff.tasks[0].sourcesExamined, 8);
+  assert.equal(model.handoff.tasks[0].durationMs, 93000);
+  assert.equal(model.handoff.progress.completedCount, 1);
   assert.equal(calls[0].url, "/v1/project-archaeology");
   assert.equal(calls[0].options.method, "GET");
   assert.deepEqual(calls.slice(1).map((call) => [call.options.method, call.url]), [
@@ -769,6 +782,19 @@ test("Project Archaeology rejects automatic candidate selection and unreviewed m
   for (const mutate of [
     (payload) => { payload.discovery.candidates[0].sources = ["filesystem_scan"]; },
     (payload) => { payload.review.requires_explicit_approval = false; },
+  ]) {
+    const payload = archaeologyPayload();
+    mutate(payload);
+    const adapter = createHTTPAdapter({ fetchImpl: async () => apiResponse(payload) });
+    await assert.rejects(adapter.readProjectArchaeology(), (error) => error.code === "invalid_payload");
+  }
+});
+
+test("Project Archaeology rejects unbounded native scheduler facts", async () => {
+  for (const mutate of [
+    (payload) => { payload.handoff.tasks[0].phase_label = "x".repeat(121); },
+    (payload) => { payload.handoff.tasks[0].duration_ms = 604800001; },
+    (payload) => { payload.handoff.tasks[0].state = "claimed_native"; },
   ]) {
     const payload = archaeologyPayload();
     mutate(payload);

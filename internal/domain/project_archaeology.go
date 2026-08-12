@@ -14,12 +14,12 @@ type ArchaeologyConfig struct {
 }
 
 type ArchaeologyCandidate struct {
-	ID, Name, PathLabel, RepositoryLabel, RelativeCost, PrivacyNote string
-	LastActivityAt                                                  time.Time
-	HasGit, HasDocs, HasCodexHistory                                bool
-	FromCodexMetadata, FromConfiguredRoot                           bool
-	DurationMinSeconds, DurationMaxSeconds, CodexThreadCount        int
-	Selected                                                        bool
+	ID, CanonicalProjectID, Name, PathLabel, RepositoryLabel, RelativeCost, PrivacyNote string
+	LastActivityAt                                                                      time.Time
+	HasGit, HasDocs, HasCodexHistory                                                    bool
+	FromCodexMetadata, FromConfiguredRoot                                               bool
+	DurationMinSeconds, DurationMaxSeconds, CodexThreadCount                            int
+	Selected                                                                            bool
 }
 
 type ArchaeologyRun struct {
@@ -52,9 +52,44 @@ type ArchaeologySession struct {
 	Runs                                                 []ArchaeologyRun
 	Outcomes                                             []ArchaeologyOutcome
 	TaskLaunches                                         []ArchaeologyTaskLaunch
+	NativeBatches                                        []ArchaeologyNativeBatch
 	Revision                                             int64
 	DiscoveredAt, UpdatedAt                              time.Time
 	Handoff                                              *ArchaeologyHandoff
+}
+
+type ArchaeologyNativeBatch struct {
+	ID, State, Mode      string
+	MaxConcurrency       int
+	Jobs                 []ArchaeologyNativeJob
+	CreatedAt, UpdatedAt time.Time
+}
+
+type ArchaeologyNativeJob struct {
+	ID, BatchID, CandidateID, ProjectID, Mode, State        string
+	ThreadID, CodexSessionID, TurnID                        string
+	PhaseLabel, ErrorCode                                   string
+	SourcesExamined                                         int
+	DurationMS                                              *int64
+	CreatedAt, StartedAt, ReportedAt, TerminalAt, UpdatedAt time.Time
+}
+
+type ArchaeologyNativeBatchRequest struct {
+	Principal, RequestID string
+	BaseRevision         int64
+}
+type ArchaeologyNativeProgress struct {
+	JobID, ThreadID, TurnID, PhaseLabel string
+	SourcesExamined                     int
+}
+type ArchaeologyNativeReport struct {
+	JobID, ThreadID, TurnID string
+	Digest                  [32]byte
+	Outcomes                []ArchaeologyOutcome
+}
+type ArchaeologyNativeTerminal struct {
+	JobID, ThreadID, TurnID, Status string
+	DurationMS                      *int64
 }
 
 type ArchaeologyHandoff struct {

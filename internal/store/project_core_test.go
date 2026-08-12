@@ -364,7 +364,7 @@ func TestProjectCoreUpgradePreservesLegacyMeaningWithoutFabricatedDates(t *testi
 	must(t, store.DB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationsApplied))
 	must(t, store.DB().QueryRowContext(ctx, `SELECT count(*) FROM milestones WHERE project_id='legacy' AND status='active'`).Scan(&milestones))
 	must(t, store.DB().QueryRowContext(ctx, `SELECT count(*) FROM active_tasks WHERE project_id='legacy'`).Scan(&activeTasks))
-	if migrationsApplied != 12 || milestones != 1 || activeTasks != 1 {
+	if migrationsApplied != 13 || milestones != 1 || activeTasks != 1 {
 		t.Fatalf("migrations=%d milestones=%d active_tasks=%d", migrationsApplied, milestones, activeTasks)
 	}
 	must(t, store.Close())

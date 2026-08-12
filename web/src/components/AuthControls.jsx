@@ -3,6 +3,7 @@ import { isValidHumanDisplayName, isValidHumanHandle } from "../contracts/common
 import { commonsAdapter } from "../data/adapter.js";
 import { useAuthSession } from "../hooks/useAuthSession.js";
 import { copyText, manualCopyShortcut } from "../browser/copyText.js";
+import { navigateAuthDestination, preopenAuthDestination } from "../browser/authDestination.js";
 import Members from "../icons/Members.tsx";
 import AuthJourney from "./AuthJourney.jsx";
 import CommonsMark from "./CommonsMark.jsx";
@@ -82,6 +83,7 @@ export function LoginDialog({ open, onClose, onAuthenticated }) {
   const idempotencyRef = useRef("");
   const flowStartedRef = useRef(false);
   const freshProfileRef = useRef(false);
+  const verificationWindowRef = useRef(null);
   const recoveryInputRef = useRef(null);
   const pairingCodeID = useId();
   const pairingHelpID = useId();
@@ -94,6 +96,10 @@ export function LoginDialog({ open, onClose, onAuthenticated }) {
   const [copyState, setCopyState] = useState("");
   const [cooldownUntil, setCooldownUntil] = useState(0);
   const [cooldownNow, setCooldownNow] = useState(() => Date.now());
+  const [historyOffer, setHistoryOffer] = useState(null);
+  const [historyCheckSlow, setHistoryCheckSlow] = useState(false);
+  const [historyCheckFailed, setHistoryCheckFailed] = useState(false);
+  const [autoOpenFailed, setAutoOpenFailed] = useState(false);
 
   const closeDialog = useModal(open, dialogRef, onClose);
   const pairing = auth.pairing;
@@ -141,11 +147,34 @@ export function LoginDialog({ open, onClose, onAuthenticated }) {
   useEffect(() => {
     if (!open || !flowStartedRef.current || auth.status !== "authenticated" || !auth.session) return undefined;
     const reducedMotion = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
-    const timer = globalThis.setTimeout(() => {
+    let cancelled = false;
+    let slowTimer;
+    const timer = globalThis.setTimeout(async () => {
+      if (!freshProfileRef.current || auth.session?.authMethod !== "codex") {
+        flowStartedRef.current = false;
+        onAuthenticatedRef.current?.(auth.session, { freshCodexProfile: false });
+        return;
+      }
+      slowTimer = globalThis.setTimeout(() => setHistoryCheckSlow(true), 300);
+      try {
+        const model = await commonsAdapter.readProjectArchaeology();
+        if (cancelled) return;
+        if (model.capabilities?.discovery?.available === true) {
+          setHistoryOffer(model);
+          queueMicrotask(() => dialogRef.current?.querySelector("#auth-history-offer-title")?.focus());
+          return;
+        }
+      } catch {
+        if (!cancelled) setHistoryCheckFailed(true);
+        return;
+      } finally {
+        globalThis.clearTimeout(slowTimer);
+        if (!cancelled) setHistoryCheckSlow(false);
+      }
       flowStartedRef.current = false;
-      onAuthenticatedRef.current?.(auth.session, { freshCodexProfile: freshProfileRef.current });
-    }, reducedMotion ? 0 : 720);
-    return () => globalThis.clearTimeout(timer);
+      onAuthenticatedRef.current?.(auth.session, { freshCodexProfile: true });
+    }, reducedMotion ? 0 : 420);
+    return () => { cancelled = true; globalThis.clearTimeout(timer); globalThis.clearTimeout(slowTimer); };
   }, [auth.session, auth.status, open]);
 
   useEffect(() => () => {
@@ -161,6 +190,12 @@ export function LoginDialog({ open, onClose, onAuthenticated }) {
     setCopyState("");
     freshProfileRef.current = false;
     setRecoveryOpen(false);
+    setHistoryOffer(null);
+    setHistoryCheckSlow(false);
+    setHistoryCheckFailed(false);
+    setAutoOpenFailed(false);
+    if (verificationWindowRef.current && !verificationWindowRef.current.closed) verificationWindowRef.current.close();
+    verificationWindowRef.current = null;
   }
 
   function keepFocusInside(event) {
@@ -200,19 +235,31 @@ export function LoginDialog({ open, onClose, onAuthenticated }) {
   async function beginCodex() {
     freshProfileRef.current = false;
     flowStartedRef.current = true;
+    setAutoOpenFailed(false);
     setRecoveryState({ state: "idle", message: "" });
+    const destination = preopenAuthDestination();
+    verificationWindowRef.current = destination;
     try {
-      await auth.beginPairing();
+      const pairingResult = await auth.beginPairing();
+      if (pairingResult?.verificationURL && !navigateAuthDestination(destination, pairingResult.verificationURL)) setAutoOpenFailed(true);
     } catch {
+      if (destination && !destination.closed) destination.close();
+      verificationWindowRef.current = null;
       // The shared auth state contains the user-facing error and retry target.
     }
   }
 
   async function retry() {
     flowStartedRef.current = true;
+    setAutoOpenFailed(false);
+    const destination = preopenAuthDestination();
+    verificationWindowRef.current = destination;
     try {
-      await auth.retryPairing();
+      const pairingResult = await auth.retryPairing();
+      if (pairingResult?.verificationURL && !navigateAuthDestination(destination, pairingResult.verificationURL)) setAutoOpenFailed(true);
     } catch {
+      if (destination && !destination.closed) destination.close();
+      verificationWindowRef.current = null;
       // The shared auth state contains the user-facing error.
     }
   }
@@ -260,13 +307,32 @@ export function LoginDialog({ open, onClose, onAuthenticated }) {
   }
 
   async function copyCode() {
-    const copied = await copyText(pairing?.userCode || "");
-    if (copied) {
-      setCopyState("Code copied");
+    if (globalThis.isSecureContext !== true) {
+      setCopyState(`Copy isn’t available here. Press ${manualCopyShortcut()} to copy the selected code, or type it in.`);
+      queueMicrotask(() => { codeRef.current?.focus({ preventScroll: true }); codeRef.current?.select(); });
       return;
     }
-    setCopyState(`Copy didn't work. Press ${manualCopyShortcut()} with the code selected.`);
+    const copied = await copyText(pairing?.userCode || "");
+    if (copied) {
+      setCopyState("Code copied.");
+      return;
+    }
+    setCopyState(`Copy isn’t available here. Press ${manualCopyShortcut()} to copy the selected code, or type it in.`);
     queueMicrotask(() => { codeRef.current?.focus({ preventScroll: true }); codeRef.current?.select(); });
+  }
+
+  function continueToHistory() {
+    const model = historyOffer;
+    setHistoryOffer(null);
+    flowStartedRef.current = false;
+    onAuthenticatedRef.current?.(auth.session, { freshCodexProfile: true, openProjectHistory: true, archaeologySeed: model });
+  }
+
+  function skipHistory() {
+    setHistoryOffer(null);
+    setHistoryCheckFailed(false);
+    flowStartedRef.current = false;
+    onAuthenticatedRef.current?.(auth.session, { freshCodexProfile: true });
   }
 
   const title = completionMode ? "Welcome to Commons" : profileMode ? "Finish your Commons profile" : pairingMode ? pairing?.userCode ? "Authorize with Codex" : "Connecting to Codex" : flowError ? "Codex sign-in needs attention" : recoveryOpen ? "Use a recovery key" : "Sign in to Commons";
@@ -293,10 +359,31 @@ export function LoginDialog({ open, onClose, onAuthenticated }) {
           </div>
         </header>
 
-        {completionMode ? (
+        {completionMode && historyOffer ? (
+          <section className="auth-history-offer auth-content-transition" aria-labelledby="auth-history-offer-title">
+            <AuthJourney stage="complete" identity={completionSession.principal} />
+            <span className="history-offer-status">Identity connected</span>
+            <h2 id="auth-history-offer-title" tabIndex="-1">Bring your Codex work into Commons?</h2>
+            <p>Choose which projects Commons should understand. Nothing is imported until you review it.</p>
+            <footer>
+              <button type="button" className="secondary-button" onClick={skipHistory}>Not now</button>
+              <button type="button" className="primary-button" onClick={continueToHistory}>Choose projects</button>
+            </footer>
+            <small>You can return from your account menu.</small>
+          </section>
+        ) : completionMode && historyCheckFailed ? (
+          <section className="auth-history-offer auth-content-transition" aria-labelledby="auth-history-offer-title">
+            <AuthJourney stage="complete" identity={completionSession.principal} />
+            <span className="history-offer-status">Identity connected</span>
+            <h2 id="auth-history-offer-title" tabIndex="-1">Project history is unavailable</h2>
+            <p role="status">Project history setup could not be checked. You can try again from your account menu.</p>
+            <footer><button type="button" className="primary-button" onClick={skipHistory}>Enter Commons</button></footer>
+          </section>
+        ) : completionMode ? (
           <>
             <AuthJourney stage="complete" identity={completionSession.principal} />
             <p className="auth-complete-status" role="status">Connected. Entering Commons…</p>
+            {historyCheckSlow ? <p className="auth-history-check" role="status">Checking project history availability…</p> : null}
           </>
         ) : profileMode ? (
           <>
@@ -328,9 +415,10 @@ export function LoginDialog({ open, onClose, onAuthenticated }) {
                     onFocus={(event) => event.currentTarget.select()}
                   />
                   <button type="button" className="secondary-button" onClick={copyCode}>Copy code</button>
-                  <small role="status">{copyState || "\u00a0"}</small>
+                  <small role="status">{copyState || (globalThis.isSecureContext === true ? "\u00a0" : `Select the code and press ${manualCopyShortcut()} to copy it.`)}</small>
                 </div>
-                {pairing.verificationURL ? <a className="pairing-link" href={pairing.verificationURL} target="_blank" rel="noreferrer">Open Codex sign-in <span aria-hidden="true">↗</span></a> : null}
+                {autoOpenFailed ? <p className="pairing-auto-open-note" role="status">Your browser could not open it automatically.</p> : null}
+                {pairing.verificationURL ? <a className={`pairing-link${autoOpenFailed ? " primary-button" : ""}`} href={pairing.verificationURL} target="_blank" rel="noreferrer">{autoOpenFailed ? "Open Codex sign-in" : "Open sign-in again"} <span aria-hidden="true">↗</span></a> : null}
                 <p id={pairingHelpID} className="pairing-status" aria-live="polite"><strong>Waiting for your confirmation in Codex.</strong> Commons checks automatically; this code stays visible while you authorize.</p>
                 <footer>
                   <button type="button" className="secondary-button" onClick={requestClose}>Cancel</button>

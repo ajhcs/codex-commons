@@ -20,9 +20,10 @@ import (
 )
 
 const (
-	MaxLineBytes        = 1 << 20
-	maxPendingRequests  = 16
-	maxLoginCompletions = 32
+	MaxLineBytes           = 1 << 20
+	maxPendingRequests     = 16
+	maxLoginCompletions    = 32
+	maxDynamicCallsPerTurn = 64
 )
 
 var (
@@ -66,6 +67,32 @@ type Event struct {
 	LoginID  string
 	Success  bool
 	AuthMode string
+}
+
+type DynamicToolCall struct {
+	CallID, ThreadID, TurnID, Tool string
+	Arguments                      json.RawMessage
+}
+type DynamicToolContent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+type DynamicToolResponse struct {
+	Success      bool                 `json:"success"`
+	ContentItems []DynamicToolContent `json:"contentItems"`
+}
+type TurnTerminal struct {
+	ThreadID, TurnID, Status string
+	DurationMS               *int64
+}
+type DynamicToolHandler func(context.Context, DynamicToolCall) DynamicToolResponse
+type TurnTerminalHandler func(TurnTerminal)
+
+type ExperimentalArchaeologyClient interface {
+	ArchaeologyClient
+	ExperimentalDynamicTools() bool
+	LaunchHistorianTask(context.Context, string, string, string, string, string, string, DynamicToolHandler, TurnTerminalHandler) (TaskLaunch, error)
+	InterruptTurn(context.Context, string, string) error
 }
 
 // Client is the small capability surface consumed by the Commons HTTP layer.
@@ -160,36 +187,54 @@ type loginCompletion struct {
 type ClientImpl struct {
 	transport io.ReadWriteCloser
 
-	mu          sync.Mutex
-	pending     map[string]pendingRequest
-	completions map[string]loginCompletion
-	cancelled   map[string]bool
-	ready       bool
-	closed      bool
-	failure     error
-	handler     func(Event)
-	nextID      atomic.Uint64
-	writeMu     sync.Mutex
-	closeOnce   sync.Once
-	done        chan struct{}
-	readerDone  chan struct{}
-	waitDone    chan struct{}
+	mu               sync.Mutex
+	pending          map[string]pendingRequest
+	completions      map[string]loginCompletion
+	cancelled        map[string]bool
+	ready            bool
+	closed           bool
+	failure          error
+	handler          func(Event)
+	dynamicHandlers  map[string]DynamicToolHandler
+	terminalHandlers map[string]TurnTerminalHandler
+	pendingTerminals map[string]TurnTerminal
+	pendingTools     map[string][]wireMessage
+	dynamicTurns     map[string]string
+	dynamicCalls     map[string]map[string]bool
+	nextID           atomic.Uint64
+	writeMu          sync.Mutex
+	closeOnce        sync.Once
+	experimental     bool
+	done             chan struct{}
+	readerDone       chan struct{}
+	waitDone         chan struct{}
 }
 
 // NewWithTransport performs the required initialize/initialized handshake on
 // an already connected JSONL transport. Tests can use this with in-memory
 // pipes; production uses NewProcess below.
 func NewWithTransport(ctx context.Context, transport io.ReadWriteCloser) (*ClientImpl, error) {
+	return NewWithTransportConfig(ctx, transport, false)
+}
+
+func NewWithTransportConfig(ctx context.Context, transport io.ReadWriteCloser, experimental bool) (*ClientImpl, error) {
 	if transport == nil {
 		return nil, ErrUnavailable
 	}
 	c := &ClientImpl{
-		transport:   transport,
-		pending:     make(map[string]pendingRequest),
-		completions: make(map[string]loginCompletion),
-		cancelled:   make(map[string]bool),
-		done:        make(chan struct{}),
-		readerDone:  make(chan struct{}),
+		transport:        transport,
+		pending:          make(map[string]pendingRequest),
+		completions:      make(map[string]loginCompletion),
+		cancelled:        make(map[string]bool),
+		dynamicHandlers:  make(map[string]DynamicToolHandler),
+		terminalHandlers: make(map[string]TurnTerminalHandler),
+		pendingTerminals: make(map[string]TurnTerminal),
+		pendingTools:     make(map[string][]wireMessage),
+		dynamicTurns:     make(map[string]string),
+		dynamicCalls:     make(map[string]map[string]bool),
+		experimental:     experimental,
+		done:             make(chan struct{}),
+		readerDone:       make(chan struct{}),
 	}
 	go c.readLoop()
 	initCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -202,8 +247,9 @@ func NewWithTransport(ctx context.Context, transport io.ReadWriteCloser) (*Clien
 }
 
 type ProcessConfig struct {
-	Executable string
-	Env        []string
+	Executable                     string
+	Env                            []string
+	EnableExperimentalDynamicTools bool
 }
 
 // NewProcess starts exactly `codex app-server --listen stdio://` without a
@@ -240,7 +286,7 @@ func NewProcess(ctx context.Context, config ProcessConfig) (*ClientImpl, error) 
 	// block on its pipe while Commons waits for initialize.
 	go func() { _, _ = io.Copy(io.Discard, stderr); _ = stderr.Close() }()
 	transport := &processTransport{stdin: stdin, stdout: stdout}
-	c, err := NewWithTransport(ctx, transport)
+	c, err := NewWithTransportConfig(ctx, transport, config.EnableExperimentalDynamicTools)
 	if err != nil {
 		_ = cmd.Process.Kill()
 		_, _ = cmd.Process.Wait()
@@ -282,13 +328,15 @@ type readWriteCloserWithReader interface {
 }
 
 func (c *ClientImpl) initialize(ctx context.Context) error {
-	result, err := c.call(ctx, "initialize", map[string]any{
+	params := map[string]any{
 		"clientInfo": map[string]string{
-			"name":    "codex_commons",
-			"title":   "Codex Commons",
-			"version": "0.1.0",
+			"name": "codex_commons", "title": "Codex Commons", "version": "0.1.0",
 		},
-	}, true)
+	}
+	if c.experimental {
+		params["capabilities"] = map[string]bool{"experimentalApi": true}
+	}
+	result, err := c.call(ctx, "initialize", params, true)
 	if err != nil {
 		return err
 	}
@@ -555,6 +603,14 @@ func (c *ClientImpl) handleLine(line []byte) {
 		c.fail(ErrProtocol)
 		return
 	}
+	if len(message.ID) != 0 && !bytes.Equal(bytes.TrimSpace(message.ID), []byte("null")) && message.Method != "" {
+		if !c.ExperimentalDynamicTools() {
+			_ = c.writeMessage(map[string]any{"id": json.RawMessage(message.ID), "error": map[string]any{"code": -32601, "message": "Method not found"}})
+			return
+		}
+		c.handleServerRequest(message)
+		return
+	}
 	if len(message.ID) != 0 && !bytes.Equal(bytes.TrimSpace(message.ID), []byte("null")) {
 		key, ok := wireIDKey(message.ID)
 		if !ok {
@@ -625,6 +681,160 @@ func (c *ClientImpl) handleLine(line []byte) {
 		if handler != nil {
 			handler(Event{Kind: "account_updated", AuthMode: mode})
 		}
+		return
+	}
+	if message.Method == "turn/completed" {
+		c.handleTurnCompleted(message.Params)
+	}
+}
+
+func (c *ClientImpl) handleServerRequest(message wireMessage) {
+	c.handleServerRequestMode(message, false)
+}
+
+func (c *ClientImpl) handleServerRequestSync(message wireMessage) {
+	c.handleServerRequestMode(message, true)
+}
+
+func (c *ClientImpl) handleServerRequestMode(message wireMessage, synchronous bool) {
+	key, ok := wireIDKey(message.ID)
+	if !ok {
+		c.fail(ErrProtocol)
+		return
+	}
+	if message.Method != "item/tool/call" {
+		_ = c.writeMessage(map[string]any{"id": json.RawMessage(message.ID), "error": map[string]any{"code": -32601, "message": "Method not found"}})
+		return
+	}
+	if len(message.Params) == 0 || len(message.Params) > 64<<10 {
+		c.respondDynamicTool(message.ID, DynamicToolResponse{})
+		return
+	}
+	var call struct {
+		CallID    string          `json:"callId"`
+		ThreadID  string          `json:"threadId"`
+		TurnID    string          `json:"turnId"`
+		Tool      string          `json:"tool"`
+		Arguments json.RawMessage `json:"arguments"`
+		Namespace *string         `json:"namespace"`
+	}
+	if decodeOne(message.Params, &call) != nil || call.CallID == "" || len(call.CallID) > 200 || call.ThreadID == "" || len(call.ThreadID) > 120 || call.TurnID == "" || len(call.TurnID) > 120 || (call.Tool != "commons_project_history_progress" && call.Tool != "commons_project_history_report") || call.Namespace != nil || len(call.Arguments) == 0 || len(call.Arguments) > 64<<10 {
+		c.respondDynamicTool(message.ID, DynamicToolResponse{})
+		return
+	}
+	c.mu.Lock()
+	handler := c.dynamicHandlers[call.ThreadID]
+	exactTurn := c.dynamicTurns[call.ThreadID]
+	if handler != nil && exactTurn == "" {
+		pending := c.pendingTools[call.ThreadID]
+		if len(pending) < 2 {
+			c.pendingTools[call.ThreadID] = append(pending, message)
+			c.mu.Unlock()
+			time.AfterFunc(2*time.Second, func() { c.expirePendingTool(call.ThreadID, message.ID) })
+			return
+		}
+		c.mu.Unlock()
+		c.respondDynamicTool(message.ID, DynamicToolResponse{})
+		return
+	}
+	used := c.dynamicCalls[call.ThreadID]
+	duplicate := used != nil && used[call.CallID]
+	atLimit := used != nil && len(used) >= maxDynamicCallsPerTurn
+	if handler != nil && exactTurn == call.TurnID && !duplicate && !atLimit {
+		if used == nil {
+			used = make(map[string]bool)
+			c.dynamicCalls[call.ThreadID] = used
+		}
+		used[call.CallID] = true
+	}
+	c.mu.Unlock()
+	if handler == nil || exactTurn != call.TurnID || duplicate || atLimit {
+		c.respondDynamicTool(message.ID, DynamicToolResponse{})
+		return
+	}
+	run := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		response := handler(ctx, DynamicToolCall{CallID: call.CallID, ThreadID: call.ThreadID, TurnID: call.TurnID, Tool: call.Tool, Arguments: append(json.RawMessage(nil), call.Arguments...)})
+		c.respondDynamicTool(message.ID, response)
+	}
+	if synchronous {
+		run()
+	} else {
+		go run()
+	}
+	_ = key
+}
+
+func (c *ClientImpl) respondDynamicTool(id json.RawMessage, response DynamicToolResponse) {
+	valid := response.Success && len(response.ContentItems) <= 4
+	for _, item := range response.ContentItems {
+		if item.Type != "inputText" || len(item.Text) > 4096 || strings.ContainsRune(item.Text, 0) {
+			valid = false
+		}
+	}
+	if !valid {
+		response = DynamicToolResponse{Success: false, ContentItems: []DynamicToolContent{{Type: "inputText", Text: "Commons rejected this bounded project-history update."}}}
+	}
+	_ = c.writeMessage(map[string]any{"id": json.RawMessage(id), "result": response})
+}
+
+func (c *ClientImpl) handleTurnCompleted(raw json.RawMessage) {
+	var value struct {
+		ThreadID string `json:"threadId"`
+		Turn     struct {
+			ID         string `json:"id"`
+			Status     string `json:"status"`
+			DurationMS *int64 `json:"durationMs"`
+		} `json:"turn"`
+	}
+	if decodeOne(raw, &value) != nil || value.ThreadID == "" || value.Turn.ID == "" || (value.Turn.Status != "completed" && value.Turn.Status != "interrupted" && value.Turn.Status != "failed") || (value.Turn.DurationMS != nil && (*value.Turn.DurationMS < 0 || *value.Turn.DurationMS > 7*24*60*60*1000)) {
+		return
+	}
+	terminal := TurnTerminal{ThreadID: value.ThreadID, TurnID: value.Turn.ID, Status: value.Turn.Status, DurationMS: value.Turn.DurationMS}
+	c.mu.Lock()
+	handler := c.terminalHandlers[value.ThreadID]
+	exactTurn := c.dynamicTurns[value.ThreadID]
+	if handler != nil && exactTurn == "" && len(c.pendingTerminals) < 32 {
+		c.pendingTerminals[value.ThreadID] = terminal
+		c.mu.Unlock()
+		return
+	}
+	c.mu.Unlock()
+	if handler != nil && exactTurn == value.Turn.ID {
+		c.dispatchTurnTerminal(terminal)
+	}
+}
+
+func (c *ClientImpl) clearDynamicThread(threadID string) {
+	c.mu.Lock()
+	pending := append([]wireMessage(nil), c.pendingTools[threadID]...)
+	delete(c.dynamicHandlers, threadID)
+	delete(c.terminalHandlers, threadID)
+	delete(c.dynamicTurns, threadID)
+	delete(c.dynamicCalls, threadID)
+	delete(c.pendingTerminals, threadID)
+	delete(c.pendingTools, threadID)
+	c.mu.Unlock()
+	for _, message := range pending {
+		c.respondDynamicTool(message.ID, DynamicToolResponse{})
+	}
+}
+
+func (c *ClientImpl) dispatchTurnTerminal(terminal TurnTerminal) {
+	c.mu.Lock()
+	handler := c.terminalHandlers[terminal.ThreadID]
+	exact := c.dynamicTurns[terminal.ThreadID]
+	if handler != nil && exact == terminal.TurnID {
+		delete(c.dynamicHandlers, terminal.ThreadID)
+		delete(c.terminalHandlers, terminal.ThreadID)
+		delete(c.dynamicTurns, terminal.ThreadID)
+		delete(c.dynamicCalls, terminal.ThreadID)
+		delete(c.pendingTerminals, terminal.ThreadID)
+	}
+	c.mu.Unlock()
+	if handler != nil && exact == terminal.TurnID {
+		handler(terminal)
 	}
 }
 
@@ -637,10 +847,31 @@ func (c *ClientImpl) fail(err error) {
 		c.closed = true
 		c.failure = err
 		pending := c.pending
+		terminals := make([]struct {
+			handler  TurnTerminalHandler
+			terminal TurnTerminal
+		}, 0, len(c.terminalHandlers))
+		for threadID, handler := range c.terminalHandlers {
+			if turnID := c.dynamicTurns[threadID]; handler != nil && turnID != "" {
+				terminals = append(terminals, struct {
+					handler  TurnTerminalHandler
+					terminal TurnTerminal
+				}{handler, TurnTerminal{ThreadID: threadID, TurnID: turnID, Status: "unavailable"}})
+			}
+		}
 		c.pending = make(map[string]pendingRequest)
+		c.dynamicHandlers = make(map[string]DynamicToolHandler)
+		c.terminalHandlers = make(map[string]TurnTerminalHandler)
+		c.dynamicTurns = make(map[string]string)
+		c.dynamicCalls = make(map[string]map[string]bool)
+		c.pendingTerminals = make(map[string]TurnTerminal)
+		c.pendingTools = make(map[string][]wireMessage)
 		c.mu.Unlock()
 		for _, request := range pending {
 			request.result <- response{err: err}
+		}
+		for _, item := range terminals {
+			item.handler(item.terminal)
 		}
 		close(c.done)
 		_ = c.transport.Close()
@@ -732,3 +963,28 @@ func stringsCut(value, sep string) (before, after string, found bool) {
 }
 
 var _ Client = (*ClientImpl)(nil)
+
+func (c *ClientImpl) expirePendingTool(threadID string, id json.RawMessage) {
+	key, _ := wireIDKey(id)
+	c.mu.Lock()
+	pending := c.pendingTools[threadID]
+	kept := pending[:0]
+	expired := false
+	for _, message := range pending {
+		messageKey, _ := wireIDKey(message.ID)
+		if !expired && messageKey == key {
+			expired = true
+			continue
+		}
+		kept = append(kept, message)
+	}
+	if len(kept) == 0 {
+		delete(c.pendingTools, threadID)
+	} else {
+		c.pendingTools[threadID] = kept
+	}
+	c.mu.Unlock()
+	if expired {
+		c.respondDynamicTool(id, DynamicToolResponse{})
+	}
+}

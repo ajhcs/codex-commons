@@ -131,3 +131,38 @@ func TestProjectArchaeologyMigrationProtectsProvenance(t *testing.T) {
 		t.Fatal("append-only provenance was deletable")
 	}
 }
+
+func TestProjectArchaeologyRefreshRetainsReferencedStaleCandidateTruthfully(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 12, 20, 0, 0, 0, time.UTC)
+	s, err := Open(ctx, ":memory:", WithClock(func() time.Time { return now }))
+	must(t, err)
+	defer s.Close()
+	legacy := domain.ArchaeologyDiscovery{Candidates: []domain.ArchaeologyCandidate{{ID: "legacy", Name: "Legacy", PathLabel: "Legacy", HasGit: true, FromCodexMetadata: true, CodexThreadCount: 9, DurationMinSeconds: 1, DurationMaxSeconds: 2, RelativeCost: "low"}}}
+	session, err := s.ReplaceArchaeologyDiscovery(ctx, domain.ArchaeologyMutation{Principal: domain.HumanLocalPrincipal, RequestID: "legacy-discover"}, legacy)
+	must(t, err)
+	digest := make([]byte, 32)
+	digest[0] = 1
+	_, err = s.DB().ExecContext(ctx, `INSERT INTO archaeology_task_launches(id,session_id,candidate_id,state,client_message_id,request_digest,grant_digest,grant_expires_at,created_at,updated_at) VALUES('legacy-launch',?,'legacy','failed','message',?,?,?,?,?)`, session.ID, digest, digest, stamp(now.Add(time.Hour)), stamp(now), stamp(now))
+	must(t, err)
+	fresh := domain.ArchaeologyDiscovery{Candidates: []domain.ArchaeologyCandidate{{ID: "fresh", Name: "Fresh", PathLabel: "Fresh", HasGit: true, FromCodexMetadata: true, CodexThreadCount: 30, DurationMinSeconds: 1, DurationMaxSeconds: 2, RelativeCost: "low"}}}
+	refreshed, err := s.ReplaceArchaeologyDiscovery(ctx, domain.ArchaeologyMutation{Principal: domain.HumanLocalPrincipal, RequestID: "fresh-discover"}, fresh)
+	must(t, err)
+	if len(refreshed.Candidates) != 2 || len(refreshed.Config.SelectedProjectIDs) != 0 {
+		t.Fatalf("candidates=%+v selected=%v", refreshed.Candidates, refreshed.Config.SelectedProjectIDs)
+	}
+	var retained *domain.ArchaeologyCandidate
+	for index := range refreshed.Candidates {
+		if refreshed.Candidates[index].ID == "legacy" {
+			retained = &refreshed.Candidates[index]
+		}
+	}
+	if retained == nil || retained.FromCodexMetadata || retained.FromConfiguredRoot || retained.Selected || retained.CodexThreadCount != 0 || retained.PrivacyNote != "Retained for historical audit; refresh metadata before selecting." {
+		t.Fatalf("retained=%+v", retained)
+	}
+	var launches int
+	must(t, s.DB().QueryRowContext(ctx, `SELECT count(*) FROM archaeology_task_launches WHERE id='legacy-launch' AND state='failed'`).Scan(&launches))
+	if launches != 1 {
+		t.Fatalf("legacy launch changed=%d", launches)
+	}
+}
