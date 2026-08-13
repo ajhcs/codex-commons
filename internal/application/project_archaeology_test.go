@@ -93,6 +93,95 @@ func (f *fakeArchaeologyLauncher) Launch(_ context.Context, _ domain.Archaeology
 	return nil
 }
 
+type capabilityNativeLauncher struct{ err error }
+
+func (f capabilityNativeLauncher) Available(context.Context) error { return f.err }
+func (capabilityNativeLauncher) LaunchNative(context.Context, domain.ArchaeologyNativeJob, domain.ArchaeologySession, domain.ArchaeologyCandidate, func(context.Context, ArchaeologyNativeToolCall) ArchaeologyNativeToolResponse, func(domain.ArchaeologyNativeTerminal)) (domain.ArchaeologyLaunchResult, error) {
+	return domain.ArchaeologyLaunchResult{}, domain.ErrUnavailable
+}
+func (capabilityNativeLauncher) InterruptNative(context.Context, domain.ArchaeologyNativeJob) error {
+	return domain.ErrUnavailable
+}
+
+func TestProjectArchaeologyNativeSchedulerCapabilityUsesRuntimeAvailability(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		availability  error
+		wantAvailable bool
+	}{
+		{name: "healthy scheduler", wantAvailable: true},
+		{name: "unavailable scheduler", availability: domain.ErrUnavailable},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			scheduler := &ArchaeologyScheduler{launcher: capabilityNativeLauncher{err: test.availability}}
+			service := &Service{archaeologyScheduler: scheduler, archaeologyLauncher: scheduler}
+			view := service.archaeologySessionView(domain.ArchaeologySession{
+				State:      "draft",
+				Config:     domain.ArchaeologyConfig{Depth: "standard", Sources: domain.ArchaeologySources{Git: true}, MaxConcurrency: 2},
+				Candidates: []domain.ArchaeologyCandidate{{ID: "project", CanonicalProjectID: "project"}},
+			})
+			if !view.Capabilities.TaskLaunch.Configured || view.Capabilities.TaskLaunch.Available != test.wantAvailable {
+				t.Fatalf("task launch capability=%+v", view.Capabilities.TaskLaunch)
+			}
+			if view.Controls.CanStart {
+				t.Fatalf("empty persisted selection exposed Start: %+v", view.Controls)
+			}
+		})
+	}
+}
+
+func TestProjectArchaeologySeparatesTaskLaunchCapabilityFromStartEligibility(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		launcher      ArchaeologyHistorianLauncher
+		selected      []string
+		canonicalID   string
+		wantAvailable bool
+		wantCanStart  bool
+	}{
+		{
+			name:          "healthy runtime with empty persisted selection",
+			launcher:      &fakeArchaeologyLauncher{},
+			wantAvailable: true,
+		},
+		{
+			name:          "healthy runtime with mapped persisted selection",
+			launcher:      &fakeArchaeologyLauncher{},
+			selected:      []string{"project"},
+			canonicalID:   "project",
+			wantAvailable: true,
+			wantCanStart:  true,
+		},
+		{
+			name:         "unavailable runtime with mapped persisted selection",
+			launcher:     &unavailableTaskLauncher{},
+			selected:     []string{"project"},
+			canonicalID:  "project",
+			wantCanStart: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service := &Service{archaeologyLauncher: test.launcher}
+			view := service.archaeologySessionView(domain.ArchaeologySession{
+				State: "draft",
+				Config: domain.ArchaeologyConfig{
+					SelectedProjectIDs: test.selected,
+					Depth:              "standard",
+					Sources:            domain.ArchaeologySources{Git: true},
+					MaxConcurrency:     2,
+				},
+				Candidates: []domain.ArchaeologyCandidate{{ID: "project", CanonicalProjectID: test.canonicalID}},
+			})
+			if !view.Capabilities.TaskLaunch.Configured || view.Capabilities.TaskLaunch.Available != test.wantAvailable {
+				t.Fatalf("task launch capability=%+v", view.Capabilities.TaskLaunch)
+			}
+			if view.Controls.CanStart != test.wantCanStart {
+				t.Fatalf("start control=%+v", view.Controls)
+			}
+		})
+	}
+}
+
 func TestProjectArchaeologyExportsTaskPackWithoutSupportedLauncher(t *testing.T) {
 	ctx := context.Background()
 	repository, err := commonsstore.Open(ctx, ":memory:")

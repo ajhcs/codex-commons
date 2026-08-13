@@ -4,7 +4,7 @@ import { commonsAdapter } from "../../data/adapter.js";
 import { useAuthSession } from "../../hooks/useAuthSession.js";
 import { HistoricalImportPreviewDialog } from "./HistoricalImportPreviewDialog.jsx";
 import { ProjectArchaeologyDialog } from "./ProjectArchaeologyDialog.jsx";
-import { shouldRefreshProjectCatalog } from "./projectArchaeologyState.js";
+import { archaeologyConfigCommitReady, IDLE_PROJECT_ARCHAEOLOGY_OPERATIONS, shouldRefreshProjectCatalog } from "./projectArchaeologyState.js";
 
 function message(error, fallback) {
   if (error?.code === "invalid_payload") return "Commons returned project-history data this version cannot safely use.";
@@ -19,6 +19,7 @@ export function ProjectArchaeologyFlow({ open, initialArchaeology = null, onClos
   const pollControllerRef = useRef(null);
   const [archaeology, setArchaeology] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [operations, setOperations] = useState(IDLE_PROJECT_ARCHAEOLOGY_OPERATIONS);
   const [refreshingProjects, setRefreshingProjects] = useState(false);
   const [error, setError] = useState("");
   const [previewBridge, setPreviewBridge] = useState(null);
@@ -34,17 +35,22 @@ export function ProjectArchaeologyFlow({ open, initialArchaeology = null, onClos
     return { csrfToken, idempotencyKey: createIdempotencyKey() };
   }
 
+  function setOperation(name, active) {
+    setOperations((current) => current[name] === active ? current : { ...current, [name]: active });
+  }
+
   function handleError(next, fallback) {
     if (isExpiredSession(next)) auth.expire();
     setError(message(next, fallback));
   }
 
-  async function refresh() {
+  async function refresh({ preserveError = false } = {}) {
     const controller = new AbortController();
     pollControllerRef.current?.abort();
     pollControllerRef.current = controller;
+    setOperation("backgroundRead", true);
     setBusy(true);
-    setError("");
+    if (!preserveError) setError("");
     setUpdateStatus((current) => ({ ...current, state: "checking" }));
     try {
       const next = await commonsAdapter.readProjectArchaeology(controller.signal);
@@ -58,6 +64,7 @@ export function ProjectArchaeologyFlow({ open, initialArchaeology = null, onClos
       return null;
     } finally {
       if (pollControllerRef.current === controller) pollControllerRef.current = null;
+      setOperation("backgroundRead", false);
       setBusy(false);
     }
   }
@@ -70,6 +77,7 @@ export function ProjectArchaeologyFlow({ open, initialArchaeology = null, onClos
       setPageVisible(visible);
       if (!visible) {
         pollControllerRef.current?.abort();
+        setOperation("lifecyclePolling", false);
         setUpdateStatus((current) => ({ ...current, state: "hidden" }));
       } else {
         setUpdateStatus((current) => current.state === "hidden" ? { ...current, state: "checking" } : current);
@@ -84,6 +92,7 @@ export function ProjectArchaeologyFlow({ open, initialArchaeology = null, onClos
     const controller = new AbortController();
     controllerRef.current?.abort();
     controllerRef.current = controller;
+    setOperation("backgroundRead", true);
     setArchaeology(null);
     setBusy(true);
     setError("");
@@ -91,10 +100,12 @@ export function ProjectArchaeologyFlow({ open, initialArchaeology = null, onClos
       const current = initialArchaeology || await commonsAdapter.readProjectArchaeology(controller.signal);
       if (controller.signal.aborted) return;
       setArchaeology(current);
+      setOperation("backgroundRead", false);
       setUpdateStatus({ state: "restored", lastCheckedAt: new Date() });
       if (!shouldRefreshProjectCatalog(current)) return;
       const csrfToken = auth.session?.csrfToken;
       if (!csrfToken) return;
+      setOperation("catalogRefresh", true);
       setRefreshingProjects(true);
       setArchaeology({ ...current, discovery: { ...current.discovery, stage: "reading_codex_metadata", startedAt: { iso: new Date().toISOString() } } });
       try {
@@ -106,12 +117,22 @@ export function ProjectArchaeologyFlow({ open, initialArchaeology = null, onClos
       } catch (next) {
         if (next?.name !== "AbortError") handleError(next, "Commons could not refresh projects from Codex.");
       } finally {
-        if (!controller.signal.aborted) setRefreshingProjects(false);
+        if (!controller.signal.aborted) {
+          setOperation("catalogRefresh", false);
+          setRefreshingProjects(false);
+        }
       }
     }
     loadCurrentCatalog()
       .catch((next) => { if (next?.name !== "AbortError") handleError(next, "Project Archaeology is unavailable."); })
-      .finally(() => { if (controllerRef.current === controller) { controllerRef.current = null; setBusy(false); } });
+      .finally(() => {
+        if (controllerRef.current === controller) {
+          controllerRef.current = null;
+          setOperation("backgroundRead", false);
+          setOperation("catalogRefresh", false);
+          setBusy(false);
+        }
+      });
     return () => controller.abort();
   }, [auth.session?.authenticated, auth.session?.csrfToken, initialArchaeology, open]);
 
@@ -133,6 +154,7 @@ export function ProjectArchaeologyFlow({ open, initialArchaeology = null, onClos
     const delay = updateStatus.state === "checking" ? 0 : discoveryActive && archaeology.discovery?.stage === "queued" ? 750 : onlyWaitingForReports ? 5000 : 1500;
     const timer = globalThis.setTimeout(async () => {
       setUpdateStatus((current) => ({ ...current, state: "checking" }));
+      setOperation("lifecyclePolling", true);
       try {
         const next = await commonsAdapter.readProjectArchaeology(controller.signal);
         if (!controller.signal.aborted) {
@@ -141,12 +163,22 @@ export function ProjectArchaeologyFlow({ open, initialArchaeology = null, onClos
         }
       } catch (next) {
         if (next?.name !== "AbortError") setUpdateStatus((current) => ({ ...current, state: "paused" }));
+      } finally {
+        if (pollControllerRef.current === controller) setOperation("lifecyclePolling", false);
       }
     }, delay);
-    return () => { globalThis.clearTimeout(timer); controller.abort(); if (pollControllerRef.current === controller) pollControllerRef.current = null; };
+    return () => {
+      globalThis.clearTimeout(timer);
+      controller.abort();
+      if (pollControllerRef.current === controller) {
+        pollControllerRef.current = null;
+        setOperation("lifecyclePolling", false);
+      }
+    };
   }, [archaeology, auth.session?.authenticated, open, pageVisible]);
 
   async function discover() {
+    setOperation("catalogRefresh", true);
     setRefreshingProjects(true);
     setArchaeology((current) => current ? { ...current, discovery: { ...current.discovery, stage: "reading_codex_metadata", startedAt: { iso: new Date().toISOString() } } } : current);
     setBusy(true);
@@ -156,6 +188,7 @@ export function ProjectArchaeologyFlow({ open, initialArchaeology = null, onClos
     } catch (next) {
       handleError(next, "Commons could not check project metadata.");
     } finally {
+      setOperation("catalogRefresh", false);
       setRefreshingProjects(false);
       setBusy(false);
     }
@@ -163,17 +196,23 @@ export function ProjectArchaeologyFlow({ open, initialArchaeology = null, onClos
 
   async function prepare(config) {
     if (!archaeology) return;
+    setOperation("configCommit", true);
     setLaunchingCount(config.selectedProjectIds.length);
     setBusy(true);
     setError("");
     try {
       const configured = await commonsAdapter.updateProjectArchaeologyConfig(config, archaeology.revision, writeOptions());
+      if (!archaeologyConfigCommitReady(config, configured, archaeology.revision)) {
+        setArchaeology(configured);
+        throw new Error(configured.capabilities?.taskLaunch?.reason || "Commons could not verify the saved project selection for launch.");
+      }
       const next = await commonsAdapter.startProjectArchaeology(configured.revision, writeOptions());
       setArchaeology(next);
     } catch (next) {
       handleError(next, "Commons could not start the selected Codex tasks.");
-      if (next?.status === 409) await refresh();
+      if (next?.status === 409) await refresh({ preserveError: true });
     } finally {
+      setOperation("configCommit", false);
       setLaunchingCount(0);
       setBusy(false);
     }
@@ -240,6 +279,7 @@ export function ProjectArchaeologyFlow({ open, initialArchaeology = null, onClos
         open={open}
         identity={auth.session?.principal}
         archaeology={archaeology}
+        operations={operations}
         busy={busy}
         launchingCount={launchingCount}
         refreshingProjects={refreshingProjects || archaeology?.discovery?.state === "discovering"}

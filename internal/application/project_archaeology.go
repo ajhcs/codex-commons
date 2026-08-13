@@ -542,10 +542,13 @@ func (s *Service) archaeologySessionView(value domain.ArchaeologySession) Archae
 		capabilityCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		err := s.archaeologyLauncher.Available(capabilityCtx)
 		cancel()
-		if err == nil && archaeologyNativeMappingReady(value) {
+		// TaskLaunch describes installation/runtime capability, not whether the
+		// currently persisted selection is eligible for an immediate transition.
+		// Controls.CanStart retains the latter, mapping-sensitive meaning. Keeping
+		// these facts separate lets a client persist its local selection before it
+		// asks the server to start that newly eligible configuration.
+		if err == nil {
 			out.Capabilities.TaskLaunch = ArchaeologyCapability{Configured: true, Available: true, Mode: "app_server_stdio", Reason: "Commons can start one ordinary Codex historian task for each selected project."}
-		} else if err == nil {
-			out.Capabilities.TaskLaunch = ArchaeologyCapability{Configured: true, Available: false, Mode: "app_server_stdio", Reason: "Refresh the Codex project catalog before starting history tasks."}
 		} else {
 			out.Capabilities.TaskLaunch = ArchaeologyCapability{Configured: true, Available: false, Mode: "app_server_stdio", Reason: "Historian task launch is paused until Commons can durably limit active Codex tasks and reconcile their terminal state."}
 		}
