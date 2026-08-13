@@ -108,6 +108,19 @@ export function configFromModel(config = {}) {
   };
 }
 
+export function reconcileConfigAfterCatalogRefresh(config = {}, model = {}) {
+  const current = configFromModel(config);
+  const selectable = new Set(
+    (Array.isArray(model?.discovery?.candidates) ? model.discovery.candidates : [])
+      .filter(isProjectCandidateSelectable)
+      .map((candidate) => candidate.id),
+  );
+  return {
+    ...current,
+    selectedProjectIds: [...new Set(current.selectedProjectIds.filter((id) => selectable.has(id)))],
+  };
+}
+
 export function archaeologyConfigVersion(model) {
   return `${model?.id || ""}:${model?.revision ?? ""}`;
 }

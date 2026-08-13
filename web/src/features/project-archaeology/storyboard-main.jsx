@@ -28,6 +28,16 @@ const initialStates = {
   intro: { ...archaeologyReadyFixture, id: "", discovery: { state: "idle", metadataOnly: true, candidates: [] } },
   discovering: { ...archaeologyReadyFixture, discovery: { state: "discovering", metadataOnly: true, candidates: [] } },
   ready: archaeologyReadyFixture,
+  refreshing: {
+    ...archaeologyReadyFixture,
+    revision: 8,
+    discovery: {
+      ...archaeologyReadyFixture.discovery,
+      stage: "reading_codex_metadata",
+      startedAt: { iso: new Date().toISOString() },
+    },
+    config: { ...archaeologyReadyFixture.config, selectedProjectIds: [] },
+  },
   handoff: archaeologyHandoffFixture,
   attention: archaeologyAttentionFixture,
   canceled: archaeologyCanceledFixture,
@@ -40,7 +50,23 @@ function Storyboard() {
   const [model, setModel] = useState(initialStates[requested] || archaeologyReadyFixture);
   const [open, setOpen] = useState(requested !== "preview");
   const [previewOpen, setPreviewOpen] = useState(requested === "preview");
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(requested === "refreshing");
+  const [refreshingProjects, setRefreshingProjects] = useState(requested === "refreshing");
+
+  function finishRefresh() {
+    setModel((current) => ({
+      ...current,
+      revision: (current?.revision || 0) + 1,
+      discovery: {
+        ...current.discovery,
+        state: "ready",
+        stage: "ready",
+        updatedAt: { iso: "2026-08-12T12:44:00.000Z", relative: "Just now", absolute: "Aug 12, 12:44 PM" },
+      },
+    }));
+    setRefreshingProjects(false);
+    setBusy(false);
+  }
 
   function briefly(action) {
     setBusy(true);
@@ -52,8 +78,9 @@ function Storyboard() {
       <h1>Project Archaeology storyboard</h1>
       <p>Use the state controls to inspect the optional post-auth sequence.</p>
       <nav aria-label="Storyboard states">
-        {Object.entries(initialStates).map(([key, value]) => <button key={key} type="button" onClick={() => { setModel(value); setOpen(true); }}>{key}</button>)}
+        {Object.entries(initialStates).map(([key, value]) => <button key={key} type="button" onClick={() => { setModel(value); setRefreshingProjects(key === "refreshing"); setBusy(key === "refreshing"); setOpen(true); }}>{key}</button>)}
         <button type="button" onClick={() => { setOpen(false); setPreviewOpen(true); }}>preview</button>
+        {refreshingProjects ? <button type="button" onClick={finishRefresh}>finish refresh</button> : null}
       </nav>
       {!open ? <button className="primary-button" type="button" onClick={() => setOpen(true)}>Reopen storyboard</button> : null}
       <ProjectArchaeologyDialog
@@ -61,6 +88,7 @@ function Storyboard() {
         identity={archaeologyIdentityFixture}
         archaeology={model}
         busy={busy}
+        refreshingProjects={refreshingProjects}
         updateStatus={{ state: "restored", lastCheckedAt: new Date("2026-08-12T12:42:00Z") }}
         onDiscover={() => briefly(() => setModel((current) => ({ ...archaeologyReadyFixture, revision: (current?.revision || 0) + 1 })))}
         onStart={() => briefly(() => setModel(archaeologyHandoffFixture))}

@@ -13,6 +13,7 @@ import {
   discoveryProgressText,
   handoffProgress,
   isProjectCandidateSelectable,
+  reconcileConfigAfterCatalogRefresh,
   sortProjectCandidates,
   shouldRefreshProjectCatalog,
 } from "./projectArchaeologyState.js";
@@ -74,6 +75,30 @@ test("configuration accepts the normalized adapter model without exposing invali
     selectedProjectIds: ["alpha"],
     depth: "deep",
     sources: { git: true, docs: false, codexHistory: true },
+    maxConcurrency: 1,
+  });
+});
+
+test("catalog refresh preserves valid local choices and advanced settings", () => {
+  const current = {
+    selectedProjectIds: ["kept", "removed", "legacy"],
+    depth: "deep",
+    sources: { git: false, docs: true, codexHistory: true },
+    maxConcurrency: 1,
+  };
+  const refreshed = {
+    discovery: {
+      candidates: [
+        { id: "kept", sources: ["codex_metadata"] },
+        { id: "legacy", sources: [] },
+        { id: "new", sources: ["codex_metadata"] },
+      ],
+    },
+  };
+  assert.deepEqual(reconcileConfigAfterCatalogRefresh(current, refreshed), {
+    selectedProjectIds: ["kept"],
+    depth: "deep",
+    sources: { git: false, docs: true, codexHistory: true },
     maxConcurrency: 1,
   });
 });
