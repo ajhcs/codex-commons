@@ -1,5 +1,13 @@
 # Commons identity, controls, clipboard, and Project Archaeology QA
 
+## Project picker structural release gate — 2026-08-13
+
+- The production failure was a circular contract: the backend withheld task-launch capability until a project selection was persisted, while the frontend withheld the only action that could persist that local selection. A prior storyboard passed because its `selected_project_ids: []`, `controls.can_start: true`, and launch-capable combination could not be emitted by production.
+- Capability, local draft validity, persisted transition eligibility, foreground commit locking, and background refresh/polling are now modeled independently. Catalog rows remain interactive during metadata refresh; only the durable config commit locks selection.
+- The authenticated production-composition gate mounts Preferences, Auth, Notifications, AppShell, ProjectArchaeologyFlow, ProjectArchaeologyDialog, and the real HTTP adapter around a controlled 26-project production-shaped DTO. It proves zero writes on selection, selection preservation across revision replacement, exactly one `PUT config` followed by one `POST start`, distinct idempotency keys, and a native job response.
+- Its conflict scenario proves a `409` performs no start, preserves both the bounded conflict explanation and still-valid local selection, and refetches canonical state. The browser console was clean in both scenarios.
+- The pure contract gate is part of `npm test`; the browser composition harness remains the same-state release acceptance surface for interaction changes.
+
 ## Source truth and normalization
 
 - The user-supplied 1376 × 1177 login image is art direction only: spacious white dialog, calm progress, dimensional identity, one confident blue action, and restrained outlined controls. It is not a pixel-fidelity source and no protected wordmark, Blossom, or third-party identity mark was copied.

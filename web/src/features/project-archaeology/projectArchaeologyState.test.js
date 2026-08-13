@@ -2,13 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   archaeologyConfigVersion,
+  archaeologyConfigCommitReady,
   archaeologyBatchIsTerminal,
   archaeologyTaskPresentation,
   archaeologyView,
   canStartArchaeology,
+  canSubmitArchaeologyConfig,
   configFromModel,
   formatDurationRange,
   memberFacts,
+  projectArchaeologyOperationState,
   runProgressText,
   discoveryProgressText,
   handoffProgress,
@@ -16,7 +19,50 @@ import {
   reconcileConfigAfterCatalogRefresh,
   sortProjectCandidates,
   shouldRefreshProjectCatalog,
+  shouldPreserveLocalArchaeologyConfig,
 } from "./projectArchaeologyState.js";
+
+test("operation state locks selection only for the durable config commit", () => {
+  for (const operation of ["backgroundRead", "catalogRefresh", "lifecyclePolling"]) {
+    const state = projectArchaeologyOperationState({ [operation]: true });
+    assert.equal(state.selectionLocked, false, `${operation} must leave the rendered catalog interactive`);
+  }
+  assert.equal(projectArchaeologyOperationState({ configCommit: true }).selectionLocked, true);
+  assert.equal(projectArchaeologyOperationState({ lifecyclePolling: true }).startBlocked, false);
+  assert.equal(projectArchaeologyOperationState({ catalogRefresh: true }).startBlocked, true);
+});
+
+test("configured response must exactly and safely advance before start", () => {
+  const candidate = { id: "alpha", sources: ["codex_metadata"], signals: { git: true, docs: true, codexHistory: true } };
+  const submitted = { selectedProjectIds: ["alpha"], depth: "deep", sources: { git: true, docs: false, codexHistory: true }, maxConcurrency: 1 };
+  const configured = {
+    revision: 12,
+    config: submitted,
+    controls: { canStart: true },
+    capabilities: { taskLaunch: { available: true } },
+    discovery: { candidates: [candidate] },
+  };
+  assert.equal(archaeologyConfigCommitReady(submitted, configured, 11), true);
+  assert.equal(archaeologyConfigCommitReady(submitted, { ...configured, revision: 11 }, 11), false);
+  assert.equal(archaeologyConfigCommitReady(submitted, { ...configured, config: { ...submitted, depth: "quick" } }, 11), false);
+  assert.equal(archaeologyConfigCommitReady(submitted, { ...configured, config: { ...submitted, sources: { ...submitted.sources, docs: true } } }, 11), false);
+  assert.equal(archaeologyConfigCommitReady(submitted, { ...configured, config: { ...submitted, maxConcurrency: 2 } }, 11), false);
+  assert.equal(archaeologyConfigCommitReady(submitted, { ...configured, controls: { canStart: false } }, 11), false);
+  assert.equal(archaeologyConfigCommitReady(submitted, { ...configured, discovery: { candidates: [{ ...candidate, sources: [] }] } }, 11), false);
+});
+
+test("local valid selection can submit before persisted controls become startable", () => {
+  const candidate = { id: "alpha", sources: ["codex_metadata"], signals: { git: true, docs: true, codexHistory: true } };
+  const model = {
+    state: "draft",
+    controls: { canStart: false },
+    capabilities: { taskLaunch: { configured: true, available: true } },
+    discovery: { candidates: [candidate] },
+  };
+  const config = { selectedProjectIds: ["alpha"], sources: { git: true, docs: true, codexHistory: true } };
+  assert.equal(canSubmitArchaeologyConfig(config, model), true);
+  assert.equal(canSubmitArchaeologyConfig(config, { ...model, capabilities: { taskLaunch: { configured: true, available: false } } }), false);
+});
 
 test("configuration versions change when rediscovery updates the same session", () => {
   assert.equal(archaeologyConfigVersion({ id: "ARCH-1", revision: 4 }), "ARCH-1:4");
@@ -77,6 +123,14 @@ test("configuration accepts the normalized adapter model without exposing invali
     sources: { git: true, docs: false, codexHistory: true },
     maxConcurrency: 1,
   });
+});
+
+test("every server revision preserves a dirty local project selection", () => {
+  assert.equal(shouldPreserveLocalArchaeologyConfig({ dirty: true, operations: { backgroundRead: true } }), true);
+  assert.equal(shouldPreserveLocalArchaeologyConfig({ dirty: true, refreshing: true }), true);
+  assert.equal(shouldPreserveLocalArchaeologyConfig({ dirty: false, operations: { backgroundRead: true } }), false);
+  assert.equal(shouldPreserveLocalArchaeologyConfig({ dirty: true, operations: { lifecyclePolling: true } }), true);
+  assert.equal(shouldPreserveLocalArchaeologyConfig({ dirty: false, operations: { backgroundRead: true } }), false);
 });
 
 test("catalog refresh preserves valid local choices and advanced settings", () => {

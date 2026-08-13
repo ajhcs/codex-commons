@@ -17,6 +17,28 @@ const TERMINAL_BATCH_STATES = new Set(["canceled", "completed", "attention", "fa
 const CATALOG_FRESHNESS_MS = 5 * 60 * 1000;
 export const PROJECT_SORTS = Object.freeze(["recent", "tasks", "name"]);
 
+export const IDLE_PROJECT_ARCHAEOLOGY_OPERATIONS = Object.freeze({
+  backgroundRead: false,
+  catalogRefresh: false,
+  configCommit: false,
+  lifecyclePolling: false,
+});
+
+export function projectArchaeologyOperationState(operations = {}) {
+  const state = {
+    backgroundRead: operations.backgroundRead === true,
+    catalogRefresh: operations.catalogRefresh === true,
+    configCommit: operations.configCommit === true,
+    lifecyclePolling: operations.lifecyclePolling === true,
+  };
+  return {
+    ...state,
+    selectionLocked: state.configCommit,
+    startBlocked: state.backgroundRead || state.catalogRefresh || state.configCommit,
+    anyPending: Object.values(state).some(Boolean),
+  };
+}
+
 export function sortProjectCandidates(candidates = [], sort = "recent") {
   const next = [...candidates];
   const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) || a.id.localeCompare(b.id);
@@ -108,6 +130,10 @@ export function configFromModel(config = {}) {
   };
 }
 
+export function shouldPreserveLocalArchaeologyConfig({ dirty = false } = {}) {
+  return dirty === true;
+}
+
 export function reconcileConfigAfterCatalogRefresh(config = {}, model = {}) {
   const current = configFromModel(config);
   const selectable = new Set(
@@ -140,6 +166,32 @@ export function shouldRefreshProjectCatalog(model, now = Date.now()) {
 
 export function selectedSourceCount(config) {
   return ARCHAEOLOGY_SOURCES.filter((source) => config?.sources?.[source]).length;
+}
+
+export function archaeologyConfigCommitReady(submittedConfig, configuredModel, baseRevision) {
+  const submitted = configFromModel(submittedConfig);
+  const committed = configFromModel(configuredModel?.config);
+  const sameIDs = submitted.selectedProjectIds.length === committed.selectedProjectIds.length
+    && submitted.selectedProjectIds.every((id, index) => committed.selectedProjectIds[index] === id);
+  const sameSources = ARCHAEOLOGY_SOURCES.every((source) => submitted.sources[source] === committed.sources[source]);
+  const revisionAdvanced = Number.isInteger(baseRevision)
+    && Number.isInteger(configuredModel?.revision)
+    && configuredModel.revision > baseRevision;
+  return revisionAdvanced
+    && sameIDs
+    && submitted.depth === committed.depth
+    && sameSources
+    && submitted.maxConcurrency === committed.maxConcurrency
+    && canStartArchaeology(committed, configuredModel?.discovery?.candidates || [])
+    && configuredModel?.controls?.canStart === true
+    && configuredModel?.capabilities?.taskLaunch?.available === true;
+}
+
+export function canSubmitArchaeologyConfig(config, model = {}) {
+  return model.state === "draft"
+    && model.capabilities?.taskLaunch?.configured === true
+    && model.capabilities?.taskLaunch?.available === true
+    && canStartArchaeology(config, model.discovery?.candidates || []);
 }
 
 export function canStartArchaeology(config, candidates = []) {
