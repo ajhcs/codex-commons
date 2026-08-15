@@ -231,7 +231,7 @@ mkdir -p "$root/server-src"
 printf '%s\n' \
 	'module codex-commons/cmd/commons-server' \
 	'' \
-	'go 1.22' > "$root/server-src/go.mod"
+	'go 1.25.0' > "$root/server-src/go.mod"
 printf '%s\n' \
 	'package main' \
 	'' \

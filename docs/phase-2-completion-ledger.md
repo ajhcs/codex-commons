@@ -24,7 +24,9 @@ output, personal content, or raw database payloads.
 
 Evidence slots remain blank until the corresponding source/test or approved
 rehearsal actually runs. This ledger does not infer completion from a changed
-file, a read-only health response, or a historical result.
+file, a read-only health response, or a historical result. A blank evidence
+slot means **unrecorded**, not pass or fail; populate it only with a bounded,
+sanitized reference after the corresponding check runs.
 
 ## Increment checklist
 
@@ -335,8 +337,10 @@ source/test verification summary is:
 - Focused disposable acceptance: the Increment 14 command — **PASS** at
   `-count=20`.
 - Static Go analysis: `go vet ./...` — **PASS**.
-- Ops artifact suite: `sh ops/test-ops.sh` — **PASS**, with 54 rejected cases,
-  54 restorations, 4 positive cases, and `PHASE13_FINAL_PRISTINE=1`.
+- Ops artifact suite:
+  `GOTOOLCHAIN=go1.25.0 GOCACHE=/tmp/codex-go-cache sh ops/test-ops.sh` —
+  **PASS**, with 54 rejected cases, 54 restorations, 4 positive cases, and
+  `PHASE13_FINAL_PRISTINE=1`.
 - Governance: `sh ops/test-governance.sh` — **PASS**.
 - Shell syntax: `sh -n ops/check-readiness.sh ops/test-ops.sh` — **PASS**.
 - Systemd unit verification:
