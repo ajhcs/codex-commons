@@ -267,6 +267,10 @@ type ClientImpl struct {
 	done             chan struct{}
 	readerDone       chan struct{}
 	waitDone         chan struct{}
+	// pid is deliberately metadata only. It is never used as a process
+	// authority and is exposed to the managed supervisor only for safe
+	// diagnostics.
+	pid int
 }
 
 // NewWithTransport performs the required initialize/initialized handshake on
@@ -310,6 +314,61 @@ func NewWithTransportConfig(ctx context.Context, transport io.ReadWriteCloser, e
 	}
 	return c, nil
 }
+
+// Done is the child-lifecycle signal used by the managed supervisor. It is
+// closed when the transport becomes unusable, whether that was observed by
+// the reader, a failed write, or the process wait path. Request traffic is not
+// required for an exit to become visible to the supervisor.
+//
+// The channel is intentionally read-only and carries no payload. Consumers
+// that need a safe diagnostic may use ExitReason; no protocol payload is
+// exposed here.
+func (c *ClientImpl) Done() <-chan struct{} {
+	if c == nil {
+		return nil
+	}
+	return c.done
+}
+
+// ExitSignal is a descriptive alias used by internal lifecycle adapters.
+func (c *ClientImpl) ExitSignal() <-chan struct{} { return c.Done() }
+
+// LifecycleDone is kept as a private-package-friendly spelling for adapters
+// that avoid depending on the public Client surface.
+func (c *ClientImpl) LifecycleDone() <-chan struct{} { return c.Done() }
+
+// PID returns the operating-system child PID when this client was created by
+// NewProcess. In-memory transports have no child and return zero.
+func (c *ClientImpl) PID() int {
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pid
+}
+
+// ProcessID is a descriptive alias for PID.
+func (c *ClientImpl) ProcessID() int { return c.PID() }
+
+// ExitReason returns the internal failure category for lifecycle reporting.
+// Callers should treat the value as an error sentinel only; it is not a
+// process stderr or protocol payload.
+func (c *ClientImpl) ExitReason() error {
+	if c == nil {
+		return ErrUnavailable
+	}
+	c.mu.Lock()
+	err := c.failure
+	c.mu.Unlock()
+	if err == nil {
+		return ErrUnavailable
+	}
+	return err
+}
+
+// Failure is a descriptive alias for ExitReason.
+func (c *ClientImpl) Failure() error { return c.ExitReason() }
 
 func (c *ClientImpl) beginAsync() bool {
 	c.asyncMu.Lock()
@@ -367,6 +426,9 @@ func NewProcess(ctx context.Context, config ProcessConfig) (*ClientImpl, error) 
 		_, _ = cmd.Process.Wait()
 		return nil, err
 	}
+	c.mu.Lock()
+	c.pid = cmd.Process.Pid
+	c.mu.Unlock()
 	c.waitDone = make(chan struct{})
 	go func() {
 		_ = cmd.Wait()
