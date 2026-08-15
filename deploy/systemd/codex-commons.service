@@ -6,6 +6,10 @@ Wants=network-online.target
 [Service]
 Type=notify
 NotifyAccess=main
+# Startup runs migrations/reconciliation and waits for the first readiness
+# snapshot before READY=1. Three minutes is finite but leaves room for a cold
+# managed Codex probe; a timeout remains a startup failure, not a green state.
+TimeoutStartSec=180
 WatchdogSec=60
 EnvironmentFile=%h/.config/codex-commons/dogfood.env
 WorkingDirectory=%h/.local/lib/codex-commons/current
