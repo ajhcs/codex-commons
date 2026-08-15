@@ -114,6 +114,10 @@ func (s *Store) ArchaeologyBatch(ctx context.Context, principal, batchID string)
 	if ack.Valid {
 		out.Batch.LargeBatchAcknowledgedAt = parseStamp(ack.String)
 	}
+	out.Batch.Eligibility, err = readArchaeologyBatchEligibility(ctx, s.db, principal, batchID)
+	if err != nil {
+		return out, err
+	}
 	jobs, err := s.db.QueryContext(ctx, `SELECT j.id,j.batch_id,j.candidate_id,j.project_id,j.project_name,j.mode,j.state,j.thread_id,j.codex_session_id,j.turn_id,j.phase_label,j.sources_examined,j.duration_ms,j.error_code,j.created_at,j.started_at,j.reported_at,j.terminal_at,j.updated_at FROM archaeology_native_jobs j WHERE j.batch_id=? ORDER BY j.created_at,j.id LIMIT 30`, batchID)
 	if err != nil {
 		return out, err

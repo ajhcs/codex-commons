@@ -111,11 +111,26 @@ type ArchaeologySession struct {
 	Handoff                                              *ArchaeologyHandoff
 }
 
+// ArchaeologyBatchEligibility is the store-derived read-side capability
+// snapshot for a native batch. It deliberately records the counts used by
+// the predicate so projections can expose a stable capability without
+// re-querying mutable child rows.
+type ArchaeologyBatchEligibility struct {
+	Eligible          bool
+	State             string
+	PolicyAttested    bool
+	JobCount          int
+	CompletedJobCount int
+	OutcomeCount      int
+	ValidOutcomeCount int
+}
+
 type ArchaeologyNativeBatch struct {
 	ID, State, Mode          string
 	MaxConcurrency           int
 	Policy                   ArchaeologyExecutionPolicy
 	PolicyAttested           bool
+	Eligibility              ArchaeologyBatchEligibility
 	Jobs                     []ArchaeologyNativeJob
 	CreatedAt, UpdatedAt     time.Time
 	LargeBatchAcknowledgedAt time.Time

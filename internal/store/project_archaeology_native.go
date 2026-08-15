@@ -592,6 +592,10 @@ func (s *Store) ResolveArchaeologyNativeUncertainty(ctx context.Context, command
 }
 
 func (s *Store) loadArchaeologyNative(ctx context.Context, sessionID string) ([]domain.ArchaeologyNativeBatch, error) {
+	var principal string
+	if err := s.db.QueryRowContext(ctx, `SELECT principal FROM archaeology_sessions WHERE id=?`, sessionID).Scan(&principal); err != nil {
+		return nil, mapErr(err)
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT id,state,mode,max_concurrency,depth,source_git,source_docs,source_codex_history,policy_attested,large_batch_acknowledged_at,large_batch_acknowledged_by,created_at,updated_at FROM archaeology_native_batches WHERE session_id=? ORDER BY created_at DESC,id DESC LIMIT 20`, sessionID)
 	if err != nil {
 		return nil, err
@@ -613,8 +617,18 @@ func (s *Store) loadArchaeologyNative(ctx context.Context, sessionID string) ([]
 		item.Policy.Sources = domain.ArchaeologySources{Git: git == 1, Docs: docs == 1, CodexHistory: history == 1}
 		out = append(out, item)
 	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
 	if err = rows.Close(); err != nil {
 		return nil, err
+	}
+	for index := range out {
+		out[index].Eligibility, err = readArchaeologyBatchEligibility(ctx, s.db, principal, out[index].ID)
+		if err != nil {
+			return nil, err
+		}
 	}
 	for index := range out {
 		jobRows, queryErr := s.db.QueryContext(ctx, `SELECT id,batch_id,candidate_id,project_id,mode,state,thread_id,codex_session_id,turn_id,phase_label,sources_examined,duration_ms,error_code,created_at,started_at,reported_at,terminal_at,updated_at FROM archaeology_native_jobs WHERE batch_id=? ORDER BY created_at,id LIMIT 100`, out[index].ID)
