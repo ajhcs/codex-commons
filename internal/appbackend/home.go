@@ -24,6 +24,14 @@ func New(legacy httpapi.LegacyBackend, home *application.Service) (*Adapter, err
 	return &Adapter{LegacyBackend: legacy, home: home}, nil
 }
 
+func (a *Adapter) InstallationStatus(ctx context.Context, meta httpapi.RequestMeta) (httpapi.InstallationStatusResult, error) {
+	backend, ok := a.LegacyBackend.(httpapi.InstallationStatusBackend)
+	if !ok || meta.PrincipalKind != "human" {
+		return httpapi.InstallationStatusResult{}, httpapi.NewError(httpapi.CodeForbidden, "local human admin required")
+	}
+	return backend.InstallationStatus(ctx, meta)
+}
+
 func (a *Adapter) GeneralHome(ctx context.Context, query httpapi.GeneralHomeQuery, meta httpapi.RequestMeta) (httpapi.GeneralHomeResult, error) {
 	if meta.Actor == "" || meta.Session == "" || meta.Host == "" {
 		return httpapi.GeneralHomeResult{}, httpapi.NewError(httpapi.CodeInvalid, "attested identity required")

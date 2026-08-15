@@ -284,7 +284,7 @@ The installed experimental App Server path may use per-thread dynamic tools and 
 3. User refreshes; the current catalog remains usable for reading while stage, elapsed time, and real task/project counts update.
 4. User chooses Most Codex tasks; list order changes without changing selection.
 5. User starts nine projects; the click becomes `Preparing 0 of 9` immediately and nine ledger rows appear after durable acceptance.
-6. At most two rows say Codex is being asked to create tasks; created/accepted counts rise from backend state.
+6. All nine manually confirmed rows may say Codex is being asked to create tasks; Codex governs execution capacity, and created/accepted counts rise only from backend state.
 7. Claimed rows explicitly say Codex accepted the historian and that Commons is waiting for a report.
 8. An interrupted upstream task becomes attention, not a permanently implied running state.
 9. User closes the modal; the work continues and reopening restores the same durable ledger.

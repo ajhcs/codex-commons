@@ -184,6 +184,39 @@ func TestServerRejectsUnexpectedHostBeforeAuthentication(t *testing.T) {
 	}
 }
 
+func TestPublicOriginMuxKeepsInternalReadinessDirectOnly(t *testing.T) {
+	config := server.DefaultConfig()
+	config.DatabasePath = filepath.Join(t.TempDir(), "commons.sqlite")
+	config.WebDir = testWeb(t)
+	config.PublicOrigin = "https://commons.plumbob.lan"
+	app, err := server.New(context.Background(), config, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+
+	request := func(host string, forwarded bool) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8088/v1/internal/readiness", nil)
+		req.Host = host
+		req.RemoteAddr = "127.0.0.1:43123"
+		if forwarded {
+			req.Header.Set("X-Forwarded-For", "127.0.0.1")
+		}
+		recorder := httptest.NewRecorder()
+		app.Handler().ServeHTTP(recorder, req)
+		return recorder
+	}
+	if direct := request("127.0.0.1:8088", false); direct.Code != http.StatusOK {
+		t.Fatalf("direct readiness code=%d body=%s", direct.Code, direct.Body.String())
+	}
+	if public := request("commons.plumbob.lan", false); public.Code != http.StatusNotFound {
+		t.Fatalf("public readiness code=%d body=%s", public.Code, public.Body.String())
+	}
+	if forwarded := request("127.0.0.1:8088", true); forwarded.Code != http.StatusNotFound {
+		t.Fatalf("forwarded readiness code=%d body=%s", forwarded.Code, forwarded.Body.String())
+	}
+}
+
 func runtimeRequest(handler http.Handler, method, target, body string, cookie *http.Cookie, csrf, key string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
 	req.Host = "127.0.0.1:8088"
@@ -436,14 +469,46 @@ func TestHumanPostCommentStateDurabilityAndSessionRestart(t *testing.T) {
 	}
 	defer second.Close()
 	oldStatus := runtimeRequest(second.Handler(), http.MethodGet, "http://commons.test/v1/auth/session", "", cookie, "", "")
-	if oldStatus.Code != http.StatusOK || !strings.Contains(oldStatus.Body.String(), `"authenticated":false`) {
-		t.Fatalf("old process session survived restart: %s", oldStatus.Body.String())
+	if oldStatus.Code != http.StatusOK || !strings.Contains(oldStatus.Body.String(), `"authenticated":true`) || !strings.Contains(oldStatus.Body.String(), `"csrf_token":"`) {
+		t.Fatalf("durable browser session did not recover: %s", oldStatus.Body.String())
 	}
-	newCookie, _ := runtimeLogin(t, second.Handler())
-	opened := runtimeRequest(second.Handler(), http.MethodGet, "http://commons.test/v1/posts/"+postID+"?comments_limit=20", "", newCookie, "", "")
+	var recovered struct {
+		Data authData `json:"data"`
+	}
+	if err = json.Unmarshal(oldStatus.Body.Bytes(), &recovered); err != nil || recovered.Data.CSRFToken == "" || recovered.Data.CSRFToken == csrf {
+		t.Fatalf("recovered session did not rotate csrf: body=%s err=%v", oldStatus.Body.String(), err)
+	}
+	writeBody := `{"topic":"demo-billing-orchestrator","kind":"finding","title":"After restart","body":"Rotated CSRF only","basis":"Restart test"}`
+	for name, token := range map[string]string{"missing": "", "old": csrf} {
+		failed := runtimeRequest(second.Handler(), http.MethodPost, "http://commons.test/v1/posts", writeBody, cookie, token, "restart-csrf-"+name)
+		if failed.Code != http.StatusForbidden {
+			t.Fatalf("%s csrf code=%d body=%s", name, failed.Code, failed.Body.String())
+		}
+	}
+	succeeded := runtimeRequest(second.Handler(), http.MethodPost, "http://commons.test/v1/posts", writeBody, cookie, recovered.Data.CSRFToken, "restart-csrf-new")
+	if succeeded.Code != http.StatusOK {
+		t.Fatalf("rotated csrf write code=%d body=%s", succeeded.Code, succeeded.Body.String())
+	}
+	opened := runtimeRequest(second.Handler(), http.MethodGet, "http://commons.test/v1/posts/"+postID+"?comments_limit=20", "", cookie, "", "")
 	if opened.Code != http.StatusOK || !strings.Contains(opened.Body.String(), `"state":"resolved"`) ||
 		!strings.Contains(opened.Body.String(), `"intent":"add_evidence"`) || !strings.Contains(opened.Body.String(), `"Human durable write"`) {
 		t.Fatalf("durable thread code=%d body=%s", opened.Code, opened.Body.String())
+	}
+	logout := runtimeRequest(second.Handler(), http.MethodPost, "http://commons.test/v1/auth/logout", `{}`, cookie, recovered.Data.CSRFToken, "")
+	if logout.Code != http.StatusOK {
+		t.Fatalf("logout code=%d body=%s", logout.Code, logout.Body.String())
+	}
+	if err = second.Close(); err != nil {
+		t.Fatal(err)
+	}
+	third, err := server.New(context.Background(), config, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer third.Close()
+	loggedOut := runtimeRequest(third.Handler(), http.MethodGet, "http://commons.test/v1/auth/session", "", cookie, "", "")
+	if !strings.Contains(loggedOut.Body.String(), `"authenticated":false`) {
+		t.Fatalf("logout did not survive restart: %s", loggedOut.Body.String())
 	}
 }
 

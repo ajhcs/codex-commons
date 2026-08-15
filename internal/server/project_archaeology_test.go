@@ -9,7 +9,7 @@ import (
 )
 
 func TestArchaeologyRootsAreExplicitMetadataOnlyAllowlist(t *testing.T) {
-	root := t.TempDir()
+	root := eligibleTestWorkspace(t, "commons-roots-allowlist-")
 	if err := os.Mkdir(filepath.Join(root, ".git"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -31,6 +31,32 @@ func TestArchaeologyRootsAreExplicitMetadataOnlyAllowlist(t *testing.T) {
 	}
 	if strings.Contains(discovery.Candidates[0].PathLabel, "/") || strings.Contains(discovery.Candidates[0].PathLabel, "~") {
 		t.Fatal("raw filesystem path leaked")
+	}
+}
+
+func TestArchaeologyRootsRejectInstallationWideAndSymlinkEquivalentPaths(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	linkParent, err := os.MkdirTemp(home, "commons-broad-link-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(linkParent) })
+	link := filepath.Join(linkParent, "home-link")
+	if err = os.Symlink(home, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	for index, root := range []string{filepath.VolumeName(home) + string(filepath.Separator), filepath.Dir(home), home, link} {
+		config := filepath.Join(t.TempDir(), "roots.json")
+		body := `{"roots":[{"id":"broad","name":"Broad","path":` + quoteJSON(root) + `,"path_label":"Broad"}]}`
+		if err = os.WriteFile(config, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, readErr := readArchaeologyRoots(config); readErr == nil {
+			t.Fatalf("case %d accepted broad root %q", index, root)
+		}
 	}
 }
 

@@ -1,4 +1,4 @@
-import { ATTACHMENT_KINDS, ATTENTION_SEVERITIES, AUTH_PAIRING_STATES, COMMENT_INTENTS, EXECUTION_STATES, HUMAN_HANDLE_PATTERN, isValidHumanDisplayName, isValidHumanHandle, PERSPECTIVE_SCOPES, MAX_BROWSE_LIMIT, MAX_NOTIFICATIONS, MAX_OVERVIEW_LIMIT, POST_KINDS, POST_STATES, PROJECT_ARCHAEOLOGY_DEPTHS, PROJECT_ARCHAEOLOGY_DISCOVERY_STATES, PROJECT_ARCHAEOLOGY_RUN_STATES, PROJECT_ARCHAEOLOGY_STATES } from "../contracts/commons.js";
+import { ATTACHMENT_KINDS, ATTENTION_SEVERITIES, AUTH_PAIRING_STATES, COMMENT_INTENTS, DEFAULT_PROJECT_ARCHAEOLOGY_HISTORY_PAGE, EXECUTION_STATES, HUMAN_HANDLE_PATTERN, isValidHumanDisplayName, isValidHumanHandle, PERSPECTIVE_SCOPES, MAX_BROWSE_LIMIT, MAX_NOTIFICATIONS, MAX_OVERVIEW_LIMIT, MAX_PROJECT_ARCHAEOLOGY_CATALOG_PAGE, MAX_PROJECT_ARCHAEOLOGY_HISTORY_PAGE, MAX_PROJECT_ARCHAEOLOGY_OUTCOME_PAGE, MAX_PROJECT_ARCHAEOLOGY_REVIEW_MEMBERS, MAX_PROJECT_ARCHAEOLOGY_REVIEW_OUTCOMES, MAX_PROJECT_ARCHAEOLOGY_SELECTION, POST_KINDS, POST_STATES, PROJECT_ARCHAEOLOGY_DEPTHS, PROJECT_ARCHAEOLOGY_DISCOVERY_STATES, PROJECT_ARCHAEOLOGY_RUN_STATES, PROJECT_ARCHAEOLOGY_STATES } from "../contracts/commons.js";
 import { contractFixtures, codexAuthFixtures } from "./fixtures.js";
 import { postFixtures, slice13FixtureTimes } from "./postFixtures.js";
 import { createProjectCoreHTTPMethods, projectCoreFixtureMethods } from "./projectCoreAdapter.js";
@@ -583,7 +583,9 @@ function normalizeArchaeologyProvenance(value) {
 
 function normalizeArchaeologyOutcome(value) {
   value = requireRecord(value);
-  if (!Array.isArray(value.provenance) || value.provenance.length > 40 || !Array.isArray(value.member_sessions) || value.member_sessions.length > 100) throw invalidPayload();
+  if (!Array.isArray(value.provenance) || value.provenance.length > 4 || !Array.isArray(value.member_sessions) || value.member_sessions.length > 1) throw invalidPayload();
+  const sourceDigest = value.source_digest == null ? "" : requireString(value.source_digest);
+  if (sourceDigest && !/^sha256:[0-9a-f]{64}$/.test(sourceDigest)) throw invalidPayload();
   const sourceCount = requireInteger(value.source_count);
   if (value.provenance.length > sourceCount) throw invalidPayload();
   return {
@@ -591,9 +593,303 @@ function normalizeArchaeologyOutcome(value) {
     title: requireString(value.title),
     summary: requireString(value.summary),
     projectId: requireString(value.project_id),
+    sourceDigest,
     sourceCount,
     provenance: value.provenance.map(normalizeArchaeologyProvenance),
     memberSessions: value.member_sessions.map(normalizeArchaeologyMember),
+  };
+}
+
+function normalizeArchaeologyCandidate(rawCandidate) {
+  const candidate = requireRecord(rawCandidate);
+  const signals = requireRecord(candidate.signals);
+  const estimate = requireRecord(candidate.estimate);
+  if (typeof signals.git !== "boolean" || typeof signals.docs !== "boolean" || typeof signals.codex_history !== "boolean" || !["low", "medium", "high"].includes(estimate.relative_cost) || typeof candidate.selected_by_default !== "boolean" || !Array.isArray(candidate.sources) || candidate.sources.length > 2 || !candidate.sources.every((source) => ["codex_metadata", "configured_root"].includes(source))) throw invalidPayload();
+  const durationSecondsMin = requireInteger(estimate.duration_seconds_min);
+  const durationSecondsMax = requireInteger(estimate.duration_seconds_max);
+  if (durationSecondsMax < durationSecondsMin) throw invalidPayload();
+  return {
+    id: requireString(candidate.id),
+    candidateId: requireString(candidate.id),
+    name: requireString(candidate.name),
+    repositoryLabel: candidate.repository_label == null ? "" : requireString(candidate.repository_label),
+    lastActivity: candidate.last_activity_at == null ? null : timestampLabel(candidate.last_activity_at),
+    signals: { git: signals.git, docs: signals.docs, codexHistory: signals.codex_history },
+    estimate: { durationSecondsMin, durationSecondsMax, relativeCost: estimate.relative_cost },
+    privacyNote: requireString(candidate.privacy_note),
+    selectedByDefault: candidate.selected_by_default,
+    sources: candidate.sources.map(requireString),
+    codexThreadCount: requireInteger(candidate.codex_thread_count),
+  };
+}
+
+function normalizeDiscoveryTelemetry(raw, fallback = {}) {
+  raw = requireRecord(raw || {});
+  return {
+    tasksExamined: requireInteger(raw.tasks_examined ?? raw.codex_threads_examined ?? fallback.tasksExamined ?? 0),
+    projectsGrouped: requireInteger(raw.projects_grouped ?? raw.workspaces_grouped ?? fallback.projectsGrouped ?? 0),
+    truncated: raw.truncated === true,
+    completedAt: raw.completed_at == null ? null : timestampLabel(raw.completed_at),
+    appServerIdentity: raw.app_server_identity == null ? "" : requireString(raw.app_server_identity),
+  };
+}
+
+function normalizeArchaeologyCatalogPage(data) {
+  data = requireRecord(data);
+  if (!Array.isArray(data.items) || data.items.length > MAX_PROJECT_ARCHAEOLOGY_CATALOG_PAGE) throw invalidPayload();
+  const items = data.items.map(normalizeArchaeologyCandidate);
+  if (new Set(items.map((item) => item.id)).size !== items.length) throw invalidPayload();
+  return {
+    items,
+    nextCursor: data.next_cursor == null ? "" : typeof data.next_cursor === "string" ? data.next_cursor : (() => { throw invalidPayload(); })(),
+    total: requireInteger(data.total),
+  };
+}
+
+function normalizeArchaeologyReview(rawReview) {
+  if (rawReview == null) return null;
+  rawReview = requireRecord(rawReview);
+  if (!Array.isArray(rawReview.proposed_outcomes) || rawReview.proposed_outcomes.length > MAX_PROJECT_ARCHAEOLOGY_REVIEW_OUTCOMES || !Array.isArray(rawReview.member_sessions) || rawReview.member_sessions.length > MAX_PROJECT_ARCHAEOLOGY_REVIEW_MEMBERS || typeof rawReview.can_apply !== "boolean" || rawReview.requires_explicit_approval !== true) throw invalidPayload();
+  const proposedOutcomes = rawReview.proposed_outcomes.map(normalizeArchaeologyOutcome);
+  if (rawReview.can_apply && proposedOutcomes.some((outcome) => !outcome.sourceDigest)) throw invalidPayload();
+  return {
+    proposedOutcomes,
+    batchId: rawReview.batch_id == null ? "" : requireString(rawReview.batch_id),
+    memberSessions: rawReview.member_sessions.map(normalizeArchaeologyMember),
+    provenanceSummary: requireString(rawReview.provenance_summary),
+    canApply: rawReview.can_apply,
+    requiresExplicitApproval: true,
+  };
+}
+
+function normalizeArchaeologyBatchSummary(raw) {
+  raw = requireRecord(raw);
+  if (!["queued", "running", "cancel_requested", "canceled", "completed", "attention"].includes(raw.state) || !PROJECT_ARCHAEOLOGY_DEPTHS.includes(raw.depth) || ![1, 2].includes(raw.concurrency)) throw invalidPayload();
+  const sources = requireRecord(raw.sources);
+  if (typeof sources.git !== "boolean" || typeof sources.docs !== "boolean" || typeof sources.codex_history !== "boolean" || typeof raw.has_report !== "boolean") throw invalidPayload();
+  return {
+    batchId: requireString(raw.batch_id),
+    state: raw.state,
+    mode: raw.mode == null ? "" : requireString(raw.mode),
+    depth: raw.depth,
+    sources: { git: sources.git, docs: sources.docs, codexHistory: sources.codex_history },
+    concurrency: raw.concurrency,
+    selectedTotal: requireInteger(raw.selected_total),
+    queuedCount: requireInteger(raw.queued_count),
+    activeCount: requireInteger(raw.active_count),
+    completedCount: requireInteger(raw.completed_count),
+    attentionCount: requireInteger(raw.attention_count),
+    createdAt: timestampLabel(raw.created_at),
+    updatedAt: timestampLabel(raw.updated_at),
+    hasReport: raw.has_report,
+  };
+}
+
+function normalizeArchaeologyBatchPage(data) {
+  data = requireRecord(data);
+  if (!Array.isArray(data.items) || data.items.length > MAX_PROJECT_ARCHAEOLOGY_HISTORY_PAGE) throw invalidPayload();
+  return { items: data.items.map(normalizeArchaeologyBatchSummary), nextCursor: data.next_cursor == null ? "" : typeof data.next_cursor === "string" ? data.next_cursor : (() => { throw invalidPayload(); })() };
+}
+
+function normalizeArchaeologyBatchTask(raw, batchID) {
+  raw = requireRecord(raw);
+  const allowedStates = new Set(["queued", "starting", "active", "report_ready", "cancel_requested", "completed", "failed", "interrupted", "canceled", "uncertain", "attention"]);
+  if (!allowedStates.has(raw.state) || raw.batch_id !== batchID || !Array.isArray(raw.available_actions) || raw.available_actions.length > 8) throw invalidPayload();
+  return {
+    jobId: requireString(raw.job_id),
+    batchId: batchID,
+    candidateId: requireString(raw.candidate_id),
+    projectId: requireString(raw.project_id),
+    projectName: raw.project_name == null ? "" : requireString(raw.project_name),
+    state: raw.state,
+    mode: raw.mode == null ? "" : requireString(raw.mode),
+    phaseLabel: raw.phase_label == null ? "" : requireString(raw.phase_label),
+    sourcesExamined: requireInteger(raw.sources_examined ?? 0),
+    durationMs: raw.duration_ms == null ? null : requireInteger(raw.duration_ms),
+    launchId: raw.launch_id == null ? "" : requireString(raw.launch_id),
+    threadId: raw.thread_id == null ? "" : requireString(raw.thread_id),
+    turnId: raw.turn_id == null ? "" : requireString(raw.turn_id),
+    createdAt: timestampLabel(raw.created_at),
+    updatedAt: timestampLabel(raw.updated_at),
+    error: raw.error == null ? "" : requireString(raw.error),
+    availableActions: raw.available_actions.map(requireString),
+  };
+}
+
+function normalizeArchaeologyBatchDetail(data) {
+  data = requireRecord(data);
+  if (!["queued", "running", "cancel_requested", "canceled", "completed", "attention"].includes(data.state) || !PROJECT_ARCHAEOLOGY_DEPTHS.includes(data.depth) || ![1, 2].includes(data.concurrency)) throw invalidPayload();
+  const sources = requireRecord(data.sources);
+  if (typeof sources.git !== "boolean" || typeof sources.docs !== "boolean" || typeof sources.codex_history !== "boolean") throw invalidPayload();
+  const summary = {
+    batchId: requireString(data.batch_id), state: data.state, mode: data.mode == null ? "" : requireString(data.mode), depth: data.depth,
+    sources: { git: sources.git, docs: sources.docs, codexHistory: sources.codex_history },
+    concurrency: data.concurrency, selectedTotal: requireInteger(data.selected_total),
+    queuedCount: requireInteger(data.queued_count ?? 0),
+    activeCount: requireInteger(data.active_count ?? 0),
+    completedCount: requireInteger(data.completed_count ?? 0),
+    attentionCount: requireInteger(data.attention_count ?? 0),
+    hasReport: data.has_report === true,
+    createdAt: timestampLabel(data.created_at), updatedAt: timestampLabel(data.updated_at),
+  };
+  if (!Array.isArray(data.tasks) || data.tasks.length > MAX_PROJECT_ARCHAEOLOGY_SELECTION) throw invalidPayload();
+  const tasks = data.tasks.map((task) => normalizeArchaeologyBatchTask(task, summary.batchId));
+  if (new Set(tasks.map((task) => task.jobId)).size !== tasks.length) throw invalidPayload();
+  const review = normalizeArchaeologyReview(data.review);
+  if (review && review.batchId !== summary.batchId) throw invalidPayload();
+  return { ...summary, tasks, review, outcomesNextCursor: data.outcomes_next_cursor == null ? "" : typeof data.outcomes_next_cursor === "string" ? data.outcomes_next_cursor : (() => { throw invalidPayload(); })() };
+}
+
+function normalizeArchaeologyOutcomePage(data) {
+  data = requireRecord(data);
+  if (!Array.isArray(data.items) || data.items.length > MAX_PROJECT_ARCHAEOLOGY_OUTCOME_PAGE) throw invalidPayload();
+  const items = data.items.map(normalizeArchaeologyOutcome);
+  if (new Set(items.map((item) => item.id)).size !== items.length) throw invalidPayload();
+  return { items, nextCursor: data.next_cursor == null ? "" : typeof data.next_cursor === "string" ? data.next_cursor : (() => { throw invalidPayload(); })() };
+}
+
+function normalizeInstallationStatus(data) {
+  data = requireRecord(data);
+  const service = requireRecord(data.service);
+  const database = requireRecord(data.database);
+  const codex = requireRecord(data.codex);
+  const archaeology = requireRecord(data.archaeology);
+  const backup = requireRecord(data.backup);
+  const reconciliation = requireRecord(data.reconciliation);
+  const evidence = requireRecord(data.evidence);
+  const restoreDrill = requireRecord(evidence.restore_drill);
+  const verification = (value) => {
+    value = requireRecord(value);
+    return {
+      status: ["unknown", "verified", "attention"].includes(value.status) ? value.status : (() => { throw invalidPayload(); })(),
+      violations: requireInteger(value.violations),
+      checkedAt: value.checked_at == null ? null : timestampLabel(value.checked_at),
+    };
+  };
+  if (typeof codex.configured !== "boolean" || typeof codex.available !== "boolean") throw invalidPayload();
+  const backupStatus = ["unknown", "verified", "failed"].includes(backup.status) ? backup.status : (() => { throw invalidPayload(); })();
+  const reconciliationStatus = ["unknown", "healthy", "attention", "failed"].includes(reconciliation.status) ? reconciliation.status : (() => { throw invalidPayload(); })();
+  return {
+    service: { version: requireString(service.version), startedAt: service.started_at == null ? null : timestampLabel(service.started_at) },
+    database: { schemaVersion: requireInteger(database.schema_version) },
+    codex: {
+      configured: codex.configured,
+      available: codex.available,
+      version: requireString(codex.version),
+      accountState: requireString(codex.account_state),
+      sessionRevocationPending: typeof codex.session_revocation_pending === "boolean" ? codex.session_revocation_pending : (() => { throw invalidPayload(); })(),
+      compatibilityStatus: ["unknown", "compatible", "incompatible", "unavailable"].includes(codex.compatibility_status) ? codex.compatibility_status : (() => { throw invalidPayload(); })(),
+      compatibilityCheckedAt: codex.compatibility_checked_at == null ? null : timestampLabel(codex.compatibility_checked_at),
+    },
+    archaeology: { catalogCompletedAt: archaeology.catalog_completed_at == null ? null : timestampLabel(archaeology.catalog_completed_at), activeCount: requireInteger(archaeology.active_count), uncertainCount: requireInteger(archaeology.uncertain_count) },
+    backup: { lastVerifiedAt: backup.last_verified_at == null ? null : timestampLabel(backup.last_verified_at), status: backupStatus },
+    reconciliation: { lastAt: reconciliation.last_at == null ? null : timestampLabel(reconciliation.last_at), status: reconciliationStatus },
+    evidence: {
+      completedHistorians: requireInteger(evidence.completed_historians),
+      failedHistorians: requireInteger(evidence.failed_historians),
+      uncertainHistorians: requireInteger(evidence.uncertain_historians),
+      distinctProjects: requireInteger(evidence.distinct_projects),
+      reportsReceived: requireInteger(evidence.reports_received),
+      lostReports: requireInteger(evidence.lost_reports),
+      reviewedImports: requireInteger(evidence.reviewed_imports),
+      cancellations: requireInteger(evidence.cancellations),
+      reportRecovery: verification(evidence.report_recovery),
+      duplicateLaunchCheck: verification(evidence.duplicate_launch_check),
+      repositoryImmutability: verification(evidence.repository_immutability),
+      canonicalImmutability: verification(evidence.canonical_immutability),
+      restoreDrill: {
+        status: ["unknown", "verified", "failed"].includes(restoreDrill.status) ? restoreDrill.status : (() => { throw invalidPayload(); })(),
+        lastVerifiedAt: restoreDrill.last_verified_at == null ? null : timestampLabel(restoreDrill.last_verified_at),
+      },
+      betaPrerequisitesMet: evidence.beta_prerequisites_met === true ? true : evidence.beta_prerequisites_met === false ? false : (() => { throw invalidPayload(); })(),
+    },
+  };
+}
+
+function normalizeArchaeologyBatchImport(raw, expectedBatchID, expectedOutcomeIDs, expectedReviewSessionToken = "") {
+  raw = requireRecord(raw);
+  if (raw.batch_id !== expectedBatchID
+    || !Array.isArray(raw.outcome_ids)
+    || raw.outcome_ids.length !== expectedOutcomeIDs.length
+    || raw.outcome_ids.some((id, index) => id !== expectedOutcomeIDs[index])
+    || !/^sha256:[0-9a-f]{64}$/.test(raw.selection_digest)
+    || !/^sha256:[0-9a-f]{64}$/.test(raw.manifest_digest)
+    || raw.applied === true
+    || !Array.isArray(raw.projects)
+    || raw.projects.length < 1
+    || raw.projects.length > 5) throw invalidPayload();
+  const projects = raw.projects.map((project) => {
+    const bridge = { ...normalizeArchaeologyImportPreview(project, timestampLabel), outcomeId: requireString(project.outcome_id) };
+    if (bridge.preview.applied !== false) throw invalidPayload();
+    return bridge;
+  });
+  if (new Set(projects.map((project) => project.outcomeId)).size !== projects.length
+    || projects.some((project) => !expectedOutcomeIDs.includes(project.outcomeId))) throw invalidPayload();
+  const keys = new Set();
+  const tasks = [];
+  const previewTasks = [];
+  const aliases = [];
+  const counts = { projectThreadAliases: 0, tasks: 0, attributions: 0, events: 0, created: 0, skippedCurrent: 0, replayed: 0 };
+  projects.forEach((project) => {
+    project.proposal.tasks.forEach((task) => {
+      const qualifiedKey = `${project.projectId}:${project.outcomeId}:${task.key}`;
+      if (keys.has(qualifiedKey)) throw invalidPayload();
+      keys.add(qualifiedKey);
+      tasks.push({ ...task, key: qualifiedKey, originalKey: task.key, projectId: project.projectId, outcomeId: project.outcomeId });
+    });
+    project.preview.tasks.forEach((task) => previewTasks.push({ ...task, key: `${project.projectId}:${project.outcomeId}:${task.key}`, originalKey: task.key, projectId: project.projectId, outcomeId: project.outcomeId }));
+    project.proposal.projectThreadAliases.forEach((alias) => aliases.push({ ...alias, projectId: project.projectId, outcomeId: project.outcomeId }));
+    Object.keys(counts).forEach((key) => { counts[key] += project.preview.counts[key] || 0; });
+  });
+  if (counts.tasks !== tasks.length || previewTasks.length !== tasks.length) throw invalidPayload();
+  const nextCursor = raw.next_cursor == null ? "" : typeof raw.next_cursor === "string" ? raw.next_cursor : (() => { throw invalidPayload(); })();
+  const reviewSessionToken = requireString(raw.review_session_token);
+  const reviewCompletionToken = raw.review_completion_token == null ? "" : requireString(raw.review_completion_token);
+  if (!/^[A-Za-z0-9_-]{43}$/.test(reviewSessionToken)
+    || (expectedReviewSessionToken && reviewSessionToken !== expectedReviewSessionToken)
+    || (reviewCompletionToken && !/^[A-Za-z0-9_-]{43}$/.test(reviewCompletionToken))
+    || (nextCursor ? Boolean(reviewCompletionToken) : !reviewCompletionToken)) throw invalidPayload();
+  return {
+    batchId: raw.batch_id,
+    outcomeIds: [...raw.outcome_ids],
+    selectionDigest: raw.selection_digest,
+    manifestDigest: raw.manifest_digest,
+    projects,
+    proposal: { projectThreadAliases: aliases, tasks },
+    preview: {
+      batchId: raw.batch_id,
+      selectionDigest: raw.selection_digest,
+      manifestDigest: raw.manifest_digest,
+      collisionPolicy: "current_wins",
+      state: "preview",
+      applied: false,
+      tasks: previewTasks,
+      counts,
+    },
+    applied: false,
+    nextCursor,
+    reviewSessionToken,
+    reviewCompletionToken,
+    reviewExpiresAt: timestampLabel(raw.review_expires_at),
+  };
+}
+
+function normalizeArchaeologyBatchApplyReceipt(raw, bridge) {
+  raw = requireRecord(raw);
+  if (raw.batch_id !== bridge.batchId
+    || !Array.isArray(raw.outcome_ids)
+    || raw.outcome_ids.length !== bridge.outcomeIds.length
+    || raw.outcome_ids.some((id, index) => id !== bridge.outcomeIds[index])
+    || raw.selection_digest !== bridge.selectionDigest
+    || raw.manifest_digest !== bridge.manifestDigest
+    || raw.applied !== true) throw invalidPayload();
+  return {
+    batchId: raw.batch_id,
+    outcomeIds: [...raw.outcome_ids],
+    selectionDigest: raw.selection_digest,
+    manifestDigest: raw.manifest_digest,
+    applied: true,
+    auditId: requireString(raw.audit_id),
   };
 }
 
@@ -602,34 +898,13 @@ function normalizeProjectArchaeology(data) {
   if (typeof data.id !== "string" || !PROJECT_ARCHAEOLOGY_STATES.includes(data.state)) throw invalidPayload();
   const discovery = requireRecord(data.discovery);
   if (!PROJECT_ARCHAEOLOGY_DISCOVERY_STATES.includes(discovery.state) || discovery.metadata_only !== true || !Array.isArray(discovery.candidates) || discovery.candidates.length > 100) throw invalidPayload();
-  const candidates = discovery.candidates.map((rawCandidate) => {
-    const candidate = requireRecord(rawCandidate);
-    const signals = requireRecord(candidate.signals);
-    const estimate = requireRecord(candidate.estimate);
-    if (typeof signals.git !== "boolean" || typeof signals.docs !== "boolean" || typeof signals.codex_history !== "boolean" || !["low", "medium", "high"].includes(estimate.relative_cost) || typeof candidate.selected_by_default !== "boolean" || !Array.isArray(candidate.sources) || candidate.sources.length > 2 || !candidate.sources.every((source) => ["codex_metadata", "configured_root"].includes(source))) throw invalidPayload();
-    const durationSecondsMin = requireInteger(estimate.duration_seconds_min);
-    const durationSecondsMax = requireInteger(estimate.duration_seconds_max);
-    if (durationSecondsMax < durationSecondsMin) throw invalidPayload();
-    return {
-      id: requireString(candidate.id),
-      candidateId: requireString(candidate.id),
-      name: requireString(candidate.name),
-      repositoryLabel: candidate.repository_label == null ? "" : requireString(candidate.repository_label),
-      lastActivity: candidate.last_activity_at == null ? null : timestampLabel(candidate.last_activity_at),
-      signals: { git: signals.git, docs: signals.docs, codexHistory: signals.codex_history },
-      estimate: { durationSecondsMin, durationSecondsMax, relativeCost: estimate.relative_cost },
-      privacyNote: requireString(candidate.privacy_note),
-      selectedByDefault: candidate.selected_by_default,
-      sources: candidate.sources.map(requireString),
-      codexThreadCount: requireInteger(candidate.codex_thread_count),
-    };
-  });
+  const candidates = discovery.candidates.map(normalizeArchaeologyCandidate);
   if (new Set(candidates.map((candidate) => candidate.id)).size !== candidates.length) throw invalidPayload();
 
   const rawConfig = requireRecord(data.config);
   const rawSources = requireRecord(rawConfig.sources);
   if (!PROJECT_ARCHAEOLOGY_DEPTHS.includes(rawConfig.depth) || typeof rawSources.git !== "boolean" || typeof rawSources.docs !== "boolean" || typeof rawSources.codex_history !== "boolean" || ![1, 2].includes(rawConfig.max_concurrency)) throw invalidPayload();
-  const selectedProjectIds = archaeologyStringList(rawConfig.selected_project_ids, 100);
+  const selectedProjectIds = archaeologyStringList(rawConfig.selected_project_ids, MAX_PROJECT_ARCHAEOLOGY_SELECTION);
   if (new Set(selectedProjectIds).size !== selectedProjectIds.length) throw invalidPayload();
 
   if (!Array.isArray(data.runs) || data.runs.length > 100) throw invalidPayload();
@@ -654,15 +929,33 @@ function normalizeProjectArchaeology(data) {
 
   let review = null;
   if (data.review != null) {
-    const rawReview = requireRecord(data.review);
-    if (!Array.isArray(rawReview.proposed_outcomes) || rawReview.proposed_outcomes.length > 200 || !Array.isArray(rawReview.member_sessions) || rawReview.member_sessions.length > 300 || typeof rawReview.can_apply !== "boolean" || rawReview.requires_explicit_approval !== true) throw invalidPayload();
-    review = {
-      proposedOutcomes: rawReview.proposed_outcomes.map(normalizeArchaeologyOutcome),
-      memberSessions: rawReview.member_sessions.map(normalizeArchaeologyMember),
-      provenanceSummary: requireString(rawReview.provenance_summary),
-      canApply: rawReview.can_apply,
-      requiresExplicitApproval: true,
-    };
+    review = normalizeArchaeologyReview(data.review);
+  }
+
+  const handoff = normalizeArchaeologyHandoff(data.handoff, timestampLabel);
+  const updatedAt = data.updated_at == null ? null : timestampLabel(data.updated_at);
+  const time = (value) => Date.parse(value?.iso || "");
+  if (handoff?.batchId) {
+    const modelUpdated = time(updatedAt);
+    const handoffCreated = time(handoff.createdAt);
+    const handoffUpdated = time(handoff.updatedAt);
+    const progressUpdated = time(handoff.progress?.updatedAt);
+    if (!Number.isFinite(modelUpdated)
+      || !Number.isFinite(handoffCreated)
+      || !Number.isFinite(handoffUpdated)
+      || handoffCreated > handoffUpdated
+      || handoffUpdated > modelUpdated
+      || (handoff.progress?.updatedAt && (!Number.isFinite(progressUpdated) || progressUpdated > handoffUpdated))
+      || handoff.tasks.some((task) => {
+        const created = time(task.createdAt);
+        const updated = time(task.updatedAt);
+        return !Number.isFinite(created) || !Number.isFinite(updated) || created > updated || updated > handoffUpdated;
+      })) throw invalidPayload();
+  }
+  if (review) {
+    review.batchRelation = review.batchId
+      ? review.batchId === handoff?.batchId ? "current" : "prior"
+      : "unbound";
   }
 
   const controls = requireRecord(data.controls);
@@ -677,6 +970,7 @@ function normalizeProjectArchaeology(data) {
       updatedAt: discovery.updated_at == null ? null : timestampLabel(discovery.updated_at),
       codexThreadsExamined: discovery.codex_threads_examined == null ? 0 : requireInteger(discovery.codex_threads_examined),
       workspacesGrouped: discovery.workspaces_grouped == null ? 0 : requireInteger(discovery.workspaces_grouped),
+      telemetry: normalizeDiscoveryTelemetry(discovery.telemetry || discovery, { tasksExamined: discovery.codex_threads_examined, projectsGrouped: discovery.workspaces_grouped }),
       candidates,
       discoveredAt: discovery.discovered_at == null ? null : timestampLabel(discovery.discovered_at),
       sourceRootsScanned: requireInteger(discovery.source_roots_scanned),
@@ -692,10 +986,10 @@ function normalizeProjectArchaeology(data) {
     runs,
     review,
     capabilities: normalizeArchaeologyCapabilities(data.capabilities),
-    handoff: normalizeArchaeologyHandoff(data.handoff, timestampLabel),
+    handoff,
     controls: { canStart: controls.can_start, canPause: controls.can_pause, canResume: controls.can_resume, canCancel: controls.can_cancel },
     revision: requireInteger(data.revision),
-    updatedAt: data.updated_at == null ? null : timestampLabel(data.updated_at),
+    updatedAt,
   };
 }
 
@@ -705,7 +999,7 @@ function archaeologyRevision(value) {
 }
 
 function archaeologyConfigInput(config, baseRevision) {
-  if (config === null || typeof config !== "object" || Array.isArray(config) || !Array.isArray(config.selectedProjectIds) || config.selectedProjectIds.length > 100 || !PROJECT_ARCHAEOLOGY_DEPTHS.includes(config.depth) || ![1, 2].includes(config.maxConcurrency)) throw new CommonsAPIError("Choose valid Project Archaeology settings.", { code: "invalid_archaeology_config" });
+  if (config === null || typeof config !== "object" || Array.isArray(config) || !Array.isArray(config.selectedProjectIds) || config.selectedProjectIds.length > MAX_PROJECT_ARCHAEOLOGY_SELECTION || !PROJECT_ARCHAEOLOGY_DEPTHS.includes(config.depth) || ![1, 2].includes(config.maxConcurrency)) throw new CommonsAPIError("Choose valid Project Archaeology settings.", { code: "invalid_archaeology_config" });
   const sources = config.sources;
   if (sources === null || typeof sources !== "object" || typeof sources.git !== "boolean" || typeof sources.docs !== "boolean" || typeof sources.codexHistory !== "boolean" || !config.selectedProjectIds.every((id) => typeof id === "string" && id)) throw new CommonsAPIError("Choose valid Project Archaeology settings.", { code: "invalid_archaeology_config" });
   return {
@@ -714,6 +1008,22 @@ function archaeologyConfigInput(config, baseRevision) {
     sources: { git: sources.git, docs: sources.docs, codex_history: sources.codexHistory },
     max_concurrency: config.maxConcurrency,
     base_revision: archaeologyRevision(baseRevision),
+  };
+}
+
+function archaeologyResolutionInput(task, baseRevision) {
+  const boundedID = (value, { required = false } = {}) => {
+    if (typeof value !== "string" || value.length > 120 || (required && !value)) {
+      throw new CommonsAPIError("Choose an exact uncertain Codex task to reconcile.", { code: "invalid_archaeology_resolution" });
+    }
+    return value;
+  };
+  return {
+    base_revision: archaeologyRevision(baseRevision),
+    job_id: boundedID(task?.jobId, { required: true }),
+    thread_id: boundedID(task?.threadId || "", { required: true }),
+    turn_id: boundedID(task?.turnId || "", { required: true }),
+    resolution: "confirmed_stopped",
   };
 }
 
@@ -765,14 +1075,34 @@ export function createHTTPAdapter(options) {
     async readProjectArchaeology(signal) {
       return safelyNormalize(normalizeProjectArchaeology, await transport.readProjectArchaeology(signal));
     },
+    async readProjectArchaeologyCatalog(query = {}, signal) {
+      const sort = ["recent", "tasks", "name"].includes(query.sort) ? query.sort : "recent";
+      const limit = query.limit ?? MAX_PROJECT_ARCHAEOLOGY_CATALOG_PAGE;
+      return safelyNormalize(normalizeArchaeologyCatalogPage, await transport.readProjectArchaeologyCatalog({ ...query, sort, limit }, signal));
+    },
+    async readProjectArchaeologyBatches(query = {}, signal) {
+      const limit = query.limit ?? DEFAULT_PROJECT_ARCHAEOLOGY_HISTORY_PAGE;
+      return safelyNormalize(normalizeArchaeologyBatchPage, await transport.readProjectArchaeologyBatches({ ...query, limit }, signal));
+    },
+    async readProjectArchaeologyBatch(batchID, signal) {
+      if (typeof batchID !== "string" || !batchID) throw new CommonsAPIError("Choose a Project Archaeology run.", { code: "invalid_archaeology_batch" });
+      return safelyNormalize(normalizeArchaeologyBatchDetail, await transport.readProjectArchaeologyBatch(batchID, signal));
+    },
+    async readProjectArchaeologyBatchOutcomes(batchID, cursor, signal) {
+      if (typeof batchID !== "string" || !batchID || typeof cursor !== "string" || !cursor) throw new CommonsAPIError("Choose an older proposal page.", { code: "invalid_archaeology_batch" });
+      return safelyNormalize(normalizeArchaeologyOutcomePage, await transport.readProjectArchaeologyBatchOutcomes(batchID, { cursor }, signal));
+    },
+    async readInstallationStatus(signal) {
+      return safelyNormalize(normalizeInstallationStatus, await transport.readInstallationStatus(signal));
+    },
     async discoverProjectArchaeology(writeOptions, signal) {
       return safelyNormalize(normalizeProjectArchaeology, await transport.discoverProjectArchaeology(writeOptions, signal));
     },
     async updateProjectArchaeologyConfig(config, baseRevision, writeOptions, signal) {
       return safelyNormalize(normalizeProjectArchaeology, await transport.updateProjectArchaeologyConfig(archaeologyConfigInput(config, baseRevision), writeOptions, signal));
     },
-    async startProjectArchaeology(baseRevision, writeOptions, signal) {
-      return safelyNormalize(normalizeProjectArchaeology, await transport.startProjectArchaeology({ base_revision: archaeologyRevision(baseRevision) }, writeOptions, signal));
+    async startProjectArchaeology(baseRevision, acknowledgeLargeBatch, writeOptions, signal) {
+      return safelyNormalize(normalizeProjectArchaeology, await transport.startProjectArchaeology({ base_revision: archaeologyRevision(baseRevision), acknowledge_large_batch: acknowledgeLargeBatch === true }, writeOptions, signal));
     },
     async pauseProjectArchaeology(baseRevision, writeOptions, signal) {
       return safelyNormalize(normalizeProjectArchaeology, await transport.pauseProjectArchaeology({ base_revision: archaeologyRevision(baseRevision) }, writeOptions, signal));
@@ -782,6 +1112,9 @@ export function createHTTPAdapter(options) {
     },
     async cancelProjectArchaeology(baseRevision, writeOptions, signal) {
       return safelyNormalize(normalizeProjectArchaeology, await transport.cancelProjectArchaeology({ base_revision: archaeologyRevision(baseRevision) }, writeOptions, signal));
+    },
+    async resolveProjectArchaeology(task, baseRevision, writeOptions, signal) {
+      return safelyNormalize(normalizeProjectArchaeology, await transport.resolveProjectArchaeology(archaeologyResolutionInput(task, baseRevision), writeOptions, signal));
     },
     async previewProjectArchaeologyImport(outcomeID, writeOptions, signal) {
       if (typeof outcomeID !== "string" || !outcomeID) throw new CommonsAPIError("Choose a proposed outcome to preview.", { code: "invalid_archaeology_outcome" });
@@ -794,14 +1127,48 @@ export function createHTTPAdapter(options) {
       if (typeof previewBridge?.projectId !== "string" || !previewBridge.projectId) throw new CommonsAPIError("A canonical project is required.", { code: "invalid_historical_import" });
       let input;
       try {
-        input = confirmedHistoricalImportRequest(previewBridge.request, confirmation);
+        input = confirmedHistoricalImportRequest(previewBridge.request, previewBridge.preview, confirmation);
       } catch {
-        throw new CommonsAPIError("Enter the exact source digest to approve this import.", { code: "digest_confirmation_required" });
+        throw new CommonsAPIError("Enter the exact server manifest digest to approve this import.", { code: "manifest_confirmation_required" });
       }
       return safelyNormalize(
         (value) => normalizeHistoricalImportResult(value, timestampLabel),
         await transport.applyHistoricalImport(previewBridge.projectId, input, writeOptions, signal),
       );
+    },
+    async previewProjectArchaeologyBatchImport(batchID, outcomeIDs, writeOptions, signal) {
+      if (typeof batchID !== "string" || !batchID || !Array.isArray(outcomeIDs) || outcomeIDs.length < 1 || outcomeIDs.length > MAX_PROJECT_ARCHAEOLOGY_REVIEW_OUTCOMES || !outcomeIDs.every((value) => typeof value === "string" && value)) throw new CommonsAPIError("Choose one or more proposals from this run.", { code: "invalid_archaeology_selection" });
+      const canonicalOutcomeIDs = [...outcomeIDs].sort();
+      if (new Set(canonicalOutcomeIDs).size !== canonicalOutcomeIDs.length) throw new CommonsAPIError("Choose each proposal only once.", { code: "invalid_archaeology_selection" });
+      const value = await transport.previewProjectArchaeologyBatchImport(batchID, { outcome_ids: canonicalOutcomeIDs }, writeOptions, signal);
+      return safelyNormalize((raw) => normalizeArchaeologyBatchImport(raw, batchID, canonicalOutcomeIDs), value);
+    },
+    async previewProjectArchaeologyBatchImportPage(bridge, cursor, writeOptions, signal) {
+      if (!bridge?.batchId || !Array.isArray(bridge.outcomeIds) || typeof cursor !== "string" || !cursor) throw new CommonsAPIError("Choose the next exact-diff page.", { code: "invalid_archaeology_selection" });
+      const value = await transport.previewProjectArchaeologyBatchImportPage(bridge.batchId, cursor, { outcome_ids: bridge.outcomeIds, review_session_token: bridge.reviewSessionToken }, writeOptions, signal);
+      const page = safelyNormalize((raw) => normalizeArchaeologyBatchImport(raw, bridge.batchId, bridge.outcomeIds, bridge.reviewSessionToken), value);
+      if (page.selectionDigest !== bridge.selectionDigest || page.manifestDigest !== bridge.manifestDigest) throw new CommonsAPIError("The exact diff changed while it was being reviewed.", { code: "archaeology_preview_changed" });
+      const existingProjects = bridge.projects || [];
+      const known = new Set(existingProjects.map((project) => project.outcomeId));
+      if (page.projects.some((project) => known.has(project.outcomeId))) throw new CommonsAPIError("Commons returned a duplicate exact-diff page.", { code: "invalid_payload" });
+      const projects = [...existingProjects, ...page.projects];
+      if (!page.nextCursor && projects.length !== bridge.outcomeIds.length) throw new CommonsAPIError("Commons did not attest every selected exact-diff page.", { code: "invalid_payload" });
+      const proposalTasks = [...bridge.proposal.tasks, ...page.proposal.tasks];
+      const previewTasks = [...bridge.preview.tasks, ...page.preview.tasks];
+      const aliases = [...bridge.proposal.projectThreadAliases, ...page.proposal.projectThreadAliases];
+      const counts = Object.fromEntries(Object.keys(bridge.preview.counts).map((key) => [key, (bridge.preview.counts[key] || 0) + (page.preview.counts[key] || 0)]));
+      return { ...bridge, projects, proposal: { projectThreadAliases: aliases, tasks: proposalTasks }, preview: { ...bridge.preview, tasks: previewTasks, counts }, nextCursor: page.nextCursor, reviewCompletionToken: page.reviewCompletionToken, reviewExpiresAt: page.reviewExpiresAt };
+    },
+    async applyProjectArchaeologyBatchImport(bridge, confirmation, reviewed, writeOptions, signal) {
+      if (reviewed !== true || confirmation !== bridge?.preview?.manifestDigest || bridge?.nextCursor || !bridge?.reviewCompletionToken) throw new CommonsAPIError("Complete the server-attested review, acknowledge every selected proposal, and enter the exact manifest digest.", { code: "manifest_confirmation_required" });
+      const value = await transport.applyProjectArchaeologyBatchImport(bridge.batchId, {
+        outcome_ids: bridge.outcomeIds,
+        selection_digest: bridge.selectionDigest,
+        manifest_digest: confirmation,
+        review_acknowledged: true,
+        review_completion_token: bridge.reviewCompletionToken,
+      }, writeOptions, signal);
+      return safelyNormalize((raw) => normalizeArchaeologyBatchApplyReceipt(raw, bridge), value);
     },
     async readPosts(query, signal) {
       return safelyNormalize(normalizePostsPage, await transport.readPosts(query, signal));
@@ -945,24 +1312,55 @@ export const fixtureAdapter = {
     fixtureArchaeology = { ...fixtureArchaeology, config, revision: fixtureArchaeology.revision + 1 };
     return wait(fixtureArchaeology, signal);
   },
-  async startProjectArchaeology(_baseRevision, _writeOptions, signal) {
+  async startProjectArchaeology(_baseRevision, _acknowledgeLargeBatch, _writeOptions, signal) {
     fixtureArchaeology = { ...archaeologyHandoffFixture, config: fixtureArchaeology.config };
     return wait(fixtureArchaeology, signal);
   },
   async pauseProjectArchaeology() { throw new CommonsAPIError("Direct Codex tasks cannot be paused from Commons.", { code: "unavailable", status: 503 }); },
   async resumeProjectArchaeology() { throw new CommonsAPIError("Direct Codex tasks cannot be resumed from Commons.", { code: "unavailable", status: 503 }); },
   async cancelProjectArchaeology() { throw new CommonsAPIError("Direct Codex tasks cannot be cancelled from Commons.", { code: "unavailable", status: 503 }); },
+  async resolveProjectArchaeology(task, _baseRevision, _writeOptions, signal) {
+    if (task?.state !== "uncertain" || !task.availableActions?.includes("resolve")) throw new CommonsAPIError("This task cannot be reconciled.", { code: "unavailable", status: 409 });
+    const remaining = fixtureArchaeology.handoff.tasks.map((item) => item.jobId === task.jobId ? { ...item, state: "interrupted", error: "Human confirmed this exact Codex task is stopped.", availableActions: [] } : item);
+    fixtureArchaeology = {
+      ...fixtureArchaeology,
+      state: "draft",
+      revision: fixtureArchaeology.revision + 1,
+      handoff: { ...fixtureArchaeology.handoff, state: "canceled", tasks: remaining, allowedActions: [] },
+      controls: { ...fixtureArchaeology.controls, canStart: true },
+    };
+    return wait(fixtureArchaeology, signal);
+  },
+
   async previewProjectArchaeologyImport(outcomeID, _writeOptions, signal) {
     if (outcomeID !== "OUT-1") throw new CommonsAPIError("Choose a proposed outcome to preview.", { code: "invalid_archaeology_outcome" });
     const sourceDigest = `sha256:${"a".repeat(64)}`;
     const manifestDigest = `sha256:${"b".repeat(64)}`;
-    const request = { schema_version: 1, batch_id: "archaeology-codex-commons", source_digest: sourceDigest, confirm_source_digest: "", collision_policy: "current_wins", project_thread_aliases: [], tasks: [] };
-    const preview = { batchId: "archaeology-codex-commons", sourceDigest, manifestDigest, collisionPolicy: "current_wins", state: "preview", applied: false, recordedAt: null, tasks: [], counts: { projectThreadAliases: 0, tasks: 20, attributions: 41, events: 20, created: 20, skippedCurrent: 0, replayed: 0 } };
-    return wait({ projectId: "codex-commons", request, preview }, signal);
+    const occurredAt = "2026-08-12T12:30:00Z";
+    const source = { kind: "git", stable_id: "git:commit:fixture", digest: sourceDigest, occurred_at: occurredAt };
+    const request = {
+      schema_version: 1, batch_id: "archaeology-codex-commons", source_digest: sourceDigest,
+      confirm_source_digest: "", confirm_manifest_digest: "", collision_policy: "current_wins",
+      project_thread_aliases: [],
+      tasks: [{
+        key: "history-task-1", priority: 0, title: "Preserve exact historian evidence",
+        description: "Bind this durable result to the evidence reviewed by the human.",
+        acceptance: "Canonical history retains exact source identity.", state: "done", source,
+        attributions: [{ session: "019ff-fixture-historian", role: "implementer", confidence: "verified", source: { ...source, kind: "codex_turn", stable_id: "thread:019ff-fixture-historian/turn:turn-1" } }],
+        events: [{ key: "history-event-1", kind: "completed", summary: "Historian verified this result.", session: "019ff-fixture-historian", confidence: "verified", source }],
+      }],
+    };
+    const preview = {
+      batch_id: "archaeology-codex-commons", source_digest: sourceDigest, manifest_digest: manifestDigest,
+      collision_policy: "current_wins", state: "preview", applied: false,
+      tasks: [{ key: "history-task-1", id: "TASK-PREVIEW-1", disposition: "created" }],
+      counts: { project_thread_aliases: 0, tasks: 1, attributions: 1, events: 1, created: 1, skipped_current: 0, replayed: 0 },
+    };
+    return wait(normalizeArchaeologyImportPreview({ project_id: "codex-commons", request, preview }, timestampLabel), signal);
   },
   async applyHistoricalImport(bridge, confirmation, _writeOptions, signal) {
-    confirmedHistoricalImportRequest(bridge.request, confirmation);
-    return wait({ ...bridge.preview, state: "applied", applied: true, counts: { ...bridge.preview.counts, created: 20, skippedCurrent: 0, replayed: 0 }, recordedAt: timestampLabel(new Date().toISOString()) }, signal);
+    confirmedHistoricalImportRequest(bridge.request, bridge.preview, confirmation);
+    return wait({ ...bridge.preview, state: "applied", applied: true, recordedAt: timestampLabel(new Date().toISOString()) }, signal);
   },
   async readNotifications(query, signal) {
     let records = fixtureNotificationRecords.map((item) => fixtureNotificationReads.has(item.id) ? { ...item, read_at: fixtureNotificationReads.get(item.id) } : item);

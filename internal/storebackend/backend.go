@@ -4,12 +4,14 @@ package storebackend
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"codex-commons/internal/codexauth"
 	"codex-commons/internal/domain"
 	"codex-commons/internal/httpapi"
 	"codex-commons/internal/presence"
@@ -17,10 +19,17 @@ import (
 )
 
 type Backend struct {
-	store    *commonsstore.Store
-	presence *presence.Registry
-	version  string
-	now      func() time.Time
+	store        *commonsstore.Store
+	presence     *presence.Registry
+	version      string
+	now          func() time.Time
+	startedAt    time.Time
+	codex        codexauth.Client
+	codexVersion string
+}
+
+func (b *Backend) ConfigureCodex(client codexauth.Client, version string) {
+	b.codex, b.codexVersion = client, version
 }
 
 const presenceIdleWindow = time.Hour
@@ -29,7 +38,7 @@ func New(store *commonsstore.Store, live *presence.Registry, version string) (*B
 	if store == nil || live == nil {
 		return nil, errors.New("store and presence registry required")
 	}
-	return &Backend{store: store, presence: live, version: version, now: time.Now}, nil
+	return &Backend{store: store, presence: live, version: version, now: time.Now, startedAt: time.Now().UTC()}, nil
 }
 
 func (b *Backend) Health(ctx context.Context, _ httpapi.RequestMeta) (httpapi.HealthResult, error) {
@@ -37,6 +46,80 @@ func (b *Backend) Health(ctx context.Context, _ httpapi.RequestMeta) (httpapi.He
 		return httpapi.HealthResult{}, httpapi.NewError(httpapi.CodeUnavailable, "database unavailable")
 	}
 	return httpapi.HealthResult{Status: "ok", Version: b.version}, nil
+}
+
+func (b *Backend) InstallationStatus(ctx context.Context, _ httpapi.RequestMeta) (httpapi.InstallationStatusResult, error) {
+	var out httpapi.InstallationStatusResult
+	out.Service.Version = b.version
+	out.Service.StartedAt = b.startedAt
+	out.Codex.AccountState = "unknown"
+	out.Codex.Configured = b.codex != nil
+	out.Codex.Version = b.codexVersion
+	if b.codex != nil {
+		out.Codex.Available = b.codex.Available()
+		checkCtx, cancel := context.WithTimeout(ctx, time.Second)
+		state, err := b.codex.AccountState(checkCtx)
+		cancel()
+		if err == nil {
+			out.Codex.AccountState = string(state)
+		}
+	}
+	var backupAt, reconcileAt, compatibilityAt, restoreAt, recoveryAt, duplicateAt, repositoryAt, canonicalAt sql.NullString
+	var recoveryDigest, duplicateDigest, repositoryDigest, canonicalDigest string
+	if err := b.store.DB().QueryRowContext(ctx, `SELECT (SELECT max(version) FROM schema_migrations),backup_status,backup_verified_at,reconciliation_status,reconciliation_checked_at,compatibility_status,compatibility_checked_at,restore_status,restore_verified_at,report_recovery_status,report_recovery_violations,report_recovery_checked_at,report_recovery_receipt_digest,duplicate_launch_status,duplicate_launch_violations,duplicate_launch_checked_at,duplicate_launch_receipt_digest,repository_immutability_status,repository_immutability_violations,repository_immutability_checked_at,repository_immutability_receipt_digest,canonical_immutability_status,canonical_immutability_violations,canonical_immutability_checked_at,canonical_immutability_receipt_digest,codex_session_revocation_pending FROM installation_status WHERE id=1`).Scan(&out.Database.SchemaVersion, &out.Backup.Status, &backupAt, &out.Reconciliation.Status, &reconcileAt, &out.Codex.CompatibilityStatus, &compatibilityAt, &out.Evidence.RestoreDrill.Status, &restoreAt, &out.Evidence.ReportRecovery.Status, &out.Evidence.ReportRecovery.Violations, &recoveryAt, &recoveryDigest, &out.Evidence.DuplicateLaunchCheck.Status, &out.Evidence.DuplicateLaunchCheck.Violations, &duplicateAt, &duplicateDigest, &out.Evidence.RepositoryImmutability.Status, &out.Evidence.RepositoryImmutability.Violations, &repositoryAt, &repositoryDigest, &out.Evidence.CanonicalImmutability.Status, &out.Evidence.CanonicalImmutability.Violations, &canonicalAt, &canonicalDigest, &out.Codex.SessionRevocationPending); err != nil {
+		return out, httpapi.NewError(httpapi.CodeUnavailable, "installation status unavailable")
+	}
+	var discovered sql.NullString
+	if err := b.store.DB().QueryRowContext(ctx, `SELECT max(discovered_at),(SELECT count(*) FROM archaeology_native_jobs WHERE state IN ('starting','active','report_ready','cancel_requested')),(SELECT count(*) FROM archaeology_native_jobs WHERE state='uncertain') FROM archaeology_sessions`).Scan(&discovered, &out.Archaeology.ActiveCount, &out.Archaeology.UncertainCount); err != nil {
+		return out, httpapi.NewError(httpapi.CodeUnavailable, "installation status unavailable")
+	}
+	parse := func(value sql.NullString) *time.Time {
+		if !value.Valid {
+			return nil
+		}
+		at, err := time.Parse(time.RFC3339Nano, value.String)
+		if err != nil {
+			return nil
+		}
+		return &at
+	}
+	out.Backup.LastVerifiedAt = parse(backupAt)
+	out.Reconciliation.LastAt = parse(reconcileAt)
+	out.Codex.CompatibilityCheckedAt = parse(compatibilityAt)
+	out.Archaeology.CatalogCompletedAt = parse(discovered)
+	out.Evidence.RestoreDrill.LastVerifiedAt = parse(restoreAt)
+	out.Evidence.ReportRecovery.CheckedAt = parse(recoveryAt)
+	out.Evidence.DuplicateLaunchCheck.CheckedAt = parse(duplicateAt)
+	out.Evidence.RepositoryImmutability.CheckedAt = parse(repositoryAt)
+	out.Evidence.CanonicalImmutability.CheckedAt = parse(canonicalAt)
+	verifyReceipt := func(kind, digest string, value *httpapi.EvidenceVerification) {
+		if len(digest) != 64 || value.CheckedAt == nil {
+			*value = httpapi.EvidenceVerification{Status: "unknown"}
+			return
+		}
+		var count int
+		err := b.store.DB().QueryRowContext(ctx, `SELECT count(*) FROM installation_evidence_receipts WHERE kind=? AND status=? AND violations=? AND checked_at=? AND receipt_digest=?`, kind, value.Status, value.Violations, value.CheckedAt.UTC().Format(time.RFC3339Nano), digest).Scan(&count)
+		if err != nil || count != 1 {
+			*value = httpapi.EvidenceVerification{Status: "unknown"}
+		}
+	}
+	verifyReceipt("report_recovery", recoveryDigest, &out.Evidence.ReportRecovery)
+	verifyReceipt("duplicate_launch", duplicateDigest, &out.Evidence.DuplicateLaunchCheck)
+	verifyReceipt("repository_immutability", repositoryDigest, &out.Evidence.RepositoryImmutability)
+	verifyReceipt("canonical_immutability", canonicalDigest, &out.Evidence.CanonicalImmutability)
+	if err := b.store.DB().QueryRowContext(ctx, `SELECT
+		(SELECT count(*) FROM archaeology_native_jobs WHERE state='completed'),
+		(SELECT count(*) FROM archaeology_native_jobs WHERE state IN ('failed','interrupted')),
+		(SELECT count(*) FROM archaeology_native_jobs WHERE state IN ('uncertain','attention')),
+		(SELECT count(DISTINCT project_id) FROM archaeology_native_jobs),
+		(SELECT count(DISTINCT job_id) FROM archaeology_native_outcomes),
+		(SELECT count(*) FROM archaeology_native_jobs WHERE error_code='completed_without_report'),
+		(SELECT count(*) FROM archaeology_selected_imports),
+		(SELECT count(*) FROM archaeology_native_batches WHERE state='canceled')`).Scan(&out.Evidence.CompletedHistorians, &out.Evidence.FailedHistorians, &out.Evidence.UncertainHistorians, &out.Evidence.DistinctProjects, &out.Evidence.ReportsReceived, &out.Evidence.LostReports, &out.Evidence.ReviewedImports, &out.Evidence.Cancellations); err != nil {
+		return out, httpapi.NewError(httpapi.CodeUnavailable, "installation evidence unavailable")
+	}
+	out.Evidence.BetaPrerequisitesMet = out.Codex.Configured && out.Codex.Available && out.Codex.AccountState == "signed_in" && !out.Codex.SessionRevocationPending && out.Evidence.LostReports == 0 && out.Evidence.UncertainHistorians == 0 && out.Backup.Status == "verified" && out.Evidence.RestoreDrill.Status == "verified" && out.Codex.CompatibilityStatus == "compatible" && out.Reconciliation.Status == "healthy" && out.Evidence.ReportRecovery.Status == "verified" && out.Evidence.DuplicateLaunchCheck.Status == "verified" && out.Evidence.RepositoryImmutability.Status == "verified" && out.Evidence.CanonicalImmutability.Status == "verified"
+	return out, nil
 }
 
 func (b *Backend) Context(ctx context.Context, query httpapi.ContextQuery, meta httpapi.RequestMeta) (httpapi.ContextResult, error) {

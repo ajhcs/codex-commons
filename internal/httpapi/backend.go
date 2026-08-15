@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"time"
 
 	"codex-commons/internal/application"
 )
@@ -28,6 +29,67 @@ type CommentReadBackend interface {
 type NotificationBackend interface {
 	Notifications(context.Context, NotificationListQuery, RequestMeta) (NotificationListResult, error)
 	MarkNotificationRead(context.Context, NotificationReadRequest, RequestMeta) (WriteResult, error)
+}
+
+type InstallationStatusBackend interface {
+	InstallationStatus(context.Context, RequestMeta) (InstallationStatusResult, error)
+}
+
+type InstallationStatusResult struct {
+	Service struct {
+		Version   string    `json:"version"`
+		StartedAt time.Time `json:"started_at"`
+	} `json:"service"`
+	Database struct {
+		SchemaVersion int `json:"schema_version"`
+	} `json:"database"`
+	Codex struct {
+		Configured               bool       `json:"configured"`
+		Available                bool       `json:"available"`
+		Version                  string     `json:"version,omitempty"`
+		AccountState             string     `json:"account_state"`
+		CompatibilityStatus      string     `json:"compatibility_status"`
+		CompatibilityCheckedAt   *time.Time `json:"compatibility_checked_at,omitempty"`
+		SessionRevocationPending bool       `json:"session_revocation_pending"`
+	} `json:"codex"`
+	Archaeology struct {
+		CatalogCompletedAt *time.Time `json:"catalog_completed_at,omitempty"`
+		ActiveCount        int        `json:"active_count"`
+		UncertainCount     int        `json:"uncertain_count"`
+	} `json:"archaeology"`
+	Backup struct {
+		Status         string     `json:"status"`
+		LastVerifiedAt *time.Time `json:"last_verified_at,omitempty"`
+	} `json:"backup"`
+	Reconciliation struct {
+		Status string     `json:"status"`
+		LastAt *time.Time `json:"last_at,omitempty"`
+	} `json:"reconciliation"`
+	Evidence struct {
+		CompletedHistorians    int                  `json:"completed_historians"`
+		FailedHistorians       int                  `json:"failed_historians"`
+		UncertainHistorians    int                  `json:"uncertain_historians"`
+		DistinctProjects       int                  `json:"distinct_projects"`
+		ReportsReceived        int                  `json:"reports_received"`
+		LostReports            int                  `json:"lost_reports"`
+		ReviewedImports        int                  `json:"reviewed_imports"`
+		Cancellations          int                  `json:"cancellations"`
+		ReportRecovery         EvidenceVerification `json:"report_recovery"`
+		DuplicateLaunchCheck   EvidenceVerification `json:"duplicate_launch_check"`
+		RepositoryImmutability EvidenceVerification `json:"repository_immutability"`
+		CanonicalImmutability  EvidenceVerification `json:"canonical_immutability"`
+		BetaPrerequisitesMet   bool                 `json:"beta_prerequisites_met"`
+		RestoreDrill           struct {
+			Status         string     `json:"status"`
+			LastVerifiedAt *time.Time `json:"last_verified_at,omitempty"`
+		} `json:"restore_drill"`
+	} `json:"evidence"`
+}
+
+type EvidenceVerification struct {
+	Status     string     `json:"status"`
+	Violations int        `json:"violations"`
+	CheckedAt  *time.Time `json:"checked_at,omitempty"`
 }
 
 type AddressabilityBackend interface {

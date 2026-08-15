@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"codex-commons/internal/codexauth"
+	"codex-commons/internal/domain"
 )
 
 const (
@@ -35,20 +37,24 @@ type Config struct {
 	Credentials            []Credential
 	MaxRequestBytes        int64
 	ExpectedHost           string
+	PublicOrigin           string
+	InternalReadinessHost  string
 	Version                string
 	HumanAuth              *HumanAuthConfig
 	HumanBindingStore      HumanAccountBindingStore
 	HumanAuthEvents        HumanAuthEventStore
+	HumanSessionStore      HumanSessionStore
 	OnHumanIdentityUpdated func(displayName, handle string, revision int64)
 	CodexAuth              *CodexAuthConfig
 }
 
 type handler struct {
-	backend   Backend
-	config    Config
-	humanAuth *humanAuth
-	pairings  *pairingManager
-	serial    atomic.Uint64
+	backend               Backend
+	config                Config
+	humanAuth             *humanAuth
+	pairings              *pairingManager
+	serial                atomic.Uint64
+	codexRevocationFailed atomic.Bool
 }
 
 type responseMeta struct {
@@ -77,15 +83,36 @@ func NewHandler(backend Backend, config Config) http.Handler {
 	if config.Version == "" {
 		config.Version = "dev"
 	}
-	h := &handler{backend: backend, config: config, humanAuth: newHumanAuth(config.HumanAuth), pairings: newPairingManager()}
+	h := &handler{backend: backend, config: config, humanAuth: newHumanAuth(config.HumanAuth, config.HumanSessionStore), pairings: newPairingManager()}
 	if config.CodexAuth != nil && config.CodexAuth.Client != nil {
 		config.CodexAuth.Client.SetEventHandler(func(event codexauth.Event) {
 			if h.humanAuth != nil && event.Kind == "account_updated" {
-				h.humanAuth.revokeCodexSessions()
+				h.revokeCodexSessionsAfterAccountUpdate()
 			}
 		})
 	}
 	return h
+}
+
+func (h *handler) revokeCodexSessionsAfterAccountUpdate() {
+	// The pending latch makes a failed durable revoke survive process restart.
+	// Revocation must still run when setting the latch fails: a successful
+	// revoke is itself the durable fail-closed state.
+	pendingErr := h.humanAuth.setCodexRevocationPending(true)
+	revokeErr := h.humanAuth.revokeCodexSessions()
+	if pendingErr != nil && revokeErr != nil {
+		// A transient failure may have affected the first marker write as well as
+		// the revoke. Give the durable latch one final chance to preserve the
+		// fail-closed state before returning to the event loop.
+		pendingErr = h.humanAuth.setCodexRevocationPending(true)
+	}
+	if pendingErr == nil && revokeErr == nil {
+		if err := h.humanAuth.setCodexRevocationPending(false); err == nil {
+			h.codexRevocationFailed.Store(false)
+			return
+		}
+	}
+	h.codexRevocationFailed.Store(true)
 }
 
 type headResponseWriter struct {
@@ -110,6 +137,24 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rid, err := h.requestID(r.Header.Get("X-Request-ID"))
 	if err != nil {
 		h.writeError(w, rid, http.StatusBadRequest, "bad_request_id", err.Error())
+		return
+	}
+	if r.Method == http.MethodGet && r.URL.Path == "/v1/internal/readiness" {
+		host, _, splitErr := net.SplitHostPort(r.RemoteAddr)
+		if splitErr != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() ||
+			!strings.EqualFold(r.Host, h.config.InternalReadinessHost) || r.Header.Get("Forwarded") != "" ||
+			r.Header.Get("X-Forwarded-For") != "" || r.Header.Get("X-Forwarded-Host") != "" || r.Header.Get("X-Forwarded-Proto") != "" {
+			h.notFound(w, RequestMeta{RequestID: rid})
+			return
+		}
+		meta := RequestMeta{PrincipalKind: "human", Principal: domain.HumanLocalPrincipal, RequestID: rid}
+		backend, ok := h.backend.(InstallationStatusBackend)
+		if !ok {
+			h.finish(w, meta, nil, NewError(CodeUnavailable, "installation readiness unavailable"), false)
+			return
+		}
+		out, statusErr := backend.InstallationStatus(r.Context(), meta)
+		h.finish(w, meta, out, statusErr, false)
 		return
 	}
 	if h.config.ExpectedHost != "" && !strings.EqualFold(r.Host, h.config.ExpectedHost) {
@@ -142,7 +187,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.writeError(w, rid, http.StatusForbidden, "forbidden", "human session cannot use this route")
 			return
 		}
-		if !sameOrigin(r) {
+		if !sameOrigin(r, h.config.PublicOrigin) {
 			h.writeError(w, rid, http.StatusForbidden, "origin_forbidden", "same-origin request required")
 			return
 		}
@@ -159,6 +204,16 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) route(w http.ResponseWriter, r *http.Request, meta RequestMeta) {
+	if r.Method == http.MethodGet && r.URL.Path == "/v1/installation-status" {
+		backend, ok := h.backend.(InstallationStatusBackend)
+		if !ok {
+			h.finish(w, meta, nil, NewError(CodeUnavailable, "installation status unavailable"), false)
+			return
+		}
+		out, err := backend.InstallationStatus(r.Context(), meta)
+		h.finish(w, meta, out, err, true)
+		return
+	}
 	if h.projectArchaeologyRoute(w, r, meta) {
 		return
 	}
@@ -585,6 +640,9 @@ func (h *handler) authenticateHuman(r *http.Request) (authPrincipal, bool) {
 	}
 	session, ok := h.humanAuth.lookup(cookie.Value)
 	if !ok {
+		return authPrincipal{}, false
+	}
+	if session.authMethod == "codex" && (h.codexRevocationFailed.Load() || h.humanAuth.codexRevocationPending()) {
 		return authPrincipal{}, false
 	}
 	principal := h.humanAuth.principal()

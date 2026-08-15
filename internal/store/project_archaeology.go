@@ -25,17 +25,19 @@ func (s *Store) ArchaeologySession(ctx context.Context, principal string) (domai
 	var discovered sql.NullString
 	var updated string
 	var git, docs, history int
-	err := s.db.QueryRowContext(ctx, `SELECT id,principal,state,discovery_state,discovery_error,source_roots_scanned,depth,source_git,source_docs,source_codex_history,max_concurrency,revision,discovered_at,updated_at FROM archaeology_sessions WHERE principal=?`, principal).Scan(&out.ID, &out.Principal, &out.State, &out.DiscoveryState, &out.DiscoveryError, &out.SourceRootsScanned, &out.Config.Depth, &git, &docs, &history, &out.Config.MaxConcurrency, &out.Revision, &discovered, &updated)
+	var truncated int
+	err := s.db.QueryRowContext(ctx, `SELECT id,principal,state,discovery_state,discovery_error,source_roots_scanned,tasks_examined,projects_grouped,catalog_truncated,app_server_identity,depth,source_git,source_docs,source_codex_history,max_concurrency,revision,discovered_at,updated_at FROM archaeology_sessions WHERE principal=?`, principal).Scan(&out.ID, &out.Principal, &out.State, &out.DiscoveryState, &out.DiscoveryError, &out.SourceRootsScanned, &out.TasksExamined, &out.ProjectsGrouped, &truncated, &out.AppServerIdentity, &out.Config.Depth, &git, &docs, &history, &out.Config.MaxConcurrency, &out.Revision, &discovered, &updated)
 	if err != nil {
 		return out, mapErr(err)
 	}
 	out.MetadataOnly = true
+	out.CatalogTruncated = truncated == 1
 	out.Config.Sources = domain.ArchaeologySources{Git: git == 1, Docs: docs == 1, CodexHistory: history == 1}
 	out.UpdatedAt = parseStamp(updated)
 	if discovered.Valid {
 		out.DiscoveredAt = parseStamp(discovered.String)
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,canonical_project_id,name,path_label,repository_label,last_activity_at,has_git,has_docs,has_codex_history,duration_min_seconds,duration_max_seconds,relative_cost,privacy_note,selected,from_codex_metadata,from_configured_root,codex_thread_count FROM archaeology_candidates WHERE session_id=? ORDER BY name,id`, out.ID)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,canonical_project_id,name,path_label,repository_label,last_activity_at,has_git,has_docs,has_codex_history,duration_min_seconds,duration_max_seconds,relative_cost,privacy_note,selected,from_codex_metadata,from_configured_root,codex_thread_count FROM archaeology_candidates WHERE session_id=? ORDER BY selected DESC,name,id LIMIT 100`, out.ID)
 	if err != nil {
 		return out, err
 	}
@@ -60,7 +62,7 @@ func (s *Store) ArchaeologySession(ctx context.Context, principal string) (domai
 	if err = rows.Close(); err != nil {
 		return out, err
 	}
-	rows, err = s.db.QueryContext(ctx, `SELECT id,candidate_id,state,phase_label,completed_units,total_units,outcomes_found,sources_examined,error,runner_key,updated_at FROM archaeology_runs WHERE session_id=? ORDER BY created_at,id`, out.ID)
+	rows, err = s.db.QueryContext(ctx, `SELECT id,candidate_id,state,phase_label,completed_units,total_units,outcomes_found,sources_examined,error,runner_key,updated_at FROM archaeology_runs WHERE session_id=? ORDER BY created_at DESC,id DESC LIMIT 100`, out.ID)
 	if err != nil {
 		return out, err
 	}
@@ -82,7 +84,10 @@ func (s *Store) ArchaeologySession(ctx context.Context, principal string) (domai
 	if err = rows.Close(); err != nil {
 		return out, err
 	}
-	rows, err = s.db.QueryContext(ctx, "SELECT id,candidate_id,state,thread_id,codex_session_id,turn_id,client_message_id,error,grant_expires_at,created_at,updated_at FROM archaeology_task_launches WHERE session_id=? ORDER BY created_at,id", out.ID)
+	rows, err = s.db.QueryContext(ctx, `SELECT id,candidate_id,state,thread_id,codex_session_id,turn_id,client_message_id,error,grant_expires_at,created_at,updated_at FROM (
+		SELECT id,candidate_id,state,thread_id,codex_session_id,turn_id,client_message_id,error,grant_expires_at,created_at,updated_at
+		FROM archaeology_task_launches WHERE session_id=? ORDER BY created_at DESC,id DESC LIMIT 100
+	) ORDER BY created_at,id`, out.ID)
 	if err != nil {
 		return out, err
 	}
@@ -99,7 +104,11 @@ func (s *Store) ArchaeologySession(ctx context.Context, principal string) (domai
 	if err = rows.Close(); err != nil {
 		return out, err
 	}
-	rows, err = s.db.QueryContext(ctx, `SELECT o.id,o.project_id,o.title,o.summary,o.source_count,o.proposal_json FROM archaeology_outcomes o JOIN archaeology_runs r ON r.id=o.run_id WHERE r.session_id=? ORDER BY o.created_at,o.id`, out.ID)
+	rows, err = s.db.QueryContext(ctx, `SELECT id,project_id,title,summary,source_count,proposal_json FROM (
+		SELECT o.id,o.project_id,o.title,o.summary,o.source_count,o.proposal_json,o.created_at
+		FROM archaeology_outcomes o JOIN archaeology_runs r ON r.id=o.run_id
+		WHERE r.session_id=? ORDER BY o.created_at DESC,o.id DESC LIMIT ?
+	) ORDER BY created_at,id`, out.ID, domain.ArchaeologyLegacyOutcomePage)
 	if err != nil {
 		return out, err
 	}
@@ -111,37 +120,67 @@ func (s *Store) ArchaeologySession(ctx context.Context, principal string) (domai
 		}
 		out.Outcomes = append(out.Outcomes, o)
 	}
-	rows.Close()
-	for i := range out.Outcomes {
-		item := &out.Outcomes[i]
-		p, queryErr := s.db.QueryContext(ctx, `SELECT kind,stable_id,digest,occurred_at FROM archaeology_provenance WHERE outcome_id=? ORDER BY position`, item.ID)
-		if queryErr != nil {
-			return out, queryErr
+	if err = rows.Close(); err != nil {
+		return out, err
+	}
+	positions := make(map[string]int, len(out.Outcomes))
+	for index := range out.Outcomes {
+		positions[out.Outcomes[index].ID] = index
+	}
+	p, err := s.db.QueryContext(ctx, `WITH recent AS (
+		SELECT o.id FROM archaeology_outcomes o JOIN archaeology_runs r ON r.id=o.run_id
+		WHERE r.session_id=? ORDER BY o.created_at DESC,o.id DESC LIMIT ?
+	), ranked AS (
+		SELECT p.outcome_id,p.kind,p.stable_id,p.digest,p.occurred_at,p.position,
+			row_number() OVER (PARTITION BY p.outcome_id ORDER BY p.position) AS position_rank
+		FROM archaeology_provenance p JOIN recent ON recent.id=p.outcome_id
+	)
+	SELECT outcome_id,kind,stable_id,digest,occurred_at FROM ranked
+	WHERE position_rank<=? ORDER BY outcome_id,position`, out.ID, domain.ArchaeologyLegacyOutcomePage, domain.ArchaeologyLegacyProvenancePerOutcome)
+	if err != nil {
+		return out, err
+	}
+	for p.Next() {
+		var outcomeID, at string
+		var source domain.ArchaeologyProvenance
+		if err = p.Scan(&outcomeID, &source.Kind, &source.StableID, &source.Digest, &at); err != nil {
+			p.Close()
+			return out, err
 		}
-		for p.Next() {
-			var source domain.ArchaeologyProvenance
-			var at string
-			if queryErr = p.Scan(&source.Kind, &source.StableID, &source.Digest, &at); queryErr != nil {
-				p.Close()
-				return out, queryErr
-			}
+		if index, ok := positions[outcomeID]; ok {
 			source.OccurredAt = parseStamp(at)
-			item.Provenance = append(item.Provenance, source)
+			out.Outcomes[index].Provenance = append(out.Outcomes[index].Provenance, source)
 		}
-		p.Close()
-		c, queryErr := s.db.QueryContext(ctx, `SELECT session_id,contribution,demonstrated_strength,uncertainty,confidence FROM archaeology_outcome_contributors WHERE outcome_id=? ORDER BY session_id`, item.ID)
-		if queryErr != nil {
-			return out, queryErr
+	}
+	if err = p.Close(); err != nil {
+		return out, err
+	}
+	c, err := s.db.QueryContext(ctx, `WITH recent AS (
+		SELECT o.id FROM archaeology_outcomes o JOIN archaeology_runs r ON r.id=o.run_id
+		WHERE r.session_id=? ORDER BY o.created_at DESC,o.id DESC LIMIT ?
+	), ranked AS (
+		SELECT c.outcome_id,c.session_id,c.contribution,c.demonstrated_strength,c.uncertainty,c.confidence,
+			row_number() OVER (PARTITION BY c.outcome_id ORDER BY c.session_id) AS member_rank
+		FROM archaeology_outcome_contributors c JOIN recent ON recent.id=c.outcome_id
+	)
+	SELECT outcome_id,session_id,contribution,demonstrated_strength,uncertainty,confidence FROM ranked
+	WHERE member_rank<=? ORDER BY outcome_id,session_id`, out.ID, domain.ArchaeologyLegacyOutcomePage, domain.ArchaeologyLegacyContributorsPerOutcome)
+	if err != nil {
+		return out, err
+	}
+	for c.Next() {
+		var outcomeID string
+		var member domain.ArchaeologyContributor
+		if err = c.Scan(&outcomeID, &member.SessionID, &member.Contribution, &member.DemonstratedStrength, &member.Uncertainty, &member.Confidence); err != nil {
+			c.Close()
+			return out, err
 		}
-		for c.Next() {
-			var member domain.ArchaeologyContributor
-			if queryErr = c.Scan(&member.SessionID, &member.Contribution, &member.DemonstratedStrength, &member.Uncertainty, &member.Confidence); queryErr != nil {
-				c.Close()
-				return out, queryErr
-			}
-			item.Contributors = append(item.Contributors, member)
+		if index, ok := positions[outcomeID]; ok {
+			out.Outcomes[index].Contributors = append(out.Outcomes[index].Contributors, member)
 		}
-		c.Close()
+	}
+	if err = c.Close(); err != nil {
+		return out, err
 	}
 	var handoff domain.ArchaeologyHandoff
 	var claimed sql.NullString
@@ -160,11 +199,19 @@ func (s *Store) ArchaeologySession(ctx context.Context, principal string) (domai
 	if err != nil {
 		return out, err
 	}
-	nativeOutcomes, nativeErr := s.loadArchaeologyNativeOutcomes(ctx, out.ID)
+	nativeReviewBatchID, nativeOutcomes, nativeErr := s.loadArchaeologyNativeOutcomes(ctx, out.ID)
 	if nativeErr != nil {
 		return out, nativeErr
 	}
-	out.Outcomes = append(out.Outcomes, nativeOutcomes...)
+	if len(out.NativeBatches) > 0 {
+		// Native review is one complete, bounded page from the most recent batch
+		// that actually has durable outcomes. Starting newer work must not make the
+		// prior review vanish before the new batch reports.
+		out.NativeReviewBatchID = nativeReviewBatchID
+		out.Outcomes = nativeOutcomes
+	} else {
+		out.Outcomes = append(out.Outcomes, nativeOutcomes...)
+	}
 	return out, nil
 }
 
@@ -202,7 +249,7 @@ func validArchaeologyCandidate(c domain.ArchaeologyCandidate) bool {
 }
 
 func (s *Store) ReplaceArchaeologyDiscovery(ctx context.Context, m domain.ArchaeologyMutation, discovery domain.ArchaeologyDiscovery) (domain.ArchaeologySession, error) {
-	if m.Principal == "" || m.RequestID == "" || len(discovery.Candidates) > 100 || discovery.SourceRootsScanned < 0 || discovery.SourceRootsScanned > 100 {
+	if m.Principal == "" || m.RequestID == "" || len(discovery.Candidates) > 10000 || discovery.SourceRootsScanned < 0 || discovery.SourceRootsScanned > 100 || discovery.TasksExamined < 0 || discovery.TasksExamined > 10000 || discovery.ProjectsGrouped < 0 || discovery.ProjectsGrouped > 10000 || len(discovery.AppServerIdentity) > 200 {
 		return domain.ArchaeologySession{}, domain.ErrInvalid
 	}
 	seen := map[string]bool{}
@@ -281,7 +328,7 @@ ON CONFLICT(session_id,id) DO UPDATE SET canonical_project_id=excluded.canonical
 				}
 			}
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE archaeology_sessions SET discovery_state='ready',source_roots_scanned=?,discovered_at=?,updated_at=?,revision=revision+1 WHERE id=?`, discovery.SourceRootsScanned, stamp(now), stamp(now), sid)
+		_, err = tx.ExecContext(ctx, `UPDATE archaeology_sessions SET discovery_state='ready',source_roots_scanned=?,tasks_examined=?,projects_grouped=?,catalog_truncated=?,app_server_identity=?,discovered_at=?,updated_at=?,revision=revision+1 WHERE id=?`, discovery.SourceRootsScanned, discovery.TasksExamined, discovery.ProjectsGrouped, discovery.Truncated, discovery.AppServerIdentity, stamp(now), stamp(now), sid)
 		if err != nil {
 			return domain.ArchaeologySession{}, mapErr(err)
 		}
@@ -296,7 +343,7 @@ func validArchaeologyConfig(c domain.ArchaeologyConfig) bool {
 	return (c.Depth == "quick" || c.Depth == "standard" || c.Depth == "deep") && c.MaxConcurrency >= 1 && c.MaxConcurrency <= 2 && (c.Sources.Git || c.Sources.Docs || c.Sources.CodexHistory)
 }
 func (s *Store) ConfigureArchaeology(ctx context.Context, m domain.ArchaeologyMutation) (domain.ArchaeologySession, error) {
-	if m.Principal == "" || m.RequestID == "" || !validArchaeologyConfig(m.Config) || len(m.Config.SelectedProjectIDs) > 100 {
+	if m.Principal == "" || m.RequestID == "" || !validArchaeologyConfig(m.Config) || len(m.Config.SelectedProjectIDs) > domain.ArchaeologyNativeMaxProjects {
 		return domain.ArchaeologySession{}, domain.ErrInvalid
 	}
 	ids := append([]string(nil), m.Config.SelectedProjectIDs...)
@@ -400,6 +447,16 @@ func (s *Store) transitionArchaeology(ctx context.Context, m domain.ArchaeologyM
 		if revision != m.BaseRevision {
 			return domain.ArchaeologySession{}, domain.ErrConflict
 		}
+		var nativeBatches int
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM archaeology_native_batches WHERE session_id=?`, sid).Scan(&nativeBatches); err != nil {
+			return domain.ArchaeologySession{}, err
+		}
+		if nativeBatches != 0 {
+			// Once native durable work exists, legacy transitions must never form
+			// a hidden second control plane, even when the native feature is
+			// disabled after restart. Native recovery/cancel/resolve owns it.
+			return domain.ArchaeologySession{}, domain.ErrUnavailable
+		}
 		if operation != "start" {
 			var exported int
 			if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM archaeology_handoffs WHERE session_id=?`, sid).Scan(&exported); err != nil {
@@ -502,13 +559,22 @@ func (s *Store) ReconcileArchaeology(ctx context.Context) error {
 	if _, err = tx.ExecContext(ctx, `UPDATE archaeology_sessions SET state='paused',revision=revision+1,updated_at=? WHERE state IN ('running','pause_requested')`, now); err != nil {
 		return mapErr(err)
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE archaeology_sessions SET state='canceled',revision=revision+1,updated_at=? WHERE state='cancel_requested'`, now); err != nil {
-		return mapErr(err)
-	}
 	if _, err = tx.ExecContext(ctx, `UPDATE archaeology_task_launches SET state='uncertain',error='Server restarted before Codex task creation was confirmed.',updated_at=? WHERE state='starting_codex'`, now); err != nil {
 		return mapErr(err)
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE archaeology_native_jobs SET state='uncertain',error_code='server_restarted_during_active_task',terminal_at=?,updated_at=? WHERE state IN ('starting','active','report_ready','cancel_requested')`, now, now); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE archaeology_native_jobs SET state='interrupted',error_code='server_restarted_after_cancel_request',terminal_at=coalesce(terminal_at,?),updated_at=? WHERE state='cancel_requested'`, now, now); err != nil {
+		return mapErr(err)
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE archaeology_native_jobs SET state='uncertain',error_code='server_restarted_during_active_task',terminal_at=?,updated_at=? WHERE state IN ('starting','active','report_ready')`, now, now); err != nil {
+		return mapErr(err)
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE archaeology_native_batches SET state='canceled',updated_at=? WHERE state='cancel_requested' AND NOT EXISTS (SELECT 1 FROM archaeology_native_jobs j WHERE j.batch_id=archaeology_native_batches.id AND j.state IN ('queued','starting','active','report_ready','cancel_requested','uncertain'))`, now); err != nil {
+		return mapErr(err)
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE archaeology_sessions SET state='draft',revision=revision+1,updated_at=? WHERE state='cancel_requested' AND EXISTS (SELECT 1 FROM archaeology_native_batches b WHERE b.session_id=archaeology_sessions.id AND b.state='canceled') AND NOT EXISTS (SELECT 1 FROM archaeology_native_batches b WHERE b.session_id=archaeology_sessions.id AND b.state IN ('queued','running','cancel_requested','attention'))`, now); err != nil {
+		return mapErr(err)
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE archaeology_sessions SET state='canceled',revision=revision+1,updated_at=? WHERE state='cancel_requested' AND NOT EXISTS (SELECT 1 FROM archaeology_native_batches b WHERE b.session_id=archaeology_sessions.id)`, now); err != nil {
 		return mapErr(err)
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE archaeology_native_batches SET state='attention',updated_at=? WHERE id IN (SELECT DISTINCT batch_id FROM archaeology_native_jobs WHERE state='uncertain')`, now); err != nil {

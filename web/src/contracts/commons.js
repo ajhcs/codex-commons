@@ -81,6 +81,13 @@ export const PROJECT_ARCHAEOLOGY_STATES = /** @type {const} */ (["draft", "runni
 export const PROJECT_ARCHAEOLOGY_RUN_STATES = /** @type {const} */ (["queued", "running", "pause_requested", "paused", "cancel_requested", "canceled", "completed", "failed"]);
 export const PROJECT_ARCHAEOLOGY_BATCH_STATES = /** @type {const} */ (["queued", "running", "cancel_requested", "canceled", "completed", "attention"]);
 export const PROJECT_ARCHAEOLOGY_JOB_STATES = /** @type {const} */ (["queued", "starting", "active", "report_ready", "cancel_requested", "completed", "failed", "interrupted", "uncertain", "attention"]);
+export const MAX_PROJECT_ARCHAEOLOGY_SELECTION = 30;
+export const MAX_PROJECT_ARCHAEOLOGY_CATALOG_PAGE = 100;
+export const MAX_PROJECT_ARCHAEOLOGY_HISTORY_PAGE = 50;
+export const DEFAULT_PROJECT_ARCHAEOLOGY_HISTORY_PAGE = 20;
+export const MAX_PROJECT_ARCHAEOLOGY_REVIEW_OUTCOMES = 60;
+export const MAX_PROJECT_ARCHAEOLOGY_OUTCOME_PAGE = 5;
+export const MAX_PROJECT_ARCHAEOLOGY_REVIEW_MEMBERS = 60;
 
 /**
  * Slice 14 keeps the browser auth machine explicit. These values are UI state,

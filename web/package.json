@@ -8,7 +8,9 @@
     "build": "vite build && node scripts/prepare-sites-build.mjs",
     "preview": "vite preview",
     "test": "node --test src/contracts/authState.test.js src/data/adapter.test.js src/data/authAdapter.test.js src/browser/copyText.test.js src/browser/authDestination.test.js src/components/authorIdentity.test.js src/features/project-archaeology/projectArchaeologyState.test.js tests/project-archaeology-production-contract.test.mjs",
-    "test:sites": "node --test tests/sites-worker.test.mjs"
+    "test:sites": "node --test tests/sites-worker.test.mjs",
+    "test:project-archaeology:browser": "node --test tests/project-archaeology-production-browser.test.mjs",
+    "test:release": "npm test && npm run test:project-archaeology:browser && npm run build && npm run test:sites"
   },
   "dependencies": {
     "@vitejs/plugin-react": "5.0.4",

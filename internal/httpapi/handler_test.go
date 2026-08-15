@@ -22,6 +22,22 @@ type fakeBackend struct {
 	global bool
 }
 
+type readinessBackend struct {
+	*fakeBackend
+	statusCalls int
+}
+
+func (b *readinessBackend) InstallationStatus(context.Context, RequestMeta) (InstallationStatusResult, error) {
+	b.statusCalls++
+	out := InstallationStatusResult{}
+	out.Service.Version = "release-test"
+	out.Database.SchemaVersion = 15
+	out.Codex.Configured, out.Codex.Available = true, true
+	out.Codex.Version, out.Codex.AccountState, out.Codex.CompatibilityStatus = "0.147.0", "signed_in", "compatible"
+	out.Reconciliation.Status = "healthy"
+	return out, nil
+}
+
 func (f *fakeBackend) seen(name string, meta RequestMeta) {
 	f.calls = append(f.calls, name)
 	f.last = meta
@@ -136,6 +152,33 @@ func TestHealthIsMinimalAndUnauthenticated(t *testing.T) {
 	rec := request(testHandler(&fakeBackend{}, 0), http.MethodGet, "/v1/health", "", "")
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"version":"slice-2-test"`) {
 		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestInternalReadinessRequiresDirectLoopbackAuthority(t *testing.T) {
+	backend := &readinessBackend{fakeBackend: &fakeBackend{}}
+	h := NewHandler(backend, Config{ExpectedHost: "commons.plumbob.lan", InternalReadinessHost: "127.0.0.1:8088", Version: "release-test"})
+	request := func(host string, headers map[string]string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8088/v1/internal/readiness", nil)
+		req.RemoteAddr, req.Host = "127.0.0.1:43123", host
+		for key, value := range headers {
+			req.Header.Set(key, value)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := request("commons.plumbob.lan", nil); rec.Code != http.StatusNotFound || backend.statusCalls != 0 {
+		t.Fatalf("proxied public Host code=%d calls=%d body=%s", rec.Code, backend.statusCalls, rec.Body.String())
+	}
+	for _, header := range []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto"} {
+		if rec := request("127.0.0.1:8088", map[string]string{header: "attacker"}); rec.Code != http.StatusNotFound || backend.statusCalls != 0 {
+			t.Fatalf("forwarded header %s code=%d calls=%d", header, rec.Code, backend.statusCalls)
+		}
+	}
+	rec := request("127.0.0.1:8088", nil)
+	if rec.Code != http.StatusOK || backend.statusCalls != 1 || rec.Body.Len() >= 1<<20 || !strings.Contains(rec.Body.String(), `"schema_version":15`) {
+		t.Fatalf("direct readiness code=%d calls=%d bytes=%d body=%s", rec.Code, backend.statusCalls, rec.Body.Len(), rec.Body.String())
 	}
 }
 

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"codex-commons/internal/domain"
 )
 
 const HumanSessionCookieName = "commons_session"
@@ -51,6 +54,18 @@ type humanAuth struct {
 	sessions        map[string]humanSession
 	failures        []time.Time
 	now             func() time.Time
+	store           HumanSessionStore
+}
+
+type HumanSessionStore interface {
+	SaveHumanBrowserSession(context.Context, domain.HumanBrowserSession) error
+	HumanBrowserSession(context.Context, []byte, time.Time) (domain.HumanBrowserSession, error)
+	RevokeHumanBrowserSession(context.Context, []byte, time.Time) error
+	RevokeHumanBrowserSessionsByMethod(context.Context, string, time.Time) error
+	UpdateHumanBrowserSessionCSRF(context.Context, []byte, []byte) error
+	UpdateHumanBrowserSessionRevisions(context.Context, string, int64) error
+	SetCodexSessionRevocationPending(context.Context, bool) error
+	CodexSessionRevocationPending(context.Context) (bool, error)
 }
 
 type authPrincipal struct {
@@ -82,7 +97,7 @@ type loginRequest struct {
 	Secret string `json:"secret"`
 }
 
-func newHumanAuth(config *HumanAuthConfig) *humanAuth {
+func newHumanAuth(config *HumanAuthConfig, stores ...HumanSessionStore) *humanAuth {
 	if config == nil || !config.RecoveryEnabled && !config.CodexEnabled {
 		return nil
 	}
@@ -97,7 +112,7 @@ func newHumanAuth(config *HumanAuthConfig) *humanAuth {
 	if ttl <= 0 {
 		ttl = 12 * time.Hour
 	}
-	return &humanAuth{
+	a := &humanAuth{
 		secretDigest:    sha256.Sum256([]byte(config.AdminSecret)),
 		displayName:     config.DisplayName,
 		actor:           config.Actor,
@@ -111,6 +126,10 @@ func newHumanAuth(config *HumanAuthConfig) *humanAuth {
 		sessions:        make(map[string]humanSession),
 		now:             time.Now,
 	}
+	if len(stores) > 0 {
+		a.store = stores[0]
+	}
+	return a
 }
 
 func (a *humanAuth) verifySecret(value string) bool {
@@ -181,6 +200,12 @@ func (a *humanAuth) create(methodAndRevision ...any) (string, humanSession, bool
 	}
 	now := a.now().UTC()
 	session := humanSession{csrf: csrf, createdAt: now, expiresAt: now.Add(a.ttl), authMethod: method, bindingRevision: revision}
+	if a.store != nil {
+		tokenDigest, csrfDigest := sha256.Sum256([]byte(token)), sha256.Sum256([]byte(csrf))
+		if err := a.store.SaveHumanBrowserSession(context.Background(), domain.HumanBrowserSession{TokenDigest: tokenDigest[:], CSRFDigest: csrfDigest[:], Principal: a.principalID, AuthMethod: method, BindingRevision: revision, CreatedAt: now, ExpiresAt: session.expiresAt}); err != nil {
+			return "", humanSession{}, false
+		}
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.failures = nil
@@ -210,6 +235,15 @@ func (a *humanAuth) lookup(token string) (humanSession, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	session, ok := a.sessions[token]
+	if !ok && a.store != nil {
+		digest := sha256.Sum256([]byte(token))
+		stored, err := a.store.HumanBrowserSession(context.Background(), digest[:], a.now().UTC())
+		if err == nil && stored.Principal == a.principalID {
+			session = humanSession{createdAt: stored.CreatedAt, expiresAt: stored.ExpiresAt, authMethod: stored.AuthMethod, bindingRevision: stored.BindingRevision}
+			a.sessions[token] = session
+			ok = true
+		}
+	}
 	if !ok {
 		return humanSession{}, false
 	}
@@ -220,31 +254,90 @@ func (a *humanAuth) lookup(token string) (humanSession, bool) {
 	return session, true
 }
 
-func (a *humanAuth) remove(token string) {
+func (a *humanAuth) remove(token string) error {
 	if a == nil || token == "" {
-		return
+		return nil
+	}
+	if a.store != nil {
+		digest := sha256.Sum256([]byte(token))
+		if err := a.store.RevokeHumanBrowserSession(context.Background(), digest[:], a.now().UTC()); err != nil {
+			return err
+		}
 	}
 	a.mu.Lock()
 	delete(a.sessions, token)
 	a.mu.Unlock()
+	return nil
 }
 
-func (a *humanAuth) revokeCodexSessions() {
+func (a *humanAuth) revokeCodexSessions() error {
 	if a == nil {
-		return
+		return nil
 	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	for token, session := range a.sessions {
 		if session.authMethod == "codex" {
 			delete(a.sessions, token)
 		}
 	}
+	a.mu.Unlock()
+	if a.store != nil {
+		var err error
+		for attempt := 0; attempt < 3; attempt++ {
+			if err = a.store.RevokeHumanBrowserSessionsByMethod(context.Background(), "codex", a.now().UTC()); err == nil {
+				return nil
+			}
+		}
+		return err
+	}
+	return nil
 }
 
-func (a *humanAuth) updateIdentity(displayName, handle string, revision int64) {
+func (a *humanAuth) setCodexRevocationPending(pending bool) error {
+	if a == nil || a.store == nil {
+		return nil
+	}
+	return a.store.SetCodexSessionRevocationPending(context.Background(), pending)
+}
+
+func (a *humanAuth) codexRevocationPending() bool {
+	if a == nil || a.store == nil {
+		return false
+	}
+	pending, err := a.store.CodexSessionRevocationPending(context.Background())
+	return err != nil || pending
+}
+
+func (a *humanAuth) rotateCSRF(token string) (humanSession, bool) {
+	session, ok := a.lookup(token)
+	if !ok {
+		return humanSession{}, false
+	}
+	csrf, ok := randomAuthToken()
+	if !ok {
+		return humanSession{}, false
+	}
+	if a.store != nil {
+		tokenDigest, csrfDigest := sha256.Sum256([]byte(token)), sha256.Sum256([]byte(csrf))
+		if a.store.UpdateHumanBrowserSessionCSRF(context.Background(), tokenDigest[:], csrfDigest[:]) != nil {
+			return humanSession{}, false
+		}
+	}
+	a.mu.Lock()
+	session.csrf = csrf
+	a.sessions[token] = session
+	a.mu.Unlock()
+	return session, true
+}
+
+func (a *humanAuth) updateIdentity(displayName, handle string, revision int64) error {
 	if a == nil || strings.TrimSpace(displayName) == "" || handle == "" {
-		return
+		return domain.ErrInvalid
+	}
+	if a.store != nil {
+		if err := a.store.UpdateHumanBrowserSessionRevisions(context.Background(), a.principalID, revision); err != nil {
+			return err
+		}
 	}
 	a.mu.Lock()
 	a.displayName = displayName
@@ -256,6 +349,7 @@ func (a *humanAuth) updateIdentity(displayName, handle string, revision int64) {
 		}
 	}
 	a.mu.Unlock()
+	return nil
 }
 
 func randomAuthToken() (string, bool) {
@@ -299,15 +393,23 @@ func (a *humanAuth) result(session *humanSession) authSessionResult {
 	}
 }
 
-func setHumanCookie(w http.ResponseWriter, r *http.Request, token string, expires time.Time, maxAge int) {
+func secureRequest(r *http.Request, publicOrigin string) bool {
+	if publicOrigin != "" {
+		parsed, err := url.Parse(publicOrigin)
+		return err == nil && parsed.Scheme == "https"
+	}
+	return r != nil && r.TLS != nil
+}
+
+func setHumanCookie(w http.ResponseWriter, r *http.Request, publicOrigin, token string, expires time.Time, maxAge int) {
 	http.SetCookie(w, &http.Cookie{
 		Name: humanSessionCookie, Value: token, Path: "/", Expires: expires,
-		MaxAge: maxAge, HttpOnly: true, Secure: r.TLS != nil,
+		MaxAge: maxAge, HttpOnly: true, Secure: secureRequest(r, publicOrigin),
 		SameSite: http.SameSiteStrictMode,
 	})
 }
 
-func sameOrigin(r *http.Request) bool {
+func sameOrigin(r *http.Request, publicOrigin string) bool {
 	source := strings.TrimSpace(r.Header.Get("Origin"))
 	if source == "" {
 		source = strings.TrimSpace(r.Header.Get("Referer"))
@@ -319,11 +421,18 @@ func sameOrigin(r *http.Request) bool {
 	if err != nil || parsed.User != nil {
 		return false
 	}
-	scheme := "http"
+	expected := &url.URL{Scheme: "http", Host: r.Host}
 	if r.TLS != nil {
-		scheme = "https"
+		expected.Scheme = "https"
 	}
-	return strings.EqualFold(parsed.Scheme, scheme) && strings.EqualFold(parsed.Host, r.Host)
+	if publicOrigin != "" {
+		configured, parseErr := url.Parse(publicOrigin)
+		if parseErr != nil || configured.User != nil || configured.Path != "" || configured.RawQuery != "" || configured.Fragment != "" {
+			return false
+		}
+		expected = configured
+	}
+	return strings.EqualFold(parsed.Scheme, expected.Scheme) && strings.EqualFold(parsed.Host, expected.Host)
 }
 
 func isHumanWritePath(path string) bool {

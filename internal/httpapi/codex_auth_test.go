@@ -144,6 +144,98 @@ type authTestEventStore struct {
 	events []domain.HumanAuthEventRequest
 }
 
+type authTestSessionStore struct {
+	mu              sync.Mutex
+	sessions        map[string]domain.HumanBrowserSession
+	failRevoke      bool
+	failPendingTrue int
+	revokeCalls     int
+	pending         bool
+}
+
+func (s *authTestSessionStore) SaveHumanBrowserSession(_ context.Context, session domain.HumanBrowserSession) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sessions == nil {
+		s.sessions = make(map[string]domain.HumanBrowserSession)
+	}
+	s.sessions[string(session.TokenDigest)] = session
+	return nil
+}
+
+func (s *authTestSessionStore) HumanBrowserSession(_ context.Context, digest []byte, now time.Time) (domain.HumanBrowserSession, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	session, ok := s.sessions[string(digest)]
+	if !ok || !session.ExpiresAt.After(now) {
+		return domain.HumanBrowserSession{}, domain.ErrNotFound
+	}
+	return session, nil
+}
+
+func (s *authTestSessionStore) RevokeHumanBrowserSession(_ context.Context, digest []byte, _ time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.sessions, string(digest))
+	return nil
+}
+
+func (s *authTestSessionStore) RevokeHumanBrowserSessionsByMethod(_ context.Context, method string, _ time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.revokeCalls++
+	if s.failRevoke {
+		return errors.New("persistent revoke unavailable")
+	}
+	for key, session := range s.sessions {
+		if session.AuthMethod == method {
+			delete(s.sessions, key)
+		}
+	}
+	return nil
+}
+
+func (s *authTestSessionStore) UpdateHumanBrowserSessionCSRF(_ context.Context, token, csrf []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	session, ok := s.sessions[string(token)]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	session.CSRFDigest = append([]byte(nil), csrf...)
+	s.sessions[string(token)] = session
+	return nil
+}
+
+func (s *authTestSessionStore) UpdateHumanBrowserSessionRevisions(_ context.Context, principal string, revision int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, session := range s.sessions {
+		if session.Principal == principal {
+			session.BindingRevision = revision
+			s.sessions[key] = session
+		}
+	}
+	return nil
+}
+
+func (s *authTestSessionStore) SetCodexSessionRevocationPending(_ context.Context, pending bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if pending && s.failPendingTrue > 0 {
+		s.failPendingTrue--
+		return errors.New("persistent revocation marker unavailable")
+	}
+	s.pending = pending
+	return nil
+}
+
+func (s *authTestSessionStore) CodexSessionRevocationPending(context.Context) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pending, nil
+}
+
 func (s *authTestEventStore) RecordHumanAuthEvent(_ context.Context, event domain.HumanAuthEventRequest) error {
 	s.mu.Lock()
 	s.events = append(s.events, event)
@@ -203,6 +295,28 @@ func newCodexAuthTestHandler(recovery, allowLAN bool) (*handler, *authTestCodexC
 		},
 	})
 	return h.(*handler), client, binding, events
+}
+
+func TestPublicOriginCannotTreatProxyLoopbackAsFirstBindAuthority(t *testing.T) {
+	h, _, bindings, _ := newCodexAuthTestHandler(false, false)
+	req := httptest.NewRequest(http.MethodPost, "https://commons.plumbob.lan/v1/auth/codex/start", nil)
+	req.RemoteAddr = "127.0.0.1:43210"
+	h.config.PublicOrigin = "https://commons.plumbob.lan"
+	allowed, err := h.firstBindAllowed(req)
+	if err != nil || allowed {
+		t.Fatalf("proxied first bind allowed=%v err=%v", allowed, err)
+	}
+	h.config.PublicOrigin = ""
+	allowed, err = h.firstBindAllowed(req)
+	if err != nil || !allowed {
+		t.Fatalf("direct loopback bootstrap allowed=%v err=%v", allowed, err)
+	}
+	bindings.binding = &domain.HumanAccountBinding{Principal: domain.HumanLocalPrincipal, Provider: "chatgpt", ProviderSubjectDigest: make([]byte, 32), DisplayName: "Admin", Handle: "admin", Revision: 1}
+	h.config.PublicOrigin = "https://commons.plumbob.lan"
+	allowed, err = h.firstBindAllowed(req)
+	if err != nil || !allowed {
+		t.Fatalf("durably bound restart allowed=%v err=%v", allowed, err)
+	}
 }
 
 func codexAuthRequest(handler http.Handler, method, target, body, origin, remote string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
@@ -341,6 +455,119 @@ func TestCodexAccountUpdateRevokesOnlyCodexSessions(t *testing.T) {
 	}
 	if _, ok := handler.humanAuth.lookup(recoveryToken); !ok {
 		t.Fatal("account update revoked the independent recovery session")
+	}
+}
+
+func TestCodexAccountUpdatePersistentRevokeFailureFailsClosedAcrossReload(t *testing.T) {
+	client := &authTestCodexClient{available: true}
+	store := &authTestSessionStore{failRevoke: true}
+	config := Config{
+		HumanAuth:         &HumanAuthConfig{DisplayName: "Admin", Principal: domain.HumanLocalPrincipal, SessionTTL: time.Hour, RecoveryEnabled: true, CodexEnabled: true},
+		HumanSessionStore: store,
+		CodexAuth:         &CodexAuthConfig{Client: client, BindingKey: testCodexBindingKey()},
+	}
+	h := NewHandler(&fakeBackend{}, config).(*handler)
+	codexToken, _, ok := h.humanAuth.create("codex", 1)
+	if !ok {
+		t.Fatal("create Codex session")
+	}
+	recoveryToken, _, ok := h.humanAuth.create("recovery", 1)
+	if !ok {
+		t.Fatal("create recovery session")
+	}
+	client.mu.Lock()
+	eventHandler := client.handler
+	client.mu.Unlock()
+	eventHandler(codexauth.Event{Kind: "account_updated", AuthMode: "chatgpt"})
+	if !h.codexRevocationFailed.Load() {
+		t.Fatal("persistent revoke failure was not made operationally visible")
+	}
+	requestFor := func(token string) *http.Request {
+		r := httptest.NewRequest(http.MethodGet, "http://commons.test/v1/auth/session", nil)
+		r.AddCookie(&http.Cookie{Name: humanSessionCookie, Value: token})
+		return r
+	}
+	if _, ok := h.authenticateHuman(requestFor(codexToken)); ok {
+		t.Fatal("Codex session authenticated while durable revocation was degraded")
+	}
+	if _, ok := h.authenticateHuman(requestFor(recoveryToken)); !ok {
+		t.Fatal("independent recovery session was blocked by Codex revocation degradation")
+	}
+	clientDuringFailure := &authTestCodexClient{available: true}
+	config.CodexAuth.Client = clientDuringFailure
+	restartedWhilePending := NewHandler(&fakeBackend{}, config).(*handler)
+	if _, ok := restartedWhilePending.authenticateHuman(requestFor(codexToken)); ok {
+		t.Fatal("restart cleared durable revocation degradation and resurrected Codex session")
+	}
+	if _, ok := restartedWhilePending.authenticateHuman(requestFor(recoveryToken)); !ok {
+		t.Fatal("restart blocked recovery while durable Codex revocation was pending")
+	}
+	store.mu.Lock()
+	store.failRevoke = false
+	store.mu.Unlock()
+	clientDuringFailure.mu.Lock()
+	retryHandler := clientDuringFailure.handler
+	clientDuringFailure.mu.Unlock()
+	retryHandler(codexauth.Event{Kind: "account_updated", AuthMode: "chatgpt"})
+	if restartedWhilePending.codexRevocationFailed.Load() {
+		t.Fatal("degradation did not clear after a successful durable revoke")
+	}
+	client2 := &authTestCodexClient{available: true}
+	config.CodexAuth.Client = client2
+	reopened := NewHandler(&fakeBackend{}, config).(*handler)
+	if _, ok := reopened.authenticateHuman(requestFor(codexToken)); ok {
+		t.Fatal("revoked Codex session resurrected after handler restart")
+	}
+	if _, ok := reopened.authenticateHuman(requestFor(recoveryToken)); !ok {
+		t.Fatal("recovery session did not survive handler restart")
+	}
+}
+
+func TestCodexAccountUpdatePendingMarkerFailureStillRevokesAcrossReload(t *testing.T) {
+	client := &authTestCodexClient{available: true}
+	store := &authTestSessionStore{failPendingTrue: 1}
+	config := Config{
+		HumanAuth:         &HumanAuthConfig{DisplayName: "Admin", Principal: domain.HumanLocalPrincipal, SessionTTL: time.Hour, RecoveryEnabled: true, CodexEnabled: true},
+		HumanSessionStore: store,
+		CodexAuth:         &CodexAuthConfig{Client: client, BindingKey: testCodexBindingKey()},
+	}
+	h := NewHandler(&fakeBackend{}, config).(*handler)
+	codexToken, _, ok := h.humanAuth.create("codex", 1)
+	if !ok {
+		t.Fatal("create Codex session")
+	}
+	recoveryToken, _, ok := h.humanAuth.create("recovery", 1)
+	if !ok {
+		t.Fatal("create recovery session")
+	}
+	client.mu.Lock()
+	eventHandler := client.handler
+	client.mu.Unlock()
+	eventHandler(codexauth.Event{Kind: "account_updated", AuthMode: "chatgpt"})
+
+	store.mu.Lock()
+	revokeCalls := store.revokeCalls
+	store.mu.Unlock()
+	if revokeCalls == 0 {
+		t.Fatal("pending-marker failure short-circuited durable Codex session revocation")
+	}
+	if !h.codexRevocationFailed.Load() {
+		t.Fatal("pending-marker failure was not made operationally visible")
+	}
+
+	requestFor := func(token string) *http.Request {
+		r := httptest.NewRequest(http.MethodGet, "http://commons.test/v1/auth/session", nil)
+		r.AddCookie(&http.Cookie{Name: humanSessionCookie, Value: token})
+		return r
+	}
+	clientAfterReload := &authTestCodexClient{available: true}
+	config.CodexAuth.Client = clientAfterReload
+	reloaded := NewHandler(&fakeBackend{}, config).(*handler)
+	if _, ok := reloaded.authenticateHuman(requestFor(codexToken)); ok {
+		t.Fatal("pending-marker failure resurrected a durably revoked Codex session after handler reload")
+	}
+	if _, ok := reloaded.authenticateHuman(requestFor(recoveryToken)); !ok {
+		t.Fatal("pending-marker failure or handler reload revoked the independent recovery session")
 	}
 }
 
@@ -574,7 +801,7 @@ func TestAuthOriginAndCSRFTokenBoundaries(t *testing.T) {
 			request.Header.Set("Origin", "null")
 		}
 		want := name == "same origin" || name == "credentialed"
-		if got := sameOrigin(request); got != want {
+		if got := sameOrigin(request, ""); got != want {
 			t.Errorf("%s sameOrigin=%v, want %v", name, got, want)
 		}
 	}
@@ -585,7 +812,7 @@ func TestAuthOriginAndCSRFTokenBoundaries(t *testing.T) {
 	}{
 		{left: "csrf-token", right: "csrf-token", want: true},
 		{left: "csrf-token", right: "other-token", want: false},
-		{left: "", right: "", want: true},
+		{left: "", right: "", want: false},
 		{left: "csrf-token", right: "", want: false},
 	} {
 		if got := constantTimeTokenEqual(test.left, test.right); got != test.want {
@@ -595,9 +822,25 @@ func TestAuthOriginAndCSRFTokenBoundaries(t *testing.T) {
 
 	request := httptest.NewRequest(http.MethodGet, "http://commons.test/v1/auth/session", nil)
 	response := httptest.NewRecorder()
-	setHumanCookie(response, request, "opaque-session", time.Now().Add(time.Hour), 3600)
+	setHumanCookie(response, request, "", "opaque-session", time.Now().Add(time.Hour), 3600)
 	cookies := response.Result().Cookies()
 	if len(cookies) != 1 || cookies[0].Name != humanSessionCookie || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteStrictMode || cookies[0].Path != "/" || cookies[0].Value != "opaque-session" {
 		t.Fatalf("session cookie=%v", cookies)
+	}
+	proxied := httptest.NewRequest(http.MethodGet, "http://commons.plumbob.lan/v1/auth/session", nil)
+	proxiedResponse := httptest.NewRecorder()
+	setHumanCookie(proxiedResponse, proxied, "https://commons.plumbob.lan", "opaque-session", time.Now().Add(time.Hour), 3600)
+	if proxiedResponse.Result().Cookies()[0].Secure != true {
+		t.Fatal("trusted HTTPS public origin must produce a Secure cookie")
+	}
+	proxied.Header.Set("Origin", "https://commons.plumbob.lan")
+	proxied.Header.Set("X-Forwarded-Proto", "http")
+	proxied.Header.Set("X-Forwarded-Host", "evil.test")
+	if !sameOrigin(proxied, "https://commons.plumbob.lan") {
+		t.Fatal("configured public origin should be authoritative over untrusted forwarded headers")
+	}
+	proxied.Header.Set("Origin", "http://commons.plumbob.lan")
+	if sameOrigin(proxied, "https://commons.plumbob.lan") {
+		t.Fatal("plaintext origin must not match configured HTTPS public origin")
 	}
 }

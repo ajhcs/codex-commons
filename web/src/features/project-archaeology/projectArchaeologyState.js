@@ -1,7 +1,8 @@
-import { PROJECT_ARCHAEOLOGY_DEPTHS } from "../../contracts/commons.js";
+import { MAX_PROJECT_ARCHAEOLOGY_SELECTION, PROJECT_ARCHAEOLOGY_DEPTHS } from "../../contracts/commons.js";
 
 export const ARCHAEOLOGY_DEPTHS = PROJECT_ARCHAEOLOGY_DEPTHS;
 export const ARCHAEOLOGY_SOURCES = Object.freeze(["git", "docs", "codexHistory"]);
+export { MAX_PROJECT_ARCHAEOLOGY_SELECTION };
 
 export const DEFAULT_ARCHAEOLOGY_CONFIG = Object.freeze({
   selectedProjectIds: [],
@@ -48,12 +49,17 @@ export function sortProjectCandidates(candidates = [], sort = "recent") {
   return next.sort((a, b) => recent(b) - recent(a) || byName(a, b));
 }
 
+export function reconcileOutcomeSelection(selectedIDs = [], outcomes = []) {
+  const allowed = new Set(outcomes.map((outcome) => outcome.id));
+  return selectedIDs.filter((id) => allowed.has(id));
+}
+
 export function discoveryProgressText(discovery = {}) {
   const stage = discovery.stage || (discovery.state === "discovering" ? "reading_codex_metadata" : discovery.state);
   const label = ({ queued: "Refresh queued", reading_codex_metadata: "Reading Codex task metadata", persisting_catalog: "Organizing projects", ready: `${Number(discovery.workspacesGrouped) || discovery.candidates?.length || 0} projects found`, failed: "Refresh needs attention" })[stage] || "Checking project history";
   const facts = [];
   if (Number(discovery.codexThreadsExamined) > 0) facts.push(`${Number(discovery.codexThreadsExamined).toLocaleString()} tasks checked`);
-  if (Number(discovery.workspacesGrouped) > 0) facts.push(`${Number(discovery.workspacesGrouped).toLocaleString()} projects found`);
+  if (stage !== "ready" && Number(discovery.workspacesGrouped) > 0) facts.push(`${Number(discovery.workspacesGrouped).toLocaleString()} projects found`);
   return [label, ...facts].filter(Boolean).join(" · ");
 }
 
@@ -91,12 +97,14 @@ export function archaeologyTaskPresentation(task = {}) {
     secondary: "This pre-scheduler row is retained for audit only. Its earlier status is not a current execution claim.",
   };
   const copy = {
-    queued: ["Queued in Commons", "Waiting for a launch slot."],
-    starting: ["Asking Codex to create the task", "Commons is durably tracking this request."],
-    active: ["Historian is examining project sources", task.phaseLabel || "Codex reported this task as active."],
-    report_ready: ["Report ready for Commons", "Preparing it for your review."],
+    queued: ["Queued in Commons", "Waiting for Codex to accept this named task."],
+    starting: task.threadId
+      ? ["Codex identity bound", "Confirming the final named task before Commons reports it as visible."]
+      : ["Starting in Codex", "Commons is durably tracking this named task request."],
+    active: ["Visible in Codex · reading project sources", task.phaseLabel || "The named Codex historian task is active."],
+    report_ready: ["Report received", "Commons is durably preparing it for your review."],
     cancel_requested: ["Cancellation requested", "Queued work will stop; Commons asked Codex to interrupt active work."],
-    completed: ["Ready to review", "Nothing has been imported automatically."],
+    completed: ["Ready to review · completed", "Nothing has been imported automatically."],
     failed: ["Task needs attention", task.error || "This Codex task stopped without a review-ready report."],
     interrupted: ["Task was interrupted", task.error || "Human review is needed before project history can continue."],
     uncertain: ["Codex may have accepted this task", task.error || "Commons will not retry automatically."],
@@ -126,8 +134,15 @@ export function configFromModel(config = {}) {
       docs: sources.docs !== false,
       codexHistory: sources.codexHistory === true,
     },
-    maxConcurrency: config.maxConcurrency === 1 ? 1 : 2,
+    // This field remains fixed for schema/wire compatibility. Codex governs
+    // execution capacity after Commons submits the manually confirmed set.
+    maxConcurrency: 2,
   };
+}
+
+export function freshManualArchaeologyConfig(config = {}) {
+  const current = configFromModel(config);
+  return { ...current, selectedProjectIds: [] };
 }
 
 export function shouldPreserveLocalArchaeologyConfig({ dirty = false } = {}) {
@@ -138,7 +153,7 @@ export function reconcileConfigAfterCatalogRefresh(config = {}, model = {}) {
   const current = configFromModel(config);
   const selectable = new Set(
     (Array.isArray(model?.discovery?.candidates) ? model.discovery.candidates : [])
-      .filter(isProjectCandidateSelectable)
+      .filter((candidate) => candidate?.catalogState === "pending" || isProjectCandidateSelectable(candidate))
       .map((candidate) => candidate.id),
   );
   return {
@@ -152,7 +167,7 @@ export function archaeologyConfigVersion(model) {
 }
 
 export function isProjectCandidateSelectable(candidate) {
-  return candidate?.sources?.some((source) => source === "codex_metadata" || source === "configured_root") === true;
+  return candidate?.catalogState !== "pending" && candidate?.sources?.some((source) => source === "codex_metadata" || source === "configured_root") === true;
 }
 export function shouldRefreshProjectCatalog(model, now = Date.now()) {
   if (!model || model.state !== "draft" || model.capabilities?.projectCatalog?.available !== true) return false;
@@ -168,11 +183,19 @@ export function selectedSourceCount(config) {
   return ARCHAEOLOGY_SOURCES.filter((source) => config?.sources?.[source]).length;
 }
 
-export function archaeologyConfigCommitReady(submittedConfig, configuredModel, baseRevision) {
+function exactStringSet(left = [], right = []) {
+  if (left.length !== right.length) return false;
+  const leftSet = new Set(left);
+  const rightSet = new Set(right);
+  return leftSet.size === left.length
+    && rightSet.size === right.length
+    && left.every((value) => rightSet.has(value));
+}
+
+export function archaeologyConfigCommitReady(submittedConfig, configuredModel, baseRevision, catalogCandidates = null) {
   const submitted = configFromModel(submittedConfig);
   const committed = configFromModel(configuredModel?.config);
-  const sameIDs = submitted.selectedProjectIds.length === committed.selectedProjectIds.length
-    && submitted.selectedProjectIds.every((id, index) => committed.selectedProjectIds[index] === id);
+  const sameIDs = exactStringSet(submitted.selectedProjectIds, committed.selectedProjectIds);
   const sameSources = ARCHAEOLOGY_SOURCES.every((source) => submitted.sources[source] === committed.sources[source]);
   const revisionAdvanced = Number.isInteger(baseRevision)
     && Number.isInteger(configuredModel?.revision)
@@ -182,9 +205,52 @@ export function archaeologyConfigCommitReady(submittedConfig, configuredModel, b
     && submitted.depth === committed.depth
     && sameSources
     && submitted.maxConcurrency === committed.maxConcurrency
-    && canStartArchaeology(committed, configuredModel?.discovery?.candidates || [])
+    && canStartArchaeology(committed, catalogCandidates || configuredModel?.discovery?.candidates || [])
     && configuredModel?.controls?.canStart === true
     && configuredModel?.capabilities?.taskLaunch?.available === true;
+}
+
+export function archaeologyStartCommitReady(submittedConfig, startedModel, configuredModel) {
+  const submitted = configFromModel(submittedConfig);
+  const configured = configFromModel(configuredModel?.config);
+  const committed = configFromModel(startedModel?.config);
+  const selected = submitted.selectedProjectIds;
+  const sameConfig = (left, right) => exactStringSet(left.selectedProjectIds, right.selectedProjectIds)
+    && left.depth === right.depth
+    && ARCHAEOLOGY_SOURCES.every((source) => left.sources[source] === right.sources[source])
+    && left.maxConcurrency === right.maxConcurrency;
+
+  const handoff = startedModel?.handoff;
+  const tasks = Array.isArray(handoff?.tasks) ? handoff.tasks : [];
+  const handoffPolicyMatches = handoff?.policyAttested === true
+    && handoff.depth === submitted.depth
+    && ARCHAEOLOGY_SOURCES.every((source) => handoff.sources?.[source] === submitted.sources[source])
+    && handoff.concurrency === submitted.maxConcurrency;
+
+  const expected = new Set(selected);
+  const candidateIDs = Array.isArray(handoff?.candidateIds) ? handoff.candidateIds : [];
+  const exactSet = (values) => values.length === expected.size
+    && new Set(values).size === values.length
+    && values.every((value) => expected.has(value));
+  const batchID = handoff?.batchId || "";
+  const priorBatchID = configuredModel?.handoff?.batchId || "";
+  const jobIDs = tasks.map((task) => task?.jobId || "");
+  const projectIDs = tasks.map((task) => task?.projectId || "");
+  const taskCandidateIDs = tasks.map((task) => task?.candidateId || "");
+  return selected.length > 0
+    && Number.isInteger(configuredModel?.revision)
+    && Number.isInteger(startedModel?.revision)
+    && startedModel.revision > configuredModel.revision
+    && sameConfig(submitted, configured)
+    && sameConfig(submitted, committed)
+    && handoffPolicyMatches
+    && typeof batchID === "string" && batchID.length > 0
+    && batchID !== priorBatchID
+    && exactSet(candidateIDs)
+    && exactSet(taskCandidateIDs)
+    && tasks.every((task) => task?.batchId === batchID)
+    && jobIDs.every(Boolean) && new Set(jobIDs).size === tasks.length
+    && projectIDs.every(Boolean) && new Set(projectIDs).size === tasks.length;
 }
 
 export function canSubmitArchaeologyConfig(config, model = {}) {
@@ -195,7 +261,7 @@ export function canSubmitArchaeologyConfig(config, model = {}) {
 }
 
 export function canStartArchaeology(config, candidates = []) {
-  if (!config?.selectedProjectIds?.length || selectedSourceCount(config) === 0) return false;
+  if (!config?.selectedProjectIds?.length || config.selectedProjectIds.length > MAX_PROJECT_ARCHAEOLOGY_SELECTION || new Set(config.selectedProjectIds).size !== config.selectedProjectIds.length || selectedSourceCount(config) === 0) return false;
   const available = new Map(candidates.map((candidate) => [candidate.id, candidate]));
   return config.selectedProjectIds.every((id) => {
     const candidate = available.get(id);
@@ -266,7 +332,6 @@ export function memberFacts(member = {}) {
     authority: member.authority || "provenance_only",
     sessionID: member.sessionId || "Unknown session",
     contributionCount: Number(member.contributionCount) || 0,
-    sourceCount: Number(member.sourceCount) || 0,
     collaborationCount: Number(member.collaborationCount) || 0,
     strengths: Array.isArray(member.demonstratedStrengths) ? member.demonstratedStrengths : [],
     uncertainties: Array.isArray(member.uncertainties) ? member.uncertainties : [],

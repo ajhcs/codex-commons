@@ -67,7 +67,7 @@ func (s *Store) ClaimArchaeologyRun(ctx context.Context, principal, runnerKey st
 }
 
 func validArchaeologyOutcome(outcome domain.ArchaeologyOutcome, now string) bool {
-	if !boundedCoreText(outcome.ID, 120, false) || !boundedCoreText(outcome.ProjectID, 120, true) || !boundedCoreText(outcome.Title, 300, true) || !boundedCoreText(outcome.Summary, 4000, true) || outcome.SourceCount < 1 || outcome.SourceCount > 1000 || len(outcome.Provenance) < 1 || len(outcome.Provenance) > 100 || len(outcome.Provenance) > outcome.SourceCount || len(outcome.Contributors) > 100 || len(outcome.ProposalJSON) > 32768 || !json.Valid([]byte(outcome.ProposalJSON)) || !strings.HasPrefix(strings.TrimSpace(outcome.ProposalJSON), "{") {
+	if !boundedCoreText(outcome.ID, 120, false) || !boundedCoreText(outcome.ProjectID, 120, true) || !boundedCoreText(outcome.Title, 300, true) || !boundedCoreText(outcome.Summary, 4000, true) || outcome.SourceCount < 1 || outcome.SourceCount > 1000 || len(outcome.Provenance) < 1 || len(outcome.Provenance) > 100 || len(outcome.Provenance) > outcome.SourceCount || len(outcome.Contributors) > 100 || len(outcome.ProposalJSON) > domain.ArchaeologyNativeProposalMaxBytes || !json.Valid([]byte(outcome.ProposalJSON)) || !strings.HasPrefix(strings.TrimSpace(outcome.ProposalJSON), "{") {
 		return false
 	}
 	lowered := strings.ToLower(outcome.ProposalJSON)

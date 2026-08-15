@@ -58,6 +58,7 @@ func normalizeHistoricalImport(command domain.HistoricalImportCommand, now time.
 	}
 	out := command
 	out.ConfirmSourceDigest = ""
+	out.ConfirmManifestDigest = ""
 	out.Meta = domain.CoreWriteMeta{}
 	out.ProjectThreadAliases = append([]domain.HistoricalProjectThreadAliasInput(nil), command.ProjectThreadAliases...)
 	if len(out.ProjectThreadAliases) > maxHistoricalAliases {
@@ -187,6 +188,9 @@ FROM historical_import_batches WHERE project_id=? AND batch_id=?`, projectID, ba
 		return out, mapErr(err)
 	}
 	out.RecordedAt = parseStamp(recorded)
+	if err = q.QueryRowContext(ctx, `SELECT revision FROM projects WHERE id=?`, projectID).Scan(&out.ProjectRevision); err != nil {
+		return out, mapErr(err)
+	}
 	out.State, err = latestHistoricalBatchState(ctx, q, recordID)
 	if err != nil {
 		return out, err
@@ -240,12 +244,9 @@ WHERE project_id=? AND batch_id=?`, command.ProjectID, command.BatchID).Scan(&pr
 	if !errors.Is(err, sql.ErrNoRows) {
 		return domain.HistoricalImportReceipt{}, err
 	}
-	var exists int
-	if err = q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM projects WHERE id=?)`, command.ProjectID).Scan(&exists); err != nil {
+	var revision int64
+	if err = q.QueryRowContext(ctx, `SELECT revision FROM projects WHERE id=?`, command.ProjectID).Scan(&revision); err != nil {
 		return domain.HistoricalImportReceipt{}, err
-	}
-	if exists == 0 {
-		return domain.HistoricalImportReceipt{}, domain.ErrNotFound
 	}
 	taskIDs := make([]string, len(command.Tasks))
 	for i, task := range command.Tasks {
@@ -338,7 +339,7 @@ ORDER BY imported.source_key,imported.canonical_task_id`, command.ProjectID)
 	out := domain.HistoricalImportReceipt{
 		ProjectID: command.ProjectID, BatchID: command.BatchID, SourceDigest: command.SourceDigest,
 		ManifestDigest: manifestDigest, CollisionPolicy: command.CollisionPolicy, State: "preview",
-		Counts: counts, Tasks: make([]domain.HistoricalImportTaskReceipt, 0, len(command.Tasks)),
+		Counts: counts, Tasks: make([]domain.HistoricalImportTaskReceipt, 0, len(command.Tasks)), ProjectRevision: revision,
 	}
 	for i, task := range command.Tasks {
 		disposition := "created"
@@ -354,6 +355,13 @@ ORDER BY imported.source_key,imported.canonical_task_id`, command.ProjectID)
 }
 
 func (s *Store) PreviewHistoricalImport(ctx context.Context, command domain.HistoricalImportCommand) (domain.HistoricalImportReceipt, error) {
+	native, nativeErr := nativeHistoricalProposalExists(ctx, s.db, command.ProjectID, command.BatchID)
+	if nativeErr != nil {
+		return domain.HistoricalImportReceipt{}, nativeErr
+	}
+	if native {
+		return domain.HistoricalImportReceipt{}, domain.ErrUnavailable
+	}
 	normalized, manifestDigest, counts, err := normalizeHistoricalImport(command, s.now().UTC())
 	if err != nil {
 		return domain.HistoricalImportReceipt{}, err
@@ -362,7 +370,46 @@ func (s *Store) PreviewHistoricalImport(ctx context.Context, command domain.Hist
 }
 
 func (s *Store) ApplyHistoricalImport(ctx context.Context, command domain.HistoricalImportCommand) (domain.HistoricalImportReceipt, error) {
-	if !validCoreMeta(command.Meta) || command.ConfirmSourceDigest == "" || command.ConfirmSourceDigest != command.SourceDigest {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.HistoricalImportReceipt{}, err
+	}
+	defer tx.Rollback()
+	// Acquire SQLite's write reservation before checking the native proposal
+	// boundary. This prevents a native outcome from appearing between the guard
+	// and canonical mutation. Selected Apply deliberately calls the internal
+	// transaction helper only after its receipt-bound native authorization.
+	if _, err = tx.ExecContext(ctx, `UPDATE installation_status SET updated_at=updated_at WHERE id=1`); err != nil {
+		return domain.HistoricalImportReceipt{}, err
+	}
+	native, nativeErr := nativeHistoricalProposalExists(ctx, tx, command.ProjectID, command.BatchID)
+	if nativeErr != nil {
+		return domain.HistoricalImportReceipt{}, nativeErr
+	}
+	if native {
+		return domain.HistoricalImportReceipt{}, domain.ErrUnavailable
+	}
+	receipt, err := s.applyHistoricalImportTx(ctx, tx, command)
+	if err != nil {
+		return domain.HistoricalImportReceipt{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return domain.HistoricalImportReceipt{}, mapErr(err)
+	}
+	return readHistoricalImportReceipt(ctx, s.db, receipt.ProjectID, receipt.BatchID, false)
+}
+
+func nativeHistoricalProposalExists(ctx context.Context, q historicalQuerier, projectID, batchID string) (bool, error) {
+	var exists int
+	err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM archaeology_native_outcomes WHERE project_id=? AND json_extract(proposal_json,'$.batch_id')=?)`, projectID, batchID).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists == 1, nil
+}
+
+func (s *Store) applyHistoricalImportTx(ctx context.Context, tx *sql.Tx, command domain.HistoricalImportCommand) (domain.HistoricalImportReceipt, error) {
+	if !validCoreMeta(command.Meta) || command.ConfirmSourceDigest == "" || command.ConfirmSourceDigest != command.SourceDigest || command.ConfirmManifestDigest == "" {
 		return domain.HistoricalImportReceipt{}, domain.ErrInvalid
 	}
 	now := s.now().UTC()
@@ -370,20 +417,13 @@ func (s *Store) ApplyHistoricalImport(ctx context.Context, command domain.Histor
 	if err != nil {
 		return domain.HistoricalImportReceipt{}, err
 	}
+	if command.ConfirmManifestDigest != manifestDigest {
+		return domain.HistoricalImportReceipt{}, domain.ErrInvalid
+	}
 	fingerprint, _ := coreFingerprint(struct {
-		ManifestDigest, ConfirmSourceDigest string
-	}{manifestDigest, command.ConfirmSourceDigest})
+		ManifestDigest, ConfirmSourceDigest, ConfirmManifestDigest string
+	}{manifestDigest, command.ConfirmSourceDigest, command.ConfirmManifestDigest})
 	key, operation := coreRequestKey(command.Meta), "historical_import.apply"
-	if _, ok, replayErr := readCoreReplay(ctx, s.db, key, operation, fingerprint); replayErr != nil {
-		return domain.HistoricalImportReceipt{}, replayErr
-	} else if ok {
-		return readHistoricalImportReceipt(ctx, s.db, command.ProjectID, command.BatchID, true)
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return domain.HistoricalImportReceipt{}, err
-	}
-	defer tx.Rollback()
 	if err = lockCoreWriter(ctx, tx, key); err != nil {
 		return domain.HistoricalImportReceipt{}, mapErr(err)
 	}
@@ -496,13 +536,7 @@ source_kind,source_stable_id,source_digest,recorded_by_actor,recorded_by_session
 	if err = recordCoreReplay(ctx, tx, key, operation, fingerprint, command.BatchID, revision, revision, now); err != nil {
 		return domain.HistoricalImportReceipt{}, mapErr(err)
 	}
-	if err = tx.Commit(); err != nil {
-		if replay, replayErr := readHistoricalImportReceipt(ctx, s.db, command.ProjectID, command.BatchID, true); replayErr == nil {
-			return replay, nil
-		}
-		return domain.HistoricalImportReceipt{}, mapErr(err)
-	}
-	return readHistoricalImportReceipt(ctx, s.db, command.ProjectID, command.BatchID, false)
+	return readHistoricalImportReceipt(ctx, tx, command.ProjectID, command.BatchID, false)
 }
 
 func (s *Store) SupersedeHistoricalImport(ctx context.Context, command domain.SupersedeHistoricalImportCommand) (domain.HistoricalImportReceipt, error) {

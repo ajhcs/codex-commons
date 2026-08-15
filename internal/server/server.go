@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -42,7 +43,7 @@ type App struct {
 
 func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
 	if config.CodexAuth && config.HumanAuth == nil {
-		config.HumanAuth = &httpapi.HumanAuthConfig{DisplayName: "Local admin", Handle: "local-admin", Principal: domain.HumanLocalPrincipal, Actor: "local-admin", Session: domain.HumanLegacySession, Host: "browser", SessionTTL: 12 * time.Hour, CodexEnabled: true}
+		config.HumanAuth = &httpapi.HumanAuthConfig{DisplayName: "Local admin", Handle: "local-admin", Principal: domain.HumanLocalPrincipal, Actor: "local-admin", Session: domain.HumanLegacySession, Host: "browser", SessionTTL: 30 * 24 * time.Hour, CodexEnabled: true}
 	}
 	if config.HumanAuth != nil {
 		if config.HumanAuth.Principal == "" {
@@ -62,10 +63,27 @@ func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
+	failed := true
+	defer func() {
+		if failed {
+			_ = store.Close()
+		}
+	}()
 	if err := store.ReconcileArchaeology(ctx); err != nil {
+		_ = store.RecordReconciliationStatus(ctx, "failed", time.Now().UTC())
 		return nil, fmt.Errorf("reconcile project archaeology: %w", err)
 	}
-	failed := true
+	uncertain, err := store.ArchaeologyUncertaintyCount(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read reconciliation status: %w", err)
+	}
+	reconciliation := "healthy"
+	if uncertain > 0 {
+		reconciliation = "attention"
+	}
+	if err := store.RecordReconciliationStatus(ctx, reconciliation, time.Now().UTC()); err != nil {
+		return nil, fmt.Errorf("record reconciliation status: %w", err)
+	}
 	var codexClient codexauth.Client = config.CodexClient
 	if config.CodexAuth && codexClient == nil {
 		codexClient, err = codexauth.NewManagedProcess(ctx, codexauth.ProcessConfig{Executable: config.CodexBin, Env: codexauth.ApprovedEnvironment(os.Environ()), EnableExperimentalDynamicTools: config.EnableExperimentalHistorian})
@@ -75,12 +93,25 @@ func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
 			codexClient = codexauth.NewUnavailable()
 		}
 	}
+	if config.CodexAuth {
+		compatibility := "unavailable"
+		if archaeology, ok := codexClient.(codexauth.ArchaeologyClient); ok && codexClient.Available() {
+			supported, supportErr := archaeology.SupportsModel(ctx, "gpt-5.6-luna", "max")
+			if supportErr == nil && supported {
+				compatibility = "compatible"
+			} else if supportErr == nil {
+				compatibility = "incompatible"
+			}
+		}
+		if err := store.RecordCompatibilityStatus(ctx, compatibility, time.Now().UTC()); err != nil {
+			return nil, fmt.Errorf("record Codex compatibility: %w", err)
+		}
+	}
 	defer func() {
 		if failed {
 			if codexClient != nil {
 				_ = codexClient.Close()
 			}
-			_ = store.Close()
 		}
 	}()
 	live := presence.New(nil)
@@ -127,7 +158,11 @@ func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	if config.CodexAuth {
+		legacy.ConfigureCodex(codexClient, config.CodexVersion)
+	}
 	service := application.New(store, live, nil)
+	service.ConfigureNativeArchaeologyApply(config.EnableNativeArchaeologyApply)
 	defer func() {
 		if failed {
 			service.CloseProjectArchaeology()
@@ -164,7 +199,13 @@ func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
 			BearerToken: anonymousToken, Actor: "human-browser", Session: "browser-lan", Host: "plumbob",
 		})
 	}
-	apiConfig := httpapi.Config{Credentials: credentials, ExpectedHost: config.Listen, HumanAuth: config.HumanAuth, HumanBindingStore: store, HumanAuthEvents: store, OnHumanIdentityUpdated: func(displayName, handle string, _ int64) {
+	expectedHost := config.Listen
+	if config.PublicOrigin != "" {
+		if origin, parseErr := url.Parse(config.PublicOrigin); parseErr == nil {
+			expectedHost = origin.Host
+		}
+	}
+	apiConfig := httpapi.Config{Credentials: credentials, ExpectedHost: expectedHost, PublicOrigin: config.PublicOrigin, InternalReadinessHost: config.Listen, HumanAuth: config.HumanAuth, HumanBindingStore: store, HumanAuthEvents: store, HumanSessionStore: store, OnHumanIdentityUpdated: func(displayName, handle string, _ int64) {
 		service.ConfigureHumanIdentity(displayName, handle)
 	}, Version: config.Version}
 	if config.CodexAuth && codexClient != nil {
@@ -175,7 +216,7 @@ func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
 	if _, err := fs.Stat(web, "index.html"); err != nil {
 		return nil, fmt.Errorf("web index: %w", err)
 	}
-	handler, err := newMux(api, web, anonymousToken)
+	handler, err := newMux(api, web, anonymousToken, expectedHost)
 	if err != nil {
 		return nil, fmt.Errorf("build web handler: %w", err)
 	}
@@ -240,6 +281,13 @@ func (a *App) Serve(ctx context.Context, logger *slog.Logger) error {
 		}
 	}()
 	logger.Info("commons server listening", "address", listener.Addr().String(), "anonymous_read", a.config.AnonymousRead)
+	notifier := newServiceNotifier(logger, func() bool {
+		check, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		return a.store.DB().PingContext(check) == nil
+	})
+	notifier.ready()
+	defer notifier.close()
 	err = server.Serve(listener)
 	close(serveDone)
 	<-shutdownDone

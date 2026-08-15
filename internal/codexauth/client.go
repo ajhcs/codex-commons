@@ -17,14 +17,19 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"codex-commons/internal/domain"
 )
 
 const (
 	MaxLineBytes           = 1 << 20
+	MaxReadLineBytes       = 16 << 20
 	maxPendingRequests     = 16
 	maxLoginCompletions    = 32
 	maxDynamicCallsPerTurn = 64
 )
+
+var processExitWait = 2 * time.Second
 
 var (
 	ErrUnavailable         = errors.New("codex app server unavailable")
@@ -32,6 +37,7 @@ var (
 	ErrLineTooLarge        = errors.New("codex app server response line too large")
 	ErrPendingLimit        = errors.New("codex app server request limit reached")
 	ErrProcessExited       = errors.New("codex app server process exited")
+	ErrProcessExitTimeout  = errors.New("codex app server process did not exit before shutdown timeout")
 	ErrLoginFailed         = errors.New("codex login failed")
 	ErrLoginCancelled      = errors.New("codex login cancelled")
 	ErrIdentityUnavailable = errors.New("codex account identity unavailable")
@@ -88,11 +94,43 @@ type TurnTerminal struct {
 type DynamicToolHandler func(context.Context, DynamicToolCall) DynamicToolResponse
 type TurnTerminalHandler func(TurnTerminal)
 
+type HistorianPolicy struct {
+	Depth                                                        string
+	Git, Docs, CodexHistory                                      bool
+	MaxOutcomes, MaxProvenance, MaxContributors                  int
+	MaxHistoricalAliases, MaxHistoricalTasks, MaxSourcesExamined int
+}
+
 type ExperimentalArchaeologyClient interface {
 	ArchaeologyClient
 	ExperimentalDynamicTools() bool
-	LaunchHistorianTask(context.Context, string, string, string, string, string, string, DynamicToolHandler, TurnTerminalHandler) (TaskLaunch, error)
+	LaunchHistorianTask(context.Context, string, string, string, string, string, string, HistorianPolicy, DynamicToolHandler, TurnTerminalHandler) (TaskLaunch, error)
 	InterruptTurn(context.Context, string, string) error
+}
+
+// HistorianTaskFinder is an optional, read-only recovery capability. It is
+// deliberately separate from ExperimentalArchaeologyClient so older App Server
+// adapters remain source-compatible while native schedulers can recover an
+// accepted task whose launch response was lost.
+type HistorianTaskFinder interface {
+	FindHistorianTask(context.Context, string, string) (TaskLaunch, bool, error)
+}
+
+type HistorianTaskRenamer interface {
+	RenameHistorianTask(context.Context, string, string) error
+}
+
+type TaskIdentity struct {
+	ThreadID, SessionID, Source, Name string
+	Ephemeral                         bool
+}
+
+// HistorianTaskInventory is a bounded metadata-only workspace inventory used
+// by isolated acceptance to prove that one requested task did not create
+// additional parent or subagent threads.
+type HistorianTaskInventory interface {
+	ListHistorianTasks(context.Context, string) ([]TaskIdentity, error)
+	VerifiedHistorianSettings(string) (TaskLaunch, bool)
 }
 
 // Client is the small capability surface consumed by the Commons HTTP layer.
@@ -109,8 +147,9 @@ type Client interface {
 }
 
 // Workspace is the metadata-only subset of a Codex thread inventory that
-// Commons may use to build a project catalog. Prompt previews and thread names
-// are intentionally not represented here.
+// Commons may use to build a project catalog. Codex 0.147 may send protocol
+// preview bytes, but prompt previews and thread names are never represented,
+// retained, persisted, projected, or logged by Commons.
 type Workspace struct {
 	CWD       string
 	UpdatedAt time.Time
@@ -124,6 +163,18 @@ type TaskLaunch struct {
 	TurnID       string
 	ThreadStatus string
 	TurnStatus   string
+	Model        string
+	Effort       string
+	Sandbox      string
+	Approval     string
+	Network      bool
+	MultiAgent   string
+	Stage        string
+}
+
+type threadSettings struct {
+	ThreadID, Model, Effort, CWD, Approval, Sandbox, MultiAgent string
+	Network                                                     bool
 }
 
 // ArchaeologyClient is an optional capability implemented by the managed
@@ -201,10 +252,18 @@ type ClientImpl struct {
 	pendingTools     map[string][]wireMessage
 	dynamicTurns     map[string]string
 	dynamicCalls     map[string]map[string]bool
+	settingsWaiters  map[string]chan threadSettings
+	pendingSettings  map[string]threadSettings
+	verifiedSettings map[string]TaskLaunch
 	nextID           atomic.Uint64
 	writeMu          sync.Mutex
+	asyncMu          sync.Mutex
+	asyncWG          sync.WaitGroup
+	asyncClosing     bool
 	closeOnce        sync.Once
 	experimental     bool
+	callbackCtx      context.Context
+	callbackCancel   context.CancelFunc
 	done             chan struct{}
 	readerDone       chan struct{}
 	waitDone         chan struct{}
@@ -221,6 +280,7 @@ func NewWithTransportConfig(ctx context.Context, transport io.ReadWriteCloser, e
 	if transport == nil {
 		return nil, ErrUnavailable
 	}
+	callbackCtx, callbackCancel := context.WithCancel(context.Background())
 	c := &ClientImpl{
 		transport:        transport,
 		pending:          make(map[string]pendingRequest),
@@ -232,7 +292,12 @@ func NewWithTransportConfig(ctx context.Context, transport io.ReadWriteCloser, e
 		pendingTools:     make(map[string][]wireMessage),
 		dynamicTurns:     make(map[string]string),
 		dynamicCalls:     make(map[string]map[string]bool),
+		settingsWaiters:  make(map[string]chan threadSettings),
+		pendingSettings:  make(map[string]threadSettings),
+		verifiedSettings: make(map[string]TaskLaunch),
 		experimental:     experimental,
+		callbackCtx:      callbackCtx,
+		callbackCancel:   callbackCancel,
 		done:             make(chan struct{}),
 		readerDone:       make(chan struct{}),
 	}
@@ -244,6 +309,16 @@ func NewWithTransportConfig(ctx context.Context, transport io.ReadWriteCloser, e
 		return nil, err
 	}
 	return c, nil
+}
+
+func (c *ClientImpl) beginAsync() bool {
+	c.asyncMu.Lock()
+	defer c.asyncMu.Unlock()
+	if c.asyncClosing {
+		return false
+	}
+	c.asyncWG.Add(1)
+	return true
 }
 
 type ProcessConfig struct {
@@ -579,7 +654,7 @@ func readBoundedLine(reader *bufio.Reader) ([]byte, error) {
 	for {
 		part, err := reader.ReadSlice('\n')
 		line = append(line, part...)
-		if len(line) > MaxLineBytes {
+		if len(line) > MaxReadLineBytes {
 			return nil, ErrLineTooLarge
 		}
 		if err == nil {
@@ -685,7 +760,54 @@ func (c *ClientImpl) handleLine(line []byte) {
 	}
 	if message.Method == "turn/completed" {
 		c.handleTurnCompleted(message.Params)
+		return
 	}
+	if message.Method == "thread/settings/updated" {
+		c.handleThreadSettings(message.Params)
+	}
+}
+
+func (c *ClientImpl) handleThreadSettings(raw json.RawMessage) {
+	var value struct {
+		ThreadID string `json:"threadId"`
+		Settings struct {
+			Model      string  `json:"model"`
+			Effort     *string `json:"effort"`
+			CWD        string  `json:"cwd"`
+			Approval   any     `json:"approvalPolicy"`
+			MultiAgent any     `json:"multiAgentMode"`
+			Sandbox    struct {
+				Type          string `json:"type"`
+				NetworkAccess bool   `json:"networkAccess"`
+			} `json:"sandboxPolicy"`
+		} `json:"threadSettings"`
+	}
+	if decodeOne(raw, &value) != nil || value.ThreadID == "" || value.Settings.Model == "" ||
+		value.Settings.Effort == nil || *value.Settings.Effort == "" || !filepath.IsAbs(value.Settings.CWD) ||
+		value.Settings.Sandbox.Type == "" {
+		return
+	}
+	approval, ok := value.Settings.Approval.(string)
+	if !ok || approval == "" {
+		return
+	}
+	multiAgent, ok := value.Settings.MultiAgent.(string)
+	if !ok || multiAgent == "" {
+		return
+	}
+	settings := threadSettings{ThreadID: value.ThreadID, Model: value.Settings.Model, Effort: *value.Settings.Effort,
+		CWD: filepath.Clean(value.Settings.CWD), Approval: approval, Sandbox: value.Settings.Sandbox.Type,
+		Network: value.Settings.Sandbox.NetworkAccess, MultiAgent: multiAgent}
+	c.mu.Lock()
+	if waiter := c.settingsWaiters[value.ThreadID]; waiter != nil {
+		select {
+		case waiter <- settings:
+		default:
+		}
+	} else if len(c.pendingSettings) < 32 {
+		c.pendingSettings[value.ThreadID] = settings
+	}
+	c.mu.Unlock()
 }
 
 func (c *ClientImpl) handleServerRequest(message wireMessage) {
@@ -718,7 +840,15 @@ func (c *ClientImpl) handleServerRequestMode(message wireMessage, synchronous bo
 		Arguments json.RawMessage `json:"arguments"`
 		Namespace *string         `json:"namespace"`
 	}
-	if decodeOne(message.Params, &call) != nil || call.CallID == "" || len(call.CallID) > 200 || call.ThreadID == "" || len(call.ThreadID) > 120 || call.TurnID == "" || len(call.TurnID) > 120 || (call.Tool != "commons_project_history_progress" && call.Tool != "commons_project_history_report") || call.Namespace != nil || len(call.Arguments) == 0 || len(call.Arguments) > 64<<10 {
+	if decodeOne(message.Params, &call) != nil {
+		c.respondDynamicTool(message.ID, DynamicToolResponse{})
+		return
+	}
+	argumentLimit := 4 << 10
+	if call.Tool == "commons_project_history_report" {
+		argumentLimit = domain.ArchaeologyNativeReportMaxBytes
+	}
+	if call.CallID == "" || len(call.CallID) > 200 || call.ThreadID == "" || len(call.ThreadID) > 120 || call.TurnID == "" || len(call.TurnID) > 120 || (call.Tool != "commons_project_history_progress" && call.Tool != "commons_project_history_report") || call.Namespace != nil || len(call.Arguments) == 0 || len(call.Arguments) > argumentLimit {
 		c.respondDynamicTool(message.ID, DynamicToolResponse{})
 		return
 	}
@@ -753,15 +883,20 @@ func (c *ClientImpl) handleServerRequestMode(message wireMessage, synchronous bo
 		return
 	}
 	run := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(c.callbackCtx, 30*time.Second)
 		defer cancel()
 		response := handler(ctx, DynamicToolCall{CallID: call.CallID, ThreadID: call.ThreadID, TurnID: call.TurnID, Tool: call.Tool, Arguments: append(json.RawMessage(nil), call.Arguments...)})
 		c.respondDynamicTool(message.ID, response)
 	}
 	if synchronous {
 		run()
+	} else if c.beginAsync() {
+		go func() {
+			defer c.asyncWG.Done()
+			run()
+		}()
 	} else {
-		go run()
+		c.respondDynamicTool(message.ID, DynamicToolResponse{})
 	}
 	_ = key
 }
@@ -815,6 +950,8 @@ func (c *ClientImpl) clearDynamicThread(threadID string) {
 	delete(c.dynamicCalls, threadID)
 	delete(c.pendingTerminals, threadID)
 	delete(c.pendingTools, threadID)
+	delete(c.settingsWaiters, threadID)
+	delete(c.pendingSettings, threadID)
 	c.mu.Unlock()
 	for _, message := range pending {
 		c.respondDynamicTool(message.ID, DynamicToolResponse{})
@@ -843,6 +980,7 @@ func (c *ClientImpl) fail(err error) {
 		err = ErrUnavailable
 	}
 	c.closeOnce.Do(func() {
+		c.callbackCancel()
 		c.mu.Lock()
 		c.closed = true
 		c.failure = err
@@ -866,6 +1004,9 @@ func (c *ClientImpl) fail(err error) {
 		c.dynamicCalls = make(map[string]map[string]bool)
 		c.pendingTerminals = make(map[string]TurnTerminal)
 		c.pendingTools = make(map[string][]wireMessage)
+		c.settingsWaiters = make(map[string]chan threadSettings)
+		c.pendingSettings = make(map[string]threadSettings)
+		c.verifiedSettings = make(map[string]TaskLaunch)
 		c.mu.Unlock()
 		for _, request := range pending {
 			request.result <- response{err: err}
@@ -882,7 +1023,11 @@ func (c *ClientImpl) Close() error {
 	if c == nil {
 		return nil
 	}
+	c.asyncMu.Lock()
+	c.asyncClosing = true
+	c.asyncMu.Unlock()
 	c.fail(ErrUnavailable)
+	c.asyncWG.Wait()
 	select {
 	case <-c.readerDone:
 	case <-time.After(2 * time.Second):
@@ -890,7 +1035,8 @@ func (c *ClientImpl) Close() error {
 	if c.waitDone != nil {
 		select {
 		case <-c.waitDone:
-		case <-time.After(2 * time.Second):
+		case <-time.After(processExitWait):
+			return ErrProcessExitTimeout
 		}
 	}
 	return nil

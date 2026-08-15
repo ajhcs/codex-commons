@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { commonsAdapter } from "../data/adapter.js";
 import { CommonsAPIError } from "../data/transport.js";
 import { AUTH_ACTIONS, authReducer, initialAuthState } from "../contracts/authState.js";
@@ -35,6 +35,8 @@ export function AuthSessionProvider({ children }) {
   const controllerRef = useRef(null);
   const pollTimerRef = useRef(null);
   const flowRef = useRef(0);
+  const projectHistoryRequestRef = useRef(0);
+  const [projectHistoryRequest, setProjectHistoryRequest] = useState(null);
 
   stateRef.current = state;
 
@@ -256,6 +258,16 @@ export function AuthSessionProvider({ children }) {
     refresh().catch(() => {});
     return () => stopFlow();
   }, [refresh, stopFlow]);
+  const requestProjectHistory = useCallback((archaeologySeed) => {
+    if (!archaeologySeed || typeof archaeologySeed !== "object") return;
+    projectHistoryRequestRef.current += 1;
+    setProjectHistoryRequest({ id: projectHistoryRequestRef.current, archaeologySeed });
+  }, []);
+
+  const consumeProjectHistoryRequest = useCallback((requestID) => {
+    setProjectHistoryRequest((current) => current?.id === requestID ? null : current);
+  }, []);
+
 
   const value = useMemo(() => ({
     ...state,
@@ -271,9 +283,12 @@ export function AuthSessionProvider({ children }) {
     expire,
     logout,
     updateProfile,
+    projectHistoryRequest,
+    requestProjectHistory,
+    consumeProjectHistoryRequest,
     setProfileDraft(profileDraft) { dispatch({ type: AUTH_ACTIONS.PROFILE_DRAFT, profileDraft }); },
     clearError() { dispatch({ type: AUTH_ACTIONS.CLEAR_ERROR }); },
-  }), [state, refresh, beginPairing, pollNow, submitProfile, cancelPairing, accept, expire, logout, updateProfile]);
+  }), [state, refresh, beginPairing, pollNow, submitProfile, cancelPairing, accept, expire, logout, updateProfile, projectHistoryRequest, requestProjectHistory, consumeProjectHistoryRequest]);
 
   return <AuthSessionContext.Provider value={value}>{children}</AuthSessionContext.Provider>;
 }

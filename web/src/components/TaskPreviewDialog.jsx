@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import { copyText, manualCopyShortcut } from "../browser/copyText.js";
 import Clipboard from "../icons/Clipboard.tsx";
 
 export function TaskPreviewDialog({ task, onClose }) {
   const ref = useRef(null);
-  const [copied, setCopied] = useState(false);
+  const [copyStatus, setCopyStatus] = useState("");
 
   useEffect(() => {
     const dialog = ref.current;
@@ -12,14 +13,14 @@ export function TaskPreviewDialog({ task, onClose }) {
   }, [task]);
 
   useEffect(() => {
-    if (!task) setCopied(false);
+    if (!task) setCopyStatus("");
   }, [task]);
 
   if (!task) return <dialog ref={ref} />;
 
   async function copyReference() {
-    await navigator.clipboard.writeText(task.ref);
-    setCopied(true);
+    const copied = await copyText(task.ref);
+    setCopyStatus(copied ? "Task reference copied." : `Copy isn’t available here. Select the reference and press ${manualCopyShortcut()}.`);
   }
 
   return (
@@ -38,9 +39,10 @@ export function TaskPreviewDialog({ task, onClose }) {
       </dl>
       {task.nextAction ? <div className="task-next-action"><span>Next action</span><strong>{task.nextAction}</strong></div> : null}
       <div className="dialog-note">This preview uses the task reference already returned by Commons. The full task workspace will replace it when the Tasks slice is connected.</div>
+      {copyStatus ? <p className={`form-message${copyStatus.includes("isn’t available") ? " form-message--error" : ""}`} role="status">{copyStatus}</p> : null}
       <div className="dialog-actions">
         <button className="secondary-button" type="button" onClick={onClose}>Done</button>
-        <button className="primary-button" type="button" onClick={copyReference}><Clipboard aria-hidden="true" />{copied ? "Copied" : "Copy task reference"}</button>
+        <button className="primary-button" type="button" onClick={copyReference}><Clipboard aria-hidden="true" />{copyStatus === "Task reference copied." ? "Copied" : "Copy task reference"}</button>
       </div>
     </dialog>
   );

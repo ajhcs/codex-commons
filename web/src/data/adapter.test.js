@@ -702,18 +702,19 @@ function archaeologyPayload() {
         id: "codex-commons", name: "Codex Commons", path_label: "~/codex-commons", repository_label: "codex-commons",
         last_activity_at: "2026-08-12T11:00:00Z", signals: { git: true, docs: true, codex_history: true },
         estimate: { duration_seconds_min: 240, duration_seconds_max: 480, relative_cost: "medium" },
-        privacy_note: "Only selected sources are read after start.", selected_by_default: false,
+        privacy_note: "Evidence choices govern admissible citations.", selected_by_default: false,
         sources: ["codex_metadata"], codex_thread_count: 12,
       }],
     },
     config: { selected_project_ids: ["codex-commons"], depth: "standard", sources: { git: true, docs: true, codex_history: true }, max_concurrency: 2 },
     runs: [{ id: "RUN-1", project_id: "codex-commons", state: "completed", phase_label: "Review ready", completed_units: 8, total_units: 8, outcomes_found: 1, sources_examined: 8 }],
     review: {
+      batch_id: "BATCH-1",
       proposed_outcomes: [{
-        id: "OUT-1", title: "Exact-session provenance", summary: "Connected durable work to its sessions.", project_id: "codex-commons", source_count: 1,
-        provenance: [{ source_kind: "git", source_label: "Repository history", digest: "sha256:source", recorded_at: "2026-08-12T11:00:00Z" }], member_sessions: [member],
+        id: "OUT-1", title: "Exact-session provenance", summary: "Connected durable work to its sessions.", project_id: "codex-commons", source_digest: `sha256:${"f".repeat(64)}`, source_count: 1,
+        provenance: [{ source_kind: "git", source_label: `commit:${"a".repeat(40)}`, digest: `sha256:${"a".repeat(64)}`, recorded_at: "2026-08-12T11:00:00Z" }], member_sessions: [member],
       }],
-      member_sessions: [member], provenance_summary: "Exact digests retained; explicit human approval is required.", can_apply: true, requires_explicit_approval: true,
+      member_sessions: [member], provenance_summary: "Exact digests retained; explicit human approval is required.", can_apply: false, requires_explicit_approval: true,
     },
     capabilities: {
       project_catalog: { configured: true, available: true, mode: "codex_metadata" },
@@ -721,11 +722,12 @@ function archaeologyPayload() {
       discovery: { configured: true, available: true, mode: "allowlisted_metadata" },
       historian_handoff: { configured: true, available: true, mode: "exact_task_claim_report" },
       review: { configured: true, available: true, mode: "validated_manifest" },
-      canonical_apply: { configured: true, available: true, mode: "preview_digest_confirm" },
+      canonical_apply: { configured: true, available: false, mode: "preview_manifest_confirm", reason: "Review the exact task-and-evidence diff, then confirm both the source and server manifest digests." },
     },
     handoff: {
-      id: "", batch_id: "BATCH-1", state: "completed", depth: "standard", sources: { git: true, docs: true, codex_history: true }, concurrency: 2, candidate_ids: ["codex-commons"],
+      id: "", batch_id: "BATCH-1", state: "completed", created_at: "2026-08-12T12:00:00Z", updated_at: "2026-08-12T12:30:00Z", depth: "standard", sources: { git: true, docs: true, codex_history: true }, concurrency: 2, candidate_ids: ["codex-commons"],
       tasks: [{ job_id: "JOB-1", batch_id: "BATCH-1", candidate_id: "codex-commons", project_id: "project-codex-commons", launch_id: "JOB-1", mode: "app_server_dynamic_tools", state: "completed", phase_label: "Report accepted", sources_examined: 8, duration_ms: 93000, thread_id: "019ff-task", turn_id: "turn-1", created_at: "2026-08-12T12:00:00Z", updated_at: "2026-08-12T12:30:00Z", available_actions: [] }],
+      policy_attested: true,
       progress: { queued_count: 0, active_count: 0, attention_count: 0, selected_total: 1, preparing_count: 0, starting_count: 0, task_created_count: 0, claimed_count: 0, running_count: 0, report_ready_count: 0, completed_count: 1, failed_count: 0, uncertain_count: 0, updated_at: "2026-08-12T12:30:00Z" },
       allowed_actions: [],
     },
@@ -743,19 +745,24 @@ test("Project Archaeology normalizes once and transports explicit human controls
   const model = await adapter.readProjectArchaeology();
   await adapter.discoverProjectArchaeology({ csrfToken: "csrf", idempotencyKey: "arch-discover" });
   await adapter.updateProjectArchaeologyConfig({ selectedProjectIds: ["codex-commons"], depth: "deep", sources: { git: true, docs: false, codexHistory: true }, maxConcurrency: 1 }, 7, { csrfToken: "csrf", idempotencyKey: "arch-config" });
-  await adapter.startProjectArchaeology(8, { csrfToken: "csrf", idempotencyKey: "arch-start" });
+  await adapter.startProjectArchaeology(8, true, { csrfToken: "csrf", idempotencyKey: "arch-start" });
   await adapter.pauseProjectArchaeology(8, { csrfToken: "csrf", idempotencyKey: "arch-pause" });
   await adapter.resumeProjectArchaeology(9, { csrfToken: "csrf", idempotencyKey: "arch-resume" });
   await adapter.cancelProjectArchaeology(10, { csrfToken: "csrf", idempotencyKey: "arch-cancel" });
+  await adapter.resolveProjectArchaeology({ jobId: "JOB-1", threadId: "019ff-task", turnId: "turn-1" }, 11, { csrfToken: "csrf", idempotencyKey: "arch-resolve" });
 
   assert.equal(model.discovery.metadataOnly, true);
   assert.equal(model.discovery.candidates[0].pathLabel, undefined, "raw path labels never enter the frontend model");
   assert.equal(model.discovery.candidates[0].candidateId, "codex-commons");
   assert.equal(model.discovery.candidates[0].signals.codexHistory, true);
   assert.equal(model.review.proposedOutcomes[0].memberSessions[0].sessionId, "SES-4168");
+  assert.equal(model.review.proposedOutcomes[0].sourceDigest, `sha256:${"f".repeat(64)}`);
   assert.equal(model.review.memberSessions[0].demonstratedStrengths[0], "Provenance design");
   assert.equal(model.review.memberSessions[0].reachable, undefined, "membership does not synthesize reachability");
+  assert.equal(model.review.batchId, "BATCH-1");
+  assert.equal(model.review.batchRelation, "current");
   assert.equal(model.handoff.batchId, "BATCH-1");
+  assert.equal(model.handoff.policyAttested, true);
   assert.equal(model.handoff.tasks[0].candidateId, "codex-commons");
   assert.equal(model.handoff.tasks[0].projectId, "project-codex-commons");
   assert.equal(model.handoff.tasks[0].jobId, "JOB-1");
@@ -771,11 +778,41 @@ test("Project Archaeology normalizes once and transports explicit human controls
     ["POST", "/v1/project-archaeology/pause"],
     ["POST", "/v1/project-archaeology/resume"],
     ["POST", "/v1/project-archaeology/cancel"],
+    ["POST", "/v1/project-archaeology/resolve"],
   ]);
   assert.deepEqual(JSON.parse(calls[2].options.body), { selected_project_ids: ["codex-commons"], depth: "deep", sources: { git: true, docs: false, codex_history: true }, max_concurrency: 1, base_revision: 7 });
+  assert.deepEqual(JSON.parse(calls[3].options.body), { base_revision: 8, acknowledge_large_batch: true });
+  assert.equal(calls[3].options.headers["Idempotency-Key"], "arch-start");
   assert.equal(calls[2].options.headers["X-Commons-CSRF"], "csrf");
   assert.equal(calls[2].options.headers["Idempotency-Key"], "arch-config");
   assert.deepEqual(JSON.parse(calls[4].options.body), { base_revision: 8 });
+  assert.deepEqual(JSON.parse(calls[7].options.body), { base_revision: 11, job_id: "JOB-1", thread_id: "019ff-task", turn_id: "turn-1", resolution: "confirmed_stopped" });
+  assert.equal(calls[7].options.headers["X-Commons-CSRF"], "csrf");
+  assert.equal(calls[7].options.headers["Idempotency-Key"], "arch-resolve");
+});
+
+test("Project Archaeology preserves a prior review batch without rebinding it to the current run", async () => {
+  const payload = archaeologyPayload();
+  payload.review.batch_id = "BATCH-PRIOR";
+  const adapter = createHTTPAdapter({ fetchImpl: async () => apiResponse(payload) });
+  const model = await adapter.readProjectArchaeology();
+  assert.equal(model.review.batchId, "BATCH-PRIOR");
+  assert.equal(model.review.batchRelation, "prior");
+  assert.equal(model.handoff.batchId, "BATCH-1");
+});
+
+test("Project Archaeology rejects native poll snapshots with impossible timestamp order", async () => {
+  for (const mutate of [
+    (payload) => { payload.updated_at = "2026-08-12T12:29:59Z"; },
+    (payload) => { payload.handoff.updated_at = "2026-08-12T12:29:59Z"; },
+    (payload) => { payload.handoff.progress.updated_at = "2026-08-12T12:30:01Z"; },
+    (payload) => { payload.handoff.tasks[0].created_at = "2026-08-12T12:30:01Z"; },
+  ]) {
+    const payload = archaeologyPayload();
+    mutate(payload);
+    const adapter = createHTTPAdapter({ fetchImpl: async () => apiResponse(payload) });
+    await assert.rejects(adapter.readProjectArchaeology(), (error) => error.code === "invalid_payload");
+  }
 });
 
 test("Project Archaeology rejects automatic candidate selection and unreviewed manifests", async () => {
@@ -790,11 +827,40 @@ test("Project Archaeology rejects automatic candidate selection and unreviewed m
   }
 });
 
+function setNativeTaskState(payload, state) {
+  payload.handoff.tasks[0].state = state;
+  const progress = payload.handoff.progress;
+  Object.assign(progress, {
+    queued_count: 0, active_count: 0, attention_count: 0, selected_total: 1,
+    preparing_count: 0, starting_count: 0, task_created_count: 0, claimed_count: 0,
+    running_count: 0, report_ready_count: 0, completed_count: 0, failed_count: 0, uncertain_count: 0,
+  });
+  if (state === "queued") progress.queued_count = 1;
+  else if (state === "starting") { progress.starting_count = 1; progress.active_count = 1; }
+  else if (state === "active") { progress.running_count = 1; progress.active_count = 1; }
+  else if (state === "cancel_requested") progress.active_count = 1;
+  else if (state === "attention") progress.attention_count = 1;
+  else if (state === "uncertain") progress.uncertain_count = 1;
+  else if (state === "completed") progress.completed_count = 1;
+  else if (["canceled", "interrupted", "failed"].includes(state)) progress.failed_count = 1;
+}
+
 test("Project Archaeology rejects unbounded native scheduler facts", async () => {
   for (const mutate of [
     (payload) => { payload.handoff.tasks[0].phase_label = "x".repeat(121); },
+    (payload) => { payload.handoff.policy_attested = false; },
+    (payload) => { payload.handoff.sources = { git: false, docs: false, codex_history: false }; },
+    (payload) => { payload.handoff.concurrency = 0; },
+    (payload) => { payload.handoff.policy_attested = false; payload.handoff.depth = ""; payload.handoff.sources = { git: false, docs: false, codex_history: false }; payload.handoff.state = "attention"; payload.handoff.tasks[0].state = "queued"; },
+    (payload) => { payload.handoff.policy_attested = false; payload.handoff.depth = ""; payload.handoff.sources = { git: false, docs: false, codex_history: false }; payload.handoff.state = "attention"; payload.handoff.tasks = []; },
     (payload) => { payload.handoff.tasks[0].duration_ms = 604800001; },
     (payload) => { payload.handoff.tasks[0].state = "claimed_native"; },
+    (payload) => { payload.handoff.tasks[0].batch_id = "BATCH-OTHER"; },
+    (payload) => { payload.handoff.tasks[0].job_id = ""; },
+    (payload) => { payload.handoff.tasks[0].candidate_id = "codex-other"; },
+    (payload) => { payload.handoff.candidate_ids = []; },
+    (payload) => { payload.handoff.progress.selected_total = 2; },
+    (payload) => { payload.handoff.progress.completed_count = 0; },
   ]) {
     const payload = archaeologyPayload();
     mutate(payload);
@@ -802,6 +868,57 @@ test("Project Archaeology rejects unbounded native scheduler facts", async () =>
     await assert.rejects(adapter.readProjectArchaeology(), (error) => error.code === "invalid_payload");
   }
 });
+test("Project Archaeology preserves quarantined native runs without inferring execution policy", async () => {
+  const payload = archaeologyPayload();
+  payload.handoff.policy_attested = false;
+  payload.handoff.depth = "";
+  payload.handoff.sources = { git: false, docs: false, codex_history: false };
+  payload.handoff.state = "attention";
+  setNativeTaskState(payload, "interrupted");
+  const adapter = createHTTPAdapter({ fetchImpl: async () => apiResponse(payload) });
+  const model = await adapter.readProjectArchaeology();
+  assert.equal(model.handoff.policyAttested, false);
+  assert.equal(model.handoff.depth, "");
+  assert.deepEqual(model.handoff.sources, { git: false, docs: false, codexHistory: false });
+  assert.equal(model.handoff.state, "attention");
+});
+
+test("Project Archaeology preserves schema-14 terminal unattested audit history", async () => {
+  for (const [batchState, taskState] of [
+    ["attention", "attention"],
+    ["attention", "uncertain"],
+    ["completed", "completed"],
+    ["canceled", "canceled"],
+  ]) {
+    const payload = archaeologyPayload();
+    payload.handoff.policy_attested = false;
+    payload.handoff.depth = "";
+    payload.handoff.sources = { git: false, docs: false, codex_history: false };
+    payload.handoff.state = batchState;
+    setNativeTaskState(payload, taskState);
+    const adapter = createHTTPAdapter({ fetchImpl: async () => apiResponse(payload) });
+    const model = await adapter.readProjectArchaeology();
+    assert.equal(model.handoff.policyAttested, false);
+    assert.equal(model.handoff.depth, "");
+    assert.deepEqual(model.handoff.sources, { git: false, docs: false, codexHistory: false });
+    assert.equal(model.handoff.state, batchState);
+    assert.equal(model.handoff.tasks[0].state, taskState);
+  }
+});
+
+test("Project Archaeology rejects active claims in every unattested native audit state", async () => {
+  for (const taskState of ["queued", "starting", "active", "report_ready", "cancel_requested"]) {
+    const payload = archaeologyPayload();
+    payload.handoff.policy_attested = false;
+    payload.handoff.depth = "";
+    payload.handoff.sources = { git: false, docs: false, codex_history: false };
+    payload.handoff.state = "attention";
+    payload.handoff.tasks[0].state = taskState;
+    const adapter = createHTTPAdapter({ fetchImpl: async () => apiResponse(payload) });
+    await assert.rejects(adapter.readProjectArchaeology(), (error) => error.code === "invalid_payload");
+  }
+});
+
 
 test("Project Archaeology accepts the non-mutating initial virtual draft", async () => {
   const payload = archaeologyPayload();
@@ -811,6 +928,7 @@ test("Project Archaeology accepts the non-mutating initial virtual draft", async
   payload.config = { selected_project_ids: [], depth: "standard", sources: { git: true, docs: true, codex_history: false }, max_concurrency: 2 };
   payload.runs = [];
   payload.review = null;
+  payload.handoff = null;
   payload.revision = 0;
   delete payload.updated_at;
   const adapter = createHTTPAdapter({ fetchImpl: async () => apiResponse(payload) });
@@ -823,12 +941,36 @@ test("Project Archaeology accepts the non-mutating initial virtual draft", async
 test("Project Archaeology bridges one validated outcome into exact-digest canonical apply", async () => {
   const digest = `sha256:${"a".repeat(64)}`;
   const manifestDigest = `sha256:${"b".repeat(64)}`;
+  const occurredAt = "2026-08-12T13:00:00Z";
+  const source = { kind: "git", stable_id: "git:commit:abc123", digest, occurred_at: occurredAt };
+  const session = "019ff-historian-session";
   const calls = [];
   const previewResult = {
     batch_id: "archaeology-batch", source_digest: digest, manifest_digest: manifestDigest, collision_policy: "current_wins",
-    state: "preview", applied: false, tasks: [], counts: { project_thread_aliases: 0, tasks: 0, attributions: 0, events: 0, created: 0, skipped_current: 0, replayed: 0 },
+    state: "preview", applied: false,
+    tasks: [{ key: "history-task-1", id: "TASK-PREVIEW-1", disposition: "created" }],
+    counts: { project_thread_aliases: 0, tasks: 1, attributions: 1, events: 1, created: 1, skipped_current: 0, replayed: 0 },
   };
-  const request = { schema_version: 1, batch_id: "archaeology-batch", source_digest: digest, confirm_source_digest: "", collision_policy: "current_wins", project_thread_aliases: [], tasks: [] };
+  const request = {
+    schema_version: 1,
+    batch_id: "archaeology-batch",
+    source_digest: digest,
+    confirm_source_digest: "",
+    confirm_manifest_digest: "",
+    collision_policy: "current_wins",
+    project_thread_aliases: [],
+    tasks: [{
+      key: "history-task-1",
+      priority: 0,
+      title: "Preserve exact historian evidence",
+      description: "Bind this completed work to the exact durable sources reviewed by the human.",
+      acceptance: "The canonical task retains source identity and attribution.",
+      state: "done",
+      source,
+      attributions: [{ session, role: "implementer", confidence: "verified", source: { ...source, kind: "codex_turn", stable_id: `thread:${session}/turn:turn-1` } }],
+      events: [{ key: "history-event-1", kind: "completed", summary: "Historian verified the durable result.", session, confidence: "verified", source }],
+    }],
+  };
   const adapter = createHTTPAdapter({ fetchImpl: async (url, options) => {
     calls.push({ url, options });
     if (String(url) === "/v1/project-archaeology/import-preview") return apiResponse({ project_id: "codex-commons", request, preview: previewResult });
@@ -838,9 +980,171 @@ test("Project Archaeology bridges one validated outcome into exact-digest canoni
 
   const bridge = await adapter.previewProjectArchaeologyImport("OUT-1", { csrfToken: "csrf", idempotencyKey: "preview-key" });
   assert.equal(bridge.preview.collisionPolicy, "current_wins");
-  await assert.rejects(() => adapter.applyHistoricalImport(bridge, "sha256:partial", { csrfToken: "csrf", idempotencyKey: "apply-bad" }), /exact source digest/i);
-  const applied = await adapter.applyHistoricalImport(bridge, digest, { csrfToken: "csrf", idempotencyKey: "apply-key" });
+  assert.equal(bridge.proposal.tasks[0].title, "Preserve exact historian evidence");
+  assert.equal(bridge.proposal.tasks[0].attributions[0].source.stableId, `thread:${session}/turn:turn-1`);
+  assert.equal(bridge.proposal.tasks[0].events[0].summary, "Historian verified the durable result.");
+  assert.equal(Object.isFrozen(bridge.request), true);
+  await assert.rejects(() => adapter.applyHistoricalImport(bridge, digest, { csrfToken: "csrf", idempotencyKey: "apply-bad" }), /server manifest digest/i);
+  const applied = await adapter.applyHistoricalImport(bridge, manifestDigest, { csrfToken: "csrf", idempotencyKey: "apply-key" });
   assert.equal(applied.applied, true);
   assert.deepEqual(calls.map((call) => [call.options.method, call.url]), [["POST", "/v1/project-archaeology/import-preview"], ["POST", "/v1/projects/codex-commons/historical-imports/apply"]]);
-  assert.equal(JSON.parse(calls[1].options.body).confirm_source_digest, digest);
+  assert.deepEqual(
+    {
+      source: JSON.parse(calls[1].options.body).confirm_source_digest,
+      manifest: JSON.parse(calls[1].options.body).confirm_manifest_digest,
+    },
+    { source: digest, manifest: manifestDigest },
+  );
+});
+
+test("Project Archaeology consumes bounded catalog, history, detail, and installation status contracts", async () => {
+  const payload = archaeologyPayload();
+  const summary = {
+    batch_id: "BATCH-1", state: "completed", mode: "app_server_dynamic_tools", depth: "standard",
+    sources: { git: true, docs: true, codex_history: true }, concurrency: 2, selected_total: 1,
+    queued_count: 0, active_count: 0, completed_count: 1, attention_count: 0, has_report: true,
+    created_at: "2026-08-12T12:00:00Z", updated_at: "2026-08-12T12:30:00Z",
+  };
+  const calls = [];
+  const adapter = createHTTPAdapter({ fetchImpl: async (url, options) => {
+    const parsed = new URL(String(url), "https://commons.example");
+    calls.push({ parsed, options });
+    if (parsed.pathname === "/v1/project-archaeology/catalog") return apiResponse({ items: payload.discovery.candidates, next_cursor: "cursor-2", total: 101 });
+    if (parsed.pathname === "/v1/project-archaeology/batches/BATCH-1/outcomes") return apiResponse({ items: payload.review.proposed_outcomes, next_cursor: "" });
+    if (parsed.pathname === "/v1/project-archaeology/batches/BATCH-1") return apiResponse({ ...summary, tasks: payload.handoff.tasks.map((task) => ({ ...task, project_name: "Archived Codex Commons" })), review: { ...payload.review, proposed_outcomes: [] }, outcomes_next_cursor: "opaque-5" });
+    if (parsed.pathname === "/v1/project-archaeology/batches") return apiResponse({ items: [summary], next_cursor: "older" });
+    if (parsed.pathname === "/v1/installation-status") return apiResponse({
+      service: { version: "dogfood.15" },
+      database: { schema_version: 15 },
+      codex: { configured: true, available: true, version: "0.147.0", account_state: "signed_in", compatibility_status: "compatible", compatibility_checked_at: "2026-08-12T12:20:00Z", session_revocation_pending: false },
+      archaeology: { catalog_completed_at: "2026-08-12T12:00:00Z", active_count: 0, uncertain_count: 0 },
+      backup: { last_verified_at: "2026-08-12T11:00:00Z", status: "verified" },
+      reconciliation: { last_at: "2026-08-12T12:25:00Z", status: "healthy" },
+      evidence: { completed_historians: 12, failed_historians: 1, uncertain_historians: 0, distinct_projects: 7, reports_received: 11, lost_reports: 0, reviewed_imports: 3, cancellations: 2, report_recovery: { status: "verified", violations: 0, checked_at: "2026-08-12T10:10:00Z" }, duplicate_launch_check: { status: "unknown", violations: 0 }, repository_immutability: { status: "verified", violations: 0, checked_at: "2026-08-12T10:15:00Z" }, canonical_immutability: { status: "attention", violations: 1, checked_at: "2026-08-12T10:20:00Z" }, restore_drill: { status: "verified", last_verified_at: "2026-08-12T10:00:00Z" }, beta_prerequisites_met: false },
+    });
+    throw new Error(`unexpected URL ${url}`);
+  }});
+  const catalog = await adapter.readProjectArchaeologyCatalog({ cursor: "cursor-1", limit: 100, q: "codex", sort: "tasks" });
+  const history = await adapter.readProjectArchaeologyBatches({ cursor: "", limit: 20 });
+  const detail = await adapter.readProjectArchaeologyBatch("BATCH-1");
+  const outcomes = await adapter.readProjectArchaeologyBatchOutcomes("BATCH-1", detail.outcomesNextCursor);
+  const status = await adapter.readInstallationStatus();
+  assert.equal(catalog.total, 101);
+  assert.equal(catalog.nextCursor, "cursor-2");
+  assert.equal(calls[0].parsed.searchParams.get("limit"), "100");
+  assert.equal(calls[0].parsed.searchParams.get("cursor"), "cursor-1");
+  assert.equal(calls[0].parsed.searchParams.get("sort"), "tasks");
+  assert.equal(calls[0].parsed.searchParams.get("q"), "codex");
+  assert.equal(history.items[0].hasReport, true);
+  assert.equal(history.nextCursor, "older");
+  assert.equal(detail.tasks[0].jobId, "JOB-1");
+  assert.equal(detail.tasks[0].projectName, "Archived Codex Commons");
+  assert.equal(detail.review.batchId, "BATCH-1");
+  assert.equal(detail.review.proposedOutcomes.length, 0);
+  assert.equal(detail.outcomesNextCursor, "opaque-5");
+  assert.equal(outcomes.items[0].id, "OUT-1");
+  assert.equal(outcomes.nextCursor, "");
+  assert.equal(calls[3].parsed.searchParams.get("cursor"), "opaque-5");
+  assert.equal(status.database.schemaVersion, 15);
+  assert.equal(status.backup.status, "verified");
+  assert.equal(status.reconciliation.status, "healthy");
+  assert.equal(status.codex.compatibilityStatus, "compatible");
+  assert.equal(status.codex.sessionRevocationPending, false);
+  assert.equal(status.evidence.completedHistorians, 12);
+  assert.equal(status.evidence.reportsReceived, 11);
+  assert.equal(status.evidence.duplicateLaunchCheck.status, "unknown");
+  assert.equal(status.evidence.canonicalImmutability.violations, 1);
+  assert.equal(status.evidence.betaPrerequisitesMet, false);
+  assert.equal(status.evidence.restoreDrill.status, "verified");
+});
+
+function selectedImportProject(index, applied = false) {
+  const number = String(index).padStart(2, "0");
+  const digest = `sha256:${"a".repeat(64)}`;
+  const manifestDigest = `sha256:${"b".repeat(64)}`;
+  const source = { kind: "git", stable_id: `git:commit:${number}`, digest, occurred_at: "2026-08-12T13:00:00Z" };
+  const session = `historian-session-${number}`;
+  const key = `history-task-${number}`;
+  const batch = `history-batch-${number}`;
+  return {
+    outcome_id: `OUT-${number}`,
+    project_id: `project-${number}`,
+    request: {
+      schema_version: 1, batch_id: batch, source_digest: digest, confirm_source_digest: "", confirm_manifest_digest: "",
+      collision_policy: "current_wins", project_thread_aliases: [],
+      tasks: [{
+        key, priority: 0, title: `Historical task ${number}`, description: "Exact evidence-bound history.", acceptance: "The reviewed record is durable.", state: "done", source,
+        attributions: [{ session, role: "implementer", confidence: "verified", source: { ...source, kind: "codex_turn", stable_id: `thread:${session}/turn:1` } }],
+        events: [{ key: `event-${number}`, kind: "completed", summary: "Verified completion.", session, confidence: "verified", source }],
+      }],
+    },
+    preview: {
+      batch_id: batch, source_digest: digest, manifest_digest: manifestDigest, collision_policy: "current_wins",
+      state: applied ? "applied" : "preview", applied,
+      ...(applied ? { recorded_at: "2026-08-12T14:00:00Z" } : {}),
+      tasks: [{ key, id: `TASK-${number}`, disposition: "created" }],
+      counts: { project_thread_aliases: 0, tasks: 1, attributions: 1, events: 1, created: 1, skipped_current: 0, replayed: 0 },
+    },
+  };
+}
+
+test("selected preview canonicalizes reverse order and traverses 31 projects through bounded exact-diff pages", async () => {
+  const selectionDigest = `sha256:${"c".repeat(64)}`;
+  const manifestDigest = `sha256:${"d".repeat(64)}`;
+  const projects = Array.from({ length: 31 }, (_, index) => selectedImportProject(index + 1));
+  const requested = projects.map((project) => project.outcome_id).reverse();
+  const canonical = [...requested].sort();
+  const calls = [];
+  const reviewSessionToken = "s".repeat(43);
+  const reviewCompletionToken = "c".repeat(43);
+  const adapter = createHTTPAdapter({ fetchImpl: async (url, options) => {
+    calls.push({ url: String(url), options });
+    if (String(url).includes("/import-apply")) return apiResponse({ batch_id: "BATCH-SELECTED", outcome_ids: canonical, selection_digest: selectionDigest, manifest_digest: manifestDigest, applied: true, audit_id: "AUDIT-SELECTED" });
+    const pageProjects = [...projects].sort((left, right) => left.outcome_id.localeCompare(right.outcome_id));
+    const cursor = new URL(String(url), "https://commons.example").searchParams.get("cursor");
+    const offset = cursor ? Number(cursor) : 0;
+    if (String(url).includes("/import-preview")) return apiResponse({ batch_id: "BATCH-SELECTED", outcome_ids: canonical, selection_digest: selectionDigest, manifest_digest: manifestDigest, projects: pageProjects.slice(offset, offset + 5), review_session_token: reviewSessionToken, review_expires_at: "2026-08-12T14:30:00Z", ...(offset + 5 < pageProjects.length ? { next_cursor: String(offset + 5) } : { review_completion_token: reviewCompletionToken }) });
+    throw new Error(`unexpected URL ${url}`);
+  }});
+  let bridge = await adapter.previewProjectArchaeologyBatchImport("BATCH-SELECTED", requested, { csrfToken: "csrf", idempotencyKey: "selected-preview" });
+  assert.deepEqual(JSON.parse(calls[0].options.body).outcome_ids, canonical);
+  await assert.rejects(() => adapter.applyProjectArchaeologyBatchImport(bridge, manifestDigest, true, { csrfToken: "csrf", idempotencyKey: "selected-apply-early" }), (error) => error.code === "manifest_confirmation_required");
+  let pageNumber = 0;
+  while (bridge.nextCursor) bridge = await adapter.previewProjectArchaeologyBatchImportPage(bridge, bridge.nextCursor, { csrfToken: "csrf", idempotencyKey: `selected-preview-page-${++pageNumber}` });
+  assert.equal(bridge.projects.length, 31);
+  assert.equal(bridge.proposal.tasks.length, 31);
+  assert.equal(bridge.nextCursor, "");
+  assert.deepEqual(bridge.outcomeIds, canonical);
+  assert.equal(calls.length, 7);
+  assert.equal(bridge.reviewCompletionToken, reviewCompletionToken);
+  assert.equal(new URL(calls.at(-1).url, "https://commons.example").searchParams.get("cursor"), "30");
+  assert.equal(calls.every((call) => JSON.parse(call.options.body).outcome_ids.join() === canonical.join()), true);
+  assert.equal(calls.slice(1).every((call) => JSON.parse(call.options.body).review_session_token === reviewSessionToken), true);
+  assert.equal(new Set(calls.slice(0, 7).map((call) => call.options.headers["Idempotency-Key"])).size, 7);
+  const applied = await adapter.applyProjectArchaeologyBatchImport(bridge, manifestDigest, true, { csrfToken: "csrf", idempotencyKey: "selected-apply" });
+  assert.equal(applied.auditId, "AUDIT-SELECTED");
+  assert.equal(JSON.parse(calls.at(-1).options.body).review_completion_token, reviewCompletionToken);
+  await assert.rejects(() => adapter.previewProjectArchaeologyBatchImport("BATCH-SELECTED", ["OUT-01", "OUT-01"], { csrfToken: "csrf", idempotencyKey: "duplicate" }), (error) => error.code === "invalid_archaeology_selection");
+  assert.equal(calls.length, 8, "duplicate selections are rejected before transport");
+});
+
+test("selected preview rejects a digest change on a later server-attested page", async () => {
+  const selectionDigest = `sha256:${"c".repeat(64)}`;
+  const manifestDigest = `sha256:${"d".repeat(64)}`;
+  const changedManifest = `sha256:${"e".repeat(64)}`;
+  const projects = Array.from({ length: 6 }, (_, index) => selectedImportProject(index + 1));
+  const outcomeIDs = projects.map((project) => project.outcome_id);
+  const sessionToken = "s".repeat(43);
+  const adapter = createHTTPAdapter({ fetchImpl: async (url) => {
+    const page = String(url).includes("import-preview-page");
+    return apiResponse({
+      batch_id: "BATCH-CHANGED", outcome_ids: outcomeIDs, selection_digest: selectionDigest,
+      manifest_digest: page ? changedManifest : manifestDigest,
+      projects: page ? projects.slice(5) : projects.slice(0, 5),
+      review_session_token: sessionToken, review_expires_at: "2026-08-12T14:30:00Z",
+      ...(page ? { review_completion_token: "c".repeat(43) } : { next_cursor: "5" }),
+    });
+  }});
+  const bridge = await adapter.previewProjectArchaeologyBatchImport("BATCH-CHANGED", outcomeIDs, { csrfToken: "csrf", idempotencyKey: "changed-first" });
+  await assert.rejects(() => adapter.previewProjectArchaeologyBatchImportPage(bridge, bridge.nextCursor, { csrfToken: "csrf", idempotencyKey: "changed-next" }), (error) => error.code === "archaeology_preview_changed");
 });

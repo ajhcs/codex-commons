@@ -39,7 +39,7 @@ func TestReviewedHistoricalApplyRequestMatchesServerDTO(t *testing.T) {
 	if err != nil || !report.ApplyEligible {
 		t.Fatalf("preview eligible=%v err=%v blockers=%+v", report.ApplyEligible, err, report.Blockers)
 	}
-	request, err := historicalimport.BuildApplyRequest(manifest, report, report.SourceDigest)
+	request, err := historicalimport.BuildApplyRequest(manifest, report, report.SourceDigest, report.ManifestDigest)
 	if err != nil {
 		t.Fatal(err)
 	}

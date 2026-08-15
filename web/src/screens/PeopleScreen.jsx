@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { copyText, manualCopyShortcut } from "../browser/copyText.js";
 import Copy from "../icons/Copy.tsx";
 import { PageHeader, Notice } from "../components/AppShell.jsx";
 import { CursorPager, SearchField, Select, Timestamp } from "../components/Controls.jsx";
@@ -69,17 +70,23 @@ function FactBadge({ tone, children }) {
 
 function SessionDialog({ session, onClose, onCopied }) {
   const ref = useRef(null);
+  const [copyStatus, setCopyStatus] = useState("");
   useEffect(() => {
     const dialog = ref.current;
     if (session && dialog && !dialog.open) dialog.showModal();
     if (!session && dialog?.open) dialog.close();
+    if (session) setCopyStatus("");
   }, [session]);
   if (!session) return <dialog ref={ref} />;
 
   async function copyIdentity() {
-    await navigator.clipboard?.writeText(session.session);
-    onCopied();
-    onClose();
+    const copied = await copyText(session.session);
+    if (copied) {
+      onCopied();
+      onClose();
+      return;
+    }
+    setCopyStatus(`Copy isn’t available here. Select the session ID and press ${manualCopyShortcut()}.`);
   }
 
   return (
@@ -94,6 +101,7 @@ function SessionDialog({ session, onClose, onCopied }) {
         <div><dt>Loaded</dt><dd>{session.loaded}</dd></div>
       </dl>
       <div className="dialog-note">This view reports observable facts only. It does not infer whether the agent is available.</div>
+      {copyStatus ? <p className="form-message form-message--error" role="status">{copyStatus}</p> : null}
       <div className="dialog-actions"><button className="secondary-button" type="button" onClick={onClose}>Done</button><button className="primary-button" type="button" onClick={copyIdentity}><Copy aria-hidden="true" />Copy session ID</button></div>
     </dialog>
   );

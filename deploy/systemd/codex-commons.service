@@ -1,0 +1,33 @@
+[Unit]
+Description=Codex Commons personal dogfood
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+WatchdogSec=60
+EnvironmentFile=%h/.config/codex-commons/dogfood.env
+WorkingDirectory=%h/.local/lib/codex-commons/current
+ExecStartPre=/bin/sh %h/.local/lib/codex-commons/current/ops/verify-release.sh
+ExecStart=%h/.local/lib/codex-commons/current/commons-server
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+KillMode=mixed
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=%h/.local/state/codex-commons %h/.codex
+ProtectKernelTunables=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictRealtime=true
+TasksMax=256
+MemoryMax=2G
+LimitNOFILE=4096
+UMask=0077
+
+[Install]
+WantedBy=default.target

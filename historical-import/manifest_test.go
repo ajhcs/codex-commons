@@ -149,7 +149,7 @@ func TestCurrentWinsAndIdempotencyAreStable(t *testing.T) {
 	if first.Tasks[0].IdempotencyKey != second.Tasks[0].IdempotencyKey {
 		t.Fatal("idempotency key is not stable")
 	}
-	request, err := BuildApplyRequest(manifest, first, first.SourceDigest)
+	request, err := BuildApplyRequest(manifest, first, first.SourceDigest, first.ManifestDigest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -355,10 +355,13 @@ func TestApplyContractRequiresReviewedDigestAndIsAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := BuildApplyRequest(manifest, report, ""); err == nil {
+	if _, err := BuildApplyRequest(manifest, report, "", report.ManifestDigest); err == nil {
 		t.Fatal("missing digest confirmation must fail")
 	}
-	request, err := BuildApplyRequest(manifest, report, report.SourceDigest)
+	if _, err := BuildApplyRequest(manifest, report, report.SourceDigest, ""); err == nil {
+		t.Fatal("missing manifest confirmation must fail")
+	}
+	request, err := BuildApplyRequest(manifest, report, report.SourceDigest, report.ManifestDigest)
 	if err != nil {
 		t.Fatal(err)
 	}
