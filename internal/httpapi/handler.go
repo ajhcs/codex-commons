@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -46,11 +47,16 @@ type Config struct {
 	HumanSessionStore      HumanSessionStore
 	OnHumanIdentityUpdated func(displayName, handle string, revision int64)
 	CodexAuth              *CodexAuthConfig
+	// RuntimeHealth is an optional direct provider for deployments whose
+	// backend is a composition rather than the store backend. Most callers can
+	// leave it unset: NewHandler discovers RuntimeHealthBackend on the backend.
+	RuntimeHealth RuntimeHealthProvider
 }
 
 type handler struct {
 	backend               Backend
 	config                Config
+	runtimeHealth         RuntimeHealthProvider
 	humanAuth             *humanAuth
 	pairings              *pairingManager
 	serial                atomic.Uint64
@@ -83,7 +89,7 @@ func NewHandler(backend Backend, config Config) http.Handler {
 	if config.Version == "" {
 		config.Version = "dev"
 	}
-	h := &handler{backend: backend, config: config, humanAuth: newHumanAuth(config.HumanAuth, config.HumanSessionStore), pairings: newPairingManager()}
+	h := &handler{backend: backend, config: config, runtimeHealth: config.RuntimeHealth, humanAuth: newHumanAuth(config.HumanAuth, config.HumanSessionStore), pairings: newPairingManager()}
 	if config.CodexAuth != nil && config.CodexAuth.Client != nil {
 		config.CodexAuth.Client.SetEventHandler(func(event codexauth.Event) {
 			if h.humanAuth != nil && event.Kind == "account_updated" {
@@ -148,12 +154,13 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		meta := RequestMeta{PrincipalKind: "human", Principal: domain.HumanLocalPrincipal, RequestID: rid}
-		backend, ok := h.backend.(InstallationStatusBackend)
-		if !ok {
+		installation, hasInstallation := h.backend.(InstallationStatusBackend)
+		_, hasSnapshot := h.backend.(RuntimeHealthBackend)
+		if h.runtimeHealth == nil && !hasSnapshot && !hasInstallation {
 			h.finish(w, meta, nil, NewError(CodeUnavailable, "installation readiness unavailable"), false)
 			return
 		}
-		out, statusErr := backend.InstallationStatus(r.Context(), meta)
+		out, statusErr := h.runtimeStatus(r.Context(), installation, meta)
 		h.finish(w, meta, out, statusErr, false)
 		return
 	}
@@ -612,6 +619,36 @@ func (h *handler) health(w http.ResponseWriter, r *http.Request, rid string) {
 		out.Version = h.config.Version
 	}
 	h.finish(w, RequestMeta{RequestID: rid}, out, err, false)
+}
+
+// runtimeStatus is the only projection used by the loopback readiness route.
+// A configured provider or a backend RuntimeHealthBackend is a pure snapshot
+// accessor. The InstallationStatus fallback is retained for small legacy
+// backends and tests that predate the runtime-health seam; production wiring
+// supplies one of the snapshot paths above.
+func (h *handler) runtimeStatus(ctx context.Context, installation InstallationStatusBackend, meta RequestMeta) (InstallationStatusResult, error) {
+	var snapshot RuntimeHealthSnapshot
+	var found bool
+	if h.runtimeHealth != nil {
+		snapshot, found = CloneRuntimeHealthSnapshot(h.runtimeHealth.Snapshot()), true
+	} else if backend, ok := h.backend.(RuntimeHealthBackend); ok {
+		snapshot, found = CloneRuntimeHealthSnapshot(backend.RuntimeHealth()), true
+	}
+	if found {
+		out := InstallationStatusResult{Runtime: snapshot}
+		out.Service.Version = h.config.Version
+		if !snapshot.Ready {
+			// Reasons and statuses are included in the bounded response snapshot,
+			// but the transport error remains generic so a malformed provider can
+			// never turn private diagnostics into an HTTP error body.
+			return out, NewError(CodeUnavailable, "runtime not ready")
+		}
+		return out, nil
+	}
+	if installation == nil {
+		return InstallationStatusResult{}, NewError(CodeUnavailable, "installation readiness unavailable")
+	}
+	return installation.InstallationStatus(ctx, meta)
 }
 
 func (h *handler) authenticate(r *http.Request) (authPrincipal, bool) {

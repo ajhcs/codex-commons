@@ -15,6 +15,8 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -24,6 +26,7 @@ import (
 	"codex-commons/internal/domain"
 	"codex-commons/internal/httpapi"
 	"codex-commons/internal/presence"
+	"codex-commons/internal/runtimehealth"
 	commonsstore "codex-commons/internal/store"
 	"codex-commons/internal/storebackend"
 )
@@ -33,12 +36,15 @@ var zeroTime time.Time
 type SeedFunc func(context.Context, *commonsstore.Store, *presence.Registry, time.Time) error
 
 type App struct {
-	config   Config
-	handler  http.Handler
-	store    *commonsstore.Store
-	presence *presence.Registry
-	codex    codexauth.Client
-	service  *application.Service
+	config    Config
+	handler   http.Handler
+	store     *commonsstore.Store
+	presence  *presence.Registry
+	codex     codexauth.Client
+	service   *application.Service
+	runtime   *runtimeHealthMonitor
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
@@ -86,26 +92,10 @@ func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
 	}
 	var codexClient codexauth.Client = config.CodexClient
 	if config.CodexAuth && codexClient == nil {
-		codexClient, err = codexauth.NewManagedProcess(ctx, codexauth.ProcessConfig{Executable: config.CodexBin, Env: codexauth.ApprovedEnvironment(os.Environ()), EnableExperimentalDynamicTools: config.EnableExperimentalHistorian})
-		if err != nil {
-			// Codex is an optional capability. Keep Commons available and let
-			// /v1/auth/codex/status report the unavailable state.
-			codexClient = codexauth.NewUnavailable()
-		}
-	}
-	if config.CodexAuth {
-		compatibility := "unavailable"
-		if archaeology, ok := codexClient.(codexauth.ArchaeologyClient); ok && codexClient.Available() {
-			supported, supportErr := archaeology.SupportsModel(ctx, "gpt-5.6-luna", "max")
-			if supportErr == nil && supported {
-				compatibility = "compatible"
-			} else if supportErr == nil {
-				compatibility = "incompatible"
-			}
-		}
-		if err := store.RecordCompatibilityStatus(ctx, compatibility, time.Now().UTC()); err != nil {
-			return nil, fmt.Errorf("record Codex compatibility: %w", err)
-		}
+		// The asynchronous constructor keeps one managed supervisor and its
+		// archaeology capability object alive even when the first child spawn is
+		// unavailable. Recovery and generation ownership stay in codexauth.
+		codexClient = codexauth.NewManagedProcessAsync(ctx, codexauth.ProcessConfig{Executable: config.CodexBin, Env: codexauth.ApprovedEnvironment(os.Environ()), EnableExperimentalDynamicTools: config.EnableExperimentalHistorian})
 	}
 	defer func() {
 		if failed {
@@ -168,22 +158,74 @@ func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
 			service.CloseProjectArchaeology()
 		}
 	}()
-	if archaeologyClient, ok := codexClient.(codexauth.ArchaeologyClient); ok && codexClient.Available() {
-		bridge := &codexArchaeologyBridge{client: archaeologyClient, roots: config.ArchaeologyRoots, catalogKey: config.CodexBindingKey}
-		service.ConfigureProjectArchaeology(bridge, nil)
-		if config.EnableExperimentalHistorian {
-			if err := service.ConfigureNativeProjectArchaeology(ctx, bridge, domain.HumanLocalPrincipal); err != nil {
-				return nil, fmt.Errorf("configure historian scheduler: %w", err)
+	var schedulerEligible atomic.Bool
+	if config.CodexAuth {
+		// The managed supervisor implements ArchaeologyClient from construction
+		// time. Do not gate this topology on Available(): the initial generation
+		// may be starting/recovering while the bridge and scheduler remain wired.
+		if archaeologyClient, ok := codexClient.(codexauth.ArchaeologyClient); ok {
+			bridge := &codexArchaeologyBridge{
+				client: archaeologyClient, roots: config.ArchaeologyRoots, catalogKey: config.CodexBindingKey,
+				schedulerEligible: schedulerEligible.Load,
 			}
+			service.ConfigureProjectArchaeology(bridge, nil)
+			if config.EnableExperimentalHistorian {
+				if err := service.ConfigureNativeProjectArchaeology(ctx, bridge, domain.HumanLocalPrincipal); err != nil {
+					return nil, fmt.Errorf("configure historian scheduler: %w", err)
+				}
+			}
+		} else if len(config.ArchaeologyRoots) > 0 {
+			service.ConfigureProjectArchaeology(allowlistedArchaeologyDiscoverer{roots: config.ArchaeologyRoots}, nil)
 		}
 	} else if len(config.ArchaeologyRoots) > 0 {
 		service.ConfigureProjectArchaeology(allowlistedArchaeologyDiscoverer{roots: config.ArchaeologyRoots}, nil)
 	}
+	probe := runtimeHealthProbeForStore(store)
+	if probe.Persistence != nil {
+		basePersistence := probe.Persistence
+		probe.Persistence = func(probeCtx context.Context) (runtimePersistenceResult, error) {
+			value, probeErr := basePersistence(probeCtx)
+			if probeErr == nil {
+				value.PersistenceFault = service.NativeProjectArchaeologySchedulerStatus().PersistenceFault
+			}
+			return value, probeErr
+		}
+	}
+	if config.CodexAuth {
+		codexProbe := runtimeHealthProbeForClient(codexClient)
+		probe.Supervisor, probe.Account, probe.Compatibility = codexProbe.Supervisor, codexProbe.Account, codexProbe.Compatibility
+	}
+	var schedulerWake func()
+	// The application package owns the scheduler and may expose a narrow wake
+	// seam as it lands. Keep the adapter optional so this server package does
+	// not reach through private scheduler state or invent a second owner.
+	switch waker := any(service).(type) {
+	case interface{ WakeNativeProjectArchaeology() }:
+		schedulerWake = waker.WakeNativeProjectArchaeology
+	case interface{ WakeNativeProjectArchaeologyScheduler() }:
+		schedulerWake = waker.WakeNativeProjectArchaeologyScheduler
+	case interface{ NotifyNativeProjectArchaeologyRecovery() }:
+		schedulerWake = waker.NotifyNativeProjectArchaeologyRecovery
+	}
+	runtime := newRuntimeHealthMonitor(runtimeHealthOptions{
+		Parent:           ctx,
+		RequiredCodex:    config.RequireCodexReady,
+		CodexConfigured:  config.CodexAuth,
+		Probe:            probe,
+		OnSnapshot:       func(snapshot runtimehealth.Snapshot) { schedulerEligible.Store(snapshot.SchedulerEligible) },
+		OnSchedulerReady: schedulerWake,
+	})
+	defer func() {
+		if failed {
+			runtime.Close()
+		}
+	}()
 	if config.HumanAuth != nil {
 		config.HumanAuth.DisplayName = humanDisplayName
 		config.HumanAuth.Handle = humanHandle
 		service.ConfigureHumanIdentity(humanDisplayName, humanHandle)
 	}
+	legacy.ConfigureRuntimeHealth(runtime)
 	backend, err := appbackend.New(legacy, service)
 	if err != nil {
 		return nil, err
@@ -205,7 +247,7 @@ func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
 			expectedHost = origin.Host
 		}
 	}
-	apiConfig := httpapi.Config{Credentials: credentials, ExpectedHost: expectedHost, PublicOrigin: config.PublicOrigin, InternalReadinessHost: config.Listen, HumanAuth: config.HumanAuth, HumanBindingStore: store, HumanAuthEvents: store, HumanSessionStore: store, OnHumanIdentityUpdated: func(displayName, handle string, _ int64) {
+	apiConfig := httpapi.Config{Credentials: credentials, ExpectedHost: expectedHost, PublicOrigin: config.PublicOrigin, InternalReadinessHost: config.Listen, HumanAuth: config.HumanAuth, HumanBindingStore: store, HumanAuthEvents: store, HumanSessionStore: store, RuntimeHealth: runtime, OnHumanIdentityUpdated: func(displayName, handle string, _ int64) {
 		service.ConfigureHumanIdentity(displayName, handle)
 	}, Version: config.Version}
 	if config.CodexAuth && codexClient != nil {
@@ -220,8 +262,13 @@ func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build web handler: %w", err)
 	}
+	// Publish one bounded initial observation before returning the app. This
+	// keeps readiness conservative until a real snapshot exists while avoiding
+	// any dependency I/O in the HTTP readiness handler itself.
+	runtime.probeAndPublish(ctx)
 	failed = false
-	return &App{config: config, handler: handler, store: store, presence: live, codex: codexClient, service: service}, nil
+	runtime.Start()
+	return &App{config: config, handler: handler, store: store, presence: live, codex: codexClient, service: service, runtime: runtime}, nil
 }
 
 func (a *App) Handler() http.Handler { return a.handler }
@@ -230,13 +277,23 @@ func (a *App) Close() error {
 	if a == nil || a.store == nil {
 		return nil
 	}
-	if a.service != nil {
-		a.service.CloseProjectArchaeology()
-	}
-	if a.codex != nil {
-		_ = a.codex.Close()
-	}
-	return a.store.Close()
+	a.closeOnce.Do(func() {
+		if a.runtime != nil {
+			a.runtime.Close()
+		}
+		if a.service != nil {
+			a.service.CloseProjectArchaeology()
+		}
+		if a.codex != nil {
+			if err := a.codex.Close(); err != nil {
+				a.closeErr = err
+			}
+		}
+		if err := a.store.Close(); a.closeErr == nil {
+			a.closeErr = err
+		}
+	})
+	return a.closeErr
 }
 
 func configuredCredentialPurpose(actor string) string {
@@ -255,6 +312,12 @@ func configuredCredentialPurpose(actor string) string {
 func (a *App) Serve(ctx context.Context, logger *slog.Logger) error {
 	if logger == nil {
 		logger = slog.Default()
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if a == nil || a.runtime == nil {
+		return errors.New("runtime health monitor unavailable")
 	}
 	listener, err := net.Listen("tcp", a.config.Listen)
 	if err != nil {
@@ -281,20 +344,69 @@ func (a *App) Serve(ctx context.Context, logger *slog.Logger) error {
 		}
 	}()
 	logger.Info("commons server listening", "address", listener.Addr().String(), "anonymous_read", a.config.AnonymousRead)
-	notifier := newServiceNotifier(logger, func() bool {
-		check, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		return a.store.DB().PingContext(check) == nil
+	notifierCtx, notifierCancel := context.WithCancel(ctx)
+	defer notifierCancel()
+	notifier := newServiceNotifierWithOptions(logger, serviceNotifierOptions{
+		Context:  notifierCtx,
+		Snapshot: func() NotifierHealthSnapshot { return a.runtime.watchdogSnapshot() },
+		OnFatal: func(_ error) {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), a.config.ShutdownTimeout)
+			defer cancel()
+			_ = server.Shutdown(shutdownCtx)
+		},
 	})
-	notifier.ready()
-	defer notifier.close()
+	notifierDone := make(chan struct{})
+	notifierErr := make(chan error, 1)
+	go func() {
+		defer close(notifierDone)
+		if notifyErr := notifier.Run(notifierCtx); notifyErr != nil {
+			select {
+			case notifierErr <- notifyErr:
+			default:
+			}
+			if !errors.Is(notifyErr, context.Canceled) && !errors.Is(notifyErr, context.DeadlineExceeded) {
+				logger.Warn("systemd notifier stopped", "error", notifyErr)
+			}
+		}
+	}()
+	readyDone := make(chan struct{})
+	go func() {
+		defer close(readyDone)
+		if a.runtime.WaitReady(notifierCtx) == nil {
+			notifier.ready()
+		}
+	}()
+	var teardownOnce sync.Once
+	teardown := func() {
+		teardownOnce.Do(func() {
+			notifierCancel()
+			<-notifierDone
+			<-readyDone
+			notifier.close()
+		})
+	}
+	defer teardown()
 	err = server.Serve(listener)
 	close(serveDone)
 	<-shutdownDone
-	if errors.Is(err, http.ErrServerClosed) {
-		err = nil
+	teardown()
+	var notifyFailure error
+	select {
+	case notifyErr := <-notifierErr:
+		notifyFailure = notifyErr
+	default:
 	}
-	return err
+	return serveResult(err, notifyFailure)
+}
+
+func serveResult(serverErr, notifierErr error) error {
+	if errors.Is(serverErr, http.ErrServerClosed) {
+		serverErr = nil
+	}
+	if notifierErr != nil && !errors.Is(notifierErr, context.Canceled) && !errors.Is(notifierErr, context.DeadlineExceeded) {
+		return notifierErr
+	}
+	return serverErr
 }
 
 func randomToken() (string, error) {

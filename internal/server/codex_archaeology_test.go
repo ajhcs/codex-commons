@@ -45,6 +45,44 @@ type availabilityCountingClient struct {
 	calls int
 }
 
+type generationAvailabilityClient struct {
+	availabilityCountingClient
+	generation uint64
+	supported  bool
+}
+
+func (c *generationAvailabilityClient) Snapshot() codexauth.Snapshot {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return codexauth.Snapshot{State: codexauth.ProcessStateAvailable, Generation: c.generation}
+}
+
+func (c *generationAvailabilityClient) setGeneration(generation uint64) {
+	c.mu.Lock()
+	c.generation = generation
+	c.mu.Unlock()
+}
+
+func (c *generationAvailabilityClient) setSupported(supported bool) {
+	c.mu.Lock()
+	c.supported = supported
+	c.mu.Unlock()
+}
+
+func (c *generationAvailabilityClient) SupportsModel(context.Context, string, string) (bool, error) {
+	c.mu.Lock()
+	c.calls++
+	supported := c.supported
+	c.mu.Unlock()
+	return supported, nil
+}
+
+func (c *generationAvailabilityClient) callCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls
+}
+
 type recoveryCatalogClient struct {
 	catalogClient
 	cwd, title string
@@ -595,5 +633,44 @@ func TestNativeBridgeCachesModelCapabilityAcrossCanonicalPolls(t *testing.T) {
 	client.mu.Unlock()
 	if calls != 2 {
 		t.Fatalf("SupportsModel calls=%d want 2 after bridge restart", calls)
+	}
+}
+
+func TestNativeBridgeRevalidatesCapabilityOnReporterGenerationChange(t *testing.T) {
+	client := &generationAvailabilityClient{generation: 1, supported: true}
+	bridge := &codexArchaeologyBridge{client: client}
+
+	if err := bridge.Available(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := bridge.Available(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := client.callCount(); got != 1 {
+		t.Fatalf("same-generation positive cache calls=%d want 1", got)
+	}
+
+	client.setGeneration(2)
+	client.setSupported(false)
+	if err := bridge.Available(context.Background()); !errors.Is(err, codexauth.ErrUnavailable) {
+		t.Fatalf("changed-generation capability error=%v want ErrUnavailable", err)
+	}
+	if got := client.callCount(); got != 2 {
+		t.Fatalf("generation change did not invalidate positive cache, calls=%d want 2", got)
+	}
+	if err := bridge.Available(context.Background()); !errors.Is(err, codexauth.ErrUnavailable) {
+		t.Fatalf("same-generation negative cache error=%v want ErrUnavailable", err)
+	}
+	if got := client.callCount(); got != 2 {
+		t.Fatalf("same-generation negative cache calls=%d want 2", got)
+	}
+
+	client.setGeneration(3)
+	client.setSupported(true)
+	if err := bridge.Available(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := client.callCount(); got != 3 {
+		t.Fatalf("generation change did not invalidate negative cache, calls=%d want 3", got)
 	}
 }

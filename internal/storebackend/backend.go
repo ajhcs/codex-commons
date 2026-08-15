@@ -19,17 +19,38 @@ import (
 )
 
 type Backend struct {
-	store        *commonsstore.Store
-	presence     *presence.Registry
-	version      string
-	now          func() time.Time
-	startedAt    time.Time
-	codex        codexauth.Client
-	codexVersion string
+	store         *commonsstore.Store
+	presence      *presence.Registry
+	version       string
+	now           func() time.Time
+	startedAt     time.Time
+	codex         codexauth.Client
+	codexVersion  string
+	runtimeHealth httpapi.RuntimeHealthProvider
+	// runtimeHealthConfigured distinguishes the production snapshot seam from
+	// legacy callers that construct the backend without a supervisor. The
+	// former must remain pure; the latter retains the established DB-gated
+	// liveness behavior instead of silently accepting a synthetic green state.
+	runtimeHealthConfigured bool
 }
 
 func (b *Backend) ConfigureCodex(client codexauth.Client, version string) {
 	b.codex, b.codexVersion = client, version
+}
+
+// ConfigureRuntimeHealth wires the process-local health snapshot published by
+// the runtime supervisor. The provider is intentionally a small interface so
+// the storage backend does not depend on the supervisor's concrete package.
+// Passing nil restores the conservative legacy mode used by callers that do
+// not own a runtime supervisor.
+func (b *Backend) ConfigureRuntimeHealth(provider httpapi.RuntimeHealthProvider) {
+	if provider == nil {
+		b.runtimeHealth = defaultRuntimeHealthProvider()
+		b.runtimeHealthConfigured = false
+		return
+	}
+	b.runtimeHealth = provider
+	b.runtimeHealthConfigured = true
 }
 
 const presenceIdleWindow = time.Hour
@@ -38,20 +59,78 @@ func New(store *commonsstore.Store, live *presence.Registry, version string) (*B
 	if store == nil || live == nil {
 		return nil, errors.New("store and presence registry required")
 	}
-	return &Backend{store: store, presence: live, version: version, now: time.Now, startedAt: time.Now().UTC()}, nil
+	return &Backend{store: store, presence: live, version: version, now: time.Now, startedAt: time.Now().UTC(), runtimeHealth: defaultRuntimeHealthProvider()}, nil
 }
 
-func (b *Backend) Health(ctx context.Context, _ httpapi.RequestMeta) (httpapi.HealthResult, error) {
-	if err := b.store.DB().PingContext(ctx); err != nil {
-		return httpapi.HealthResult{}, httpapi.NewError(httpapi.CodeUnavailable, "database unavailable")
+// NewWithRuntimeHealth is the explicit wiring constructor for the server. New
+// remains the compatibility path for tests and small callers that do not own a
+// supervisor yet. A nil provider deliberately keeps that legacy path DB-gated.
+func NewWithRuntimeHealth(store *commonsstore.Store, live *presence.Registry, version string, provider httpapi.RuntimeHealthProvider) (*Backend, error) {
+	backend, err := New(store, live, version)
+	if err != nil {
+		return nil, err
 	}
-	return httpapi.HealthResult{Status: "ok", Version: b.version}, nil
+	backend.ConfigureRuntimeHealth(provider)
+	return backend, nil
+}
+
+// RuntimeHealth returns a defensive copy of the last supervisor snapshot. An
+// unconfigured backend exposes a conservative unknown snapshot; it must never
+// claim that a real database is live merely because no supervisor was wired.
+// Providers are expected to publish immutable values, but copying the map and
+// time pointers here prevents a caller from mutating a provider-owned value
+// through the response projection.
+func (b *Backend) RuntimeHealth() httpapi.RuntimeHealthSnapshot {
+	if b == nil || !b.runtimeHealthConfigured || b.runtimeHealth == nil {
+		return defaultRuntimeHealthSnapshot()
+	}
+	return cloneRuntimeHealthSnapshot(b.runtimeHealth.Snapshot())
+}
+
+func defaultRuntimeHealthProvider() httpapi.RuntimeHealthProvider {
+	return httpapi.RuntimeHealthProviderFunc(defaultRuntimeHealthSnapshot)
+}
+
+func defaultRuntimeHealthSnapshot() httpapi.RuntimeHealthSnapshot {
+	return httpapi.RuntimeHealthSnapshot{
+		Mode: "optional", Required: false, State: "starting", Ready: false, Live: false, Liveness: false, Status: "starting", Reason: "runtime_health_unconfigured",
+		Components: map[string]httpapi.RuntimeComponentSnapshot{
+			"database": {State: "unknown", Ready: false, Required: true, Status: "unknown", Reason: "database_unknown"},
+			"codex":    {State: "unknown", Ready: false, Required: false, Status: "unknown", Reason: "runtime_health_unconfigured"},
+		},
+	}
+}
+
+func cloneRuntimeHealthSnapshot(in httpapi.RuntimeHealthSnapshot) httpapi.RuntimeHealthSnapshot {
+	return httpapi.CloneRuntimeHealthSnapshot(in)
+}
+
+// Health is the public liveness projection. Production wiring supplies the
+// immutable runtime provider, in which case this method performs no I/O and
+// gates only on its cached Live value. A backend without an explicit provider
+// retains the old DB ping for compatibility with standalone callers/tests;
+// that path is not used by the server's production health endpoints.
+func (b *Backend) Health(ctx context.Context, _ httpapi.RequestMeta) (httpapi.HealthResult, error) {
+	if b == nil || !b.runtimeHealthConfigured {
+		if b == nil || b.store == nil || b.store.DB().PingContext(ctx) != nil {
+			return httpapi.HealthResult{}, httpapi.NewError(httpapi.CodeUnavailable, "database unavailable")
+		}
+		return httpapi.HealthResult{Status: "ok", Version: b.version}, nil
+	}
+	result := httpapi.HealthResult{Status: "ok", Version: b.version}
+	snapshot := b.RuntimeHealth()
+	if !snapshot.Live {
+		result.Status = "degraded"
+		return result, httpapi.NewError(httpapi.CodeUnavailable, "service unavailable")
+	}
+	return result, nil
 }
 
 func (b *Backend) InstallationStatus(ctx context.Context, _ httpapi.RequestMeta) (httpapi.InstallationStatusResult, error) {
 	var out httpapi.InstallationStatusResult
 	out.Service.Version = b.version
 	out.Service.StartedAt = b.startedAt
+	out.Runtime = b.RuntimeHealth()
 	out.Codex.AccountState = "unknown"
 	out.Codex.Configured = b.codex != nil
 	out.Codex.Version = b.codexVersion

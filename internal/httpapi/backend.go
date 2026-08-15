@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"codex-commons/internal/application"
+	"codex-commons/internal/runtimehealth"
 )
 
 // Backend is the complete storage boundary for the Slice 2 transport. It is
@@ -40,6 +41,11 @@ type InstallationStatusResult struct {
 		Version   string    `json:"version"`
 		StartedAt time.Time `json:"started_at"`
 	} `json:"service"`
+	// Runtime is the process-local health projection. It is populated from the
+	// immutable snapshot maintained by the runtime supervisor; transport
+	// handlers must never derive it by probing a dependency. Keeping this
+	// section additive preserves the established installation-status contract.
+	Runtime  RuntimeHealthSnapshot `json:"runtime"`
 	Database struct {
 		SchemaVersion int `json:"schema_version"`
 	} `json:"database"`
@@ -90,6 +96,203 @@ type EvidenceVerification struct {
 	Status     string     `json:"status"`
 	Violations int        `json:"violations"`
 	CheckedAt  *time.Time `json:"checked_at,omitempty"`
+}
+
+// RuntimeHealthSnapshot is the storage-neutral projection of the shared
+// runtime supervisor snapshot. The runtimehealth package owns the mutable
+// state; this value is deliberately copied before it reaches a handler so
+// JSON projection cannot observe a partially-updated supervisor state.
+//
+// Mode is "required" or "optional". Required describes the deployment's
+// policy, while Ready is the supervisor's final readiness decision. In
+// particular, an unavailable optional Codex component must not be treated as
+// a failed Commons readiness result.
+type RuntimeHealthSnapshot struct {
+	Mode              string                              `json:"mode"`
+	Required          bool                                `json:"required"`
+	State             string                              `json:"state"`
+	Ready             bool                                `json:"ready"`
+	Live              bool                                `json:"live"`
+	Liveness          bool                                `json:"liveness"`
+	WatchdogEligible  bool                                `json:"watchdog_eligible"`
+	SchedulerEligible bool                                `json:"scheduler_eligible"`
+	Status            string                              `json:"status"`
+	Reason            string                              `json:"reason,omitempty"`
+	ObservedAt        *time.Time                          `json:"observed_at,omitempty"`
+	LastSuccessAt     *time.Time                          `json:"last_success_at,omitempty"`
+	LastFailureAt     *time.Time                          `json:"last_failure_at,omitempty"`
+	Generation        uint64                              `json:"generation"`
+	Supervisor        RuntimeSupervisorSnapshot           `json:"supervisor"`
+	Components        map[string]RuntimeComponentSnapshot `json:"components"`
+}
+
+// RuntimeSupervisorSnapshot contains bounded, non-secret supervisor
+// metadata. LastError is intentionally absent: error payloads can contain
+// command paths, environment details, or other values that are not safe for
+// an HTTP response. Runtimehealth should publish a safe reason/status pair.
+type RuntimeSupervisorSnapshot struct {
+	Generation        uint64     `json:"generation"`
+	State             string     `json:"state"`
+	RetryCount        int        `json:"retry_count"`
+	RetryAt           *time.Time `json:"retry_at,omitempty"`
+	LastHealthy       *time.Time `json:"last_healthy_at,omitempty"`
+	RecoveryActive    bool       `json:"recovery_active"`
+	RecoveryExhausted bool       `json:"recovery_exhausted"`
+	RecoverySince     *time.Time `json:"recovery_since,omitempty"`
+}
+
+// RuntimeComponentSnapshot is a bounded component-level readiness state. A
+// component may be degraded while the overall snapshot remains ready when
+// the component is optional.
+type RuntimeComponentSnapshot struct {
+	State    string `json:"state"`
+	Ready    bool   `json:"ready"`
+	Required bool   `json:"required"`
+	Status   string `json:"status,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+// RuntimeHealthProvider supplies the last immutable health snapshot. Snapshot
+// must be a pure, non-blocking accessor: implementations must not ping the
+// database, query Codex, or perform other I/O in response to an HTTP request.
+type RuntimeHealthProvider interface {
+	Snapshot() RuntimeHealthSnapshot
+}
+
+// RuntimeHealthProviderFunc adapts a closure to RuntimeHealthProvider. It is
+// useful to wire the runtimehealth package without making httpapi depend on
+// the supervisor's concrete implementation.
+type RuntimeHealthProviderFunc func() RuntimeHealthSnapshot
+
+func (f RuntimeHealthProviderFunc) Snapshot() RuntimeHealthSnapshot {
+	if f == nil {
+		return RuntimeHealthSnapshot{}
+	}
+	return f()
+}
+
+// CloneRuntimeHealthSnapshot returns a value-safe copy for transport owners
+// that receive a snapshot directly from a provider. The copy is deliberately
+// limited to the DTO's map and pointer members; all scalar status fields are
+// already value types.
+func CloneRuntimeHealthSnapshot(in RuntimeHealthSnapshot) RuntimeHealthSnapshot {
+	out := in
+	if out.Generation == 0 {
+		out.Generation = out.Supervisor.Generation
+	}
+	if out.Supervisor.Generation == 0 {
+		out.Supervisor.Generation = out.Generation
+	}
+	if in.ObservedAt != nil {
+		value := *in.ObservedAt
+		out.ObservedAt = &value
+	}
+	if in.LastSuccessAt != nil {
+		value := *in.LastSuccessAt
+		out.LastSuccessAt = &value
+	}
+	if in.LastFailureAt != nil {
+		value := *in.LastFailureAt
+		out.LastFailureAt = &value
+	}
+	if in.Supervisor.RetryAt != nil {
+		value := *in.Supervisor.RetryAt
+		out.Supervisor.RetryAt = &value
+	}
+	if in.Supervisor.LastHealthy != nil {
+		value := *in.Supervisor.LastHealthy
+		out.Supervisor.LastHealthy = &value
+	}
+	if in.Supervisor.RecoverySince != nil {
+		value := *in.Supervisor.RecoverySince
+		out.Supervisor.RecoverySince = &value
+	}
+	if in.Components != nil {
+		out.Components = make(map[string]RuntimeComponentSnapshot, len(in.Components))
+		for name, component := range in.Components {
+			out.Components[name] = component
+		}
+	}
+	return out
+}
+
+// RuntimeHealthBackend exposes the pure runtime snapshot projection used by
+// the loopback readiness endpoint. It intentionally has no context argument:
+// a readiness request is not permission to perform dependency I/O.
+type RuntimeHealthBackend interface {
+	RuntimeHealth() RuntimeHealthSnapshot
+}
+
+// ProjectRuntimeHealth adapts the storage-neutral runtimehealth evaluator
+// result to the additive HTTP installation/readiness projection. It performs
+// no I/O and copies only bounded status codes, booleans, generations, and
+// timestamps. The required flag comes from deployment policy rather than a
+// request, so an optional Codex degradation remains service-ready.
+func ProjectRuntimeHealth(snapshot runtimehealth.Snapshot, required bool) RuntimeHealthSnapshot {
+	mode := "optional"
+	if required {
+		mode = "required"
+	}
+	supervisorState := string(snapshot.Components.Supervisor.Status)
+	switch snapshot.Components.Supervisor.Status {
+	case runtimehealth.ComponentHealthy:
+		supervisorState = string(runtimehealth.SupervisorRunning)
+	case runtimehealth.ComponentStarting:
+		supervisorState = string(runtimehealth.SupervisorStarting)
+	case runtimehealth.ComponentRecovering:
+		supervisorState = string(runtimehealth.SupervisorRecovering)
+	case runtimehealth.ComponentExhausted:
+		supervisorState = string(runtimehealth.SupervisorExhausted)
+	case runtimehealth.ComponentStopping:
+		supervisorState = string(runtimehealth.SupervisorStopping)
+	}
+	out := RuntimeHealthSnapshot{
+		Mode:              mode,
+		Required:          required,
+		State:             string(snapshot.State),
+		Ready:             snapshot.Ready,
+		Live:              snapshot.Live,
+		Liveness:          snapshot.Liveness,
+		WatchdogEligible:  snapshot.WatchdogEligible,
+		SchedulerEligible: snapshot.SchedulerEligible,
+		Status:            string(snapshot.Status),
+		Reason:            string(snapshot.Reason),
+		Generation:        snapshot.Generation,
+		Supervisor: RuntimeSupervisorSnapshot{
+			Generation: snapshot.Generation,
+			State:      supervisorState,
+		},
+		Components: make(map[string]RuntimeComponentSnapshot, 7),
+	}
+	if !snapshot.ObservedAt.IsZero() {
+		value := snapshot.ObservedAt.UTC()
+		out.ObservedAt = &value
+	}
+	if !snapshot.LastSuccessAt.IsZero() {
+		value := snapshot.LastSuccessAt.UTC()
+		out.LastSuccessAt = &value
+	}
+	if !snapshot.LastFailureAt.IsZero() {
+		value := snapshot.LastFailureAt.UTC()
+		out.LastFailureAt = &value
+	}
+	add := func(name string, status runtimehealth.ComponentStatus, componentRequired bool) {
+		out.Components[name] = RuntimeComponentSnapshot{
+			State:    string(status.Status),
+			Ready:    status.Status == runtimehealth.ComponentHealthy,
+			Required: componentRequired,
+			Status:   string(status.Status),
+			Reason:   string(status.Reason),
+		}
+	}
+	add("database", snapshot.Components.Database, true)
+	add("codex", snapshot.Components.Codex, required)
+	add("supervisor", snapshot.Components.Supervisor, required)
+	add("account", snapshot.Components.Account, required)
+	add("model", snapshot.Components.Model, required)
+	add("reconciliation", snapshot.Components.Reconciliation, true)
+	add("persistence", snapshot.Components.Persistence, true)
+	return out
 }
 
 type AddressabilityBackend interface {
