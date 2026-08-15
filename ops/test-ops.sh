@@ -15,7 +15,7 @@ cleanup() {
 	chmod -R u+w "$root" 2>/dev/null || true
 	rm -rf -- "$root"
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup 0 1 2 15
 
 negative_cases=0
 restored_cases=0
@@ -76,6 +76,30 @@ expect_stage_failure() {
 	bundle_source=$6
 	negative_cases=$((negative_cases + 1))
 	if stage_release "$id" "$server" "$target_root" "$web_source" "$bundle_source" >/dev/null 2>&1; then
+		printf 'unexpected staging acceptance: %s\n' "$label" >&2
+		exit 1
+	fi
+	test ! -e "$target_root/$id"
+	verify_test_release >/dev/null
+	restored_cases=$((restored_cases + 1))
+	printf 'REJECTED %s\n' "$label"
+	printf 'RESTORED %s\n' "$label"
+}
+
+expect_limited_stage_failure() {
+	label=$1
+	id=$2
+	server=$3
+	target_root=$4
+	web_source=$5
+	bundle_source=$6
+	negative_cases=$((negative_cases + 1))
+	if (
+		# VERSION fits, but the server copy exceeds this limit. This forces a
+		# deterministic failure after the target directory has been created.
+		ulimit -f 1
+		stage_release "$id" "$server" "$target_root" "$web_source" "$bundle_source"
+	) >/dev/null 2>&1; then
 		printf 'unexpected staging acceptance: %s\n' "$label" >&2
 		exit 1
 	fi
@@ -245,77 +269,103 @@ record_positive known-good-complete-tree
 # a valid verification, so a stale fixture cannot make a later case green.
 chmod u+w "$release_dir"
 printf extra > "$release_dir/unmanifested"
+chmod 0444 "$release_dir/unmanifested"
+chmod 0555 "$release_dir"
 expect_verify_failure extra-root-regular-file
+chmod u+w "$release_dir"
 rm -f -- "$release_dir/unmanifested"
 chmod 0555 "$release_dir"
 restore_valid extra-root-regular-file
 
 chmod u+w "$release_dir/web"
 printf extra > "$release_dir/web/unmanifested"
+chmod 0444 "$release_dir/web/unmanifested"
+chmod 0555 "$release_dir/web"
 expect_verify_failure extra-nested-regular-file
+chmod u+w "$release_dir/web"
 rm -f -- "$release_dir/web/unmanifested"
 chmod 0555 "$release_dir/web"
 restore_valid extra-nested-regular-file
 
 chmod u+w "$release_dir"
 mkdir "$release_dir/unmanifested-empty"
+chmod 0555 "$release_dir/unmanifested-empty"
+chmod 0555 "$release_dir"
 expect_verify_failure unmanifested-empty-root-directory
+chmod u+w "$release_dir"
 rmdir "$release_dir/unmanifested-empty"
 chmod 0555 "$release_dir"
 restore_valid unmanifested-empty-root-directory
 
 chmod u+w "$release_dir/web"
 mkdir "$release_dir/web/unmanifested-empty"
+chmod 0555 "$release_dir/web/unmanifested-empty"
+chmod 0555 "$release_dir/web"
 expect_verify_failure unmanifested-empty-nested-directory
+chmod u+w "$release_dir/web"
 rmdir "$release_dir/web/unmanifested-empty"
 chmod 0555 "$release_dir/web"
 restore_valid unmanifested-empty-nested-directory
 
 chmod u+w "$release_dir"
 mkfifo "$release_dir/unmanifested.fifo"
+chmod 0555 "$release_dir"
 expect_verify_failure root-fifo
+chmod u+w "$release_dir"
 rm -f -- "$release_dir/unmanifested.fifo"
 chmod 0555 "$release_dir"
 restore_valid root-fifo
 
 chmod u+w "$release_dir/web"
 mkfifo "$release_dir/web/unmanifested.fifo"
+chmod 0555 "$release_dir/web"
 expect_verify_failure nested-fifo
+chmod u+w "$release_dir/web"
 rm -f -- "$release_dir/web/unmanifested.fifo"
 chmod 0555 "$release_dir/web"
 restore_valid nested-fifo
 
 chmod u+w "$release_dir"
 ln -s VERSION "$release_dir/unmanifested-link"
+chmod 0555 "$release_dir"
 expect_verify_failure root-symlink
+chmod u+w "$release_dir"
 rm -f -- "$release_dir/unmanifested-link"
 chmod 0555 "$release_dir"
 restore_valid root-symlink
 
 chmod u+w "$release_dir/web"
 ln -s ../VERSION "$release_dir/web/unmanifested-link"
+chmod 0555 "$release_dir/web"
 expect_verify_failure nested-symlink
+chmod u+w "$release_dir/web"
 rm -f -- "$release_dir/web/unmanifested-link"
 chmod 0555 "$release_dir/web"
 restore_valid nested-symlink
 
 chmod u+w "$release_dir"
 ln -s no-such-target "$release_dir/dangling-link"
+chmod 0555 "$release_dir"
 expect_verify_failure root-dangling-symlink
+chmod u+w "$release_dir"
 rm -f -- "$release_dir/dangling-link"
 chmod 0555 "$release_dir"
 restore_valid root-dangling-symlink
 
 chmod u+w "$release_dir/web"
 ln -s no-such-target "$release_dir/web/dangling-link"
+chmod 0555 "$release_dir/web"
 expect_verify_failure nested-dangling-symlink
+chmod u+w "$release_dir/web"
 rm -f -- "$release_dir/web/dangling-link"
 chmod 0555 "$release_dir/web"
 restore_valid nested-dangling-symlink
 
 chmod u+w "$release_dir/web"
 mv "$release_dir/web/index.html" "$root/missing-index.html"
+chmod 0555 "$release_dir/web"
 expect_verify_failure missing-manifested-file
+chmod u+w "$release_dir/web"
 cp "$original_index" "$release_dir/web/index.html"
 chmod 0444 "$release_dir/web/index.html"
 chmod 0555 "$release_dir/web"
@@ -323,8 +373,9 @@ restore_valid missing-manifested-file
 
 zeros=$(printf '%064d' 0)
 bad_digest=$(printf '%064d' 0 | tr 0 g)
-printf '%s  web/manifest-extra\n' "$zeros" > "$root/additional-manifest"
-cat "$valid_manifest" >> "$root/additional-manifest"
+cp "$valid_manifest" "$root/additional-manifest"
+chmod u+w "$root/additional-manifest"
+printf '%s  web/manifest-extra\n' "$zeros" >> "$root/additional-manifest"
 set_manifest_from "$root/additional-manifest"
 expect_verify_failure unexpected-additional-manifest-entry
 restore_manifest
@@ -338,6 +389,12 @@ set_manifest_from "$root/duplicate-manifest"
 expect_verify_failure duplicate-manifest-record
 restore_manifest
 restore_valid duplicate-manifest-record
+
+LC_ALL=C awk '{ record[NR] = $0 } END { for (i = NR; i > 0; i--) print record[i] }' "$valid_manifest" > "$root/reordered-manifest"
+set_manifest_from "$root/reordered-manifest"
+expect_verify_failure noncanonical-manifest-order
+restore_manifest
+restore_valid noncanonical-manifest-order
 
 printf '%s  VERSION\n' "$bad_digest" > "$root/malformed-digest"
 set_manifest_from "$root/malformed-digest"
@@ -397,7 +454,9 @@ restore_valid newline-manifest-path
 
 chmod u+w "$release_dir/web/index.html"
 printf tamper >> "$release_dir/web/index.html"
+chmod 0444 "$release_dir/web/index.html"
 expect_verify_failure checksum-mismatch
+chmod u+w "$release_dir/web/index.html"
 cp "$original_index" "$release_dir/web/index.html"
 chmod 0444 "$release_dir/web/index.html"
 restore_valid checksum-mismatch
@@ -413,12 +472,15 @@ for artifact_case in root-map nested-map root-tmp nested-test-prefix root-unders
 	artifact_parent=$(dirname "$artifact_path")
 	chmod u+w "$artifact_parent"
 	printf artifact > "$artifact_path"
+	chmod 0444 "$artifact_path"
+	chmod 0555 "$artifact_parent"
 	artifact_sha=$(sha256sum "$artifact_path" | awk '{print $1}')
 	printf '%s  %s\n' "$artifact_sha" "$artifact_rel" > "$root/artifact-manifest"
 	cat "$valid_manifest" >> "$root/artifact-manifest"
 	set_manifest_from "$root/artifact-manifest"
 	expect_verify_failure "forbidden-artifact-$artifact_case"
 	restore_manifest
+	chmod u+w "$artifact_parent"
 	rm -f -- "$artifact_path"
 	chmod 0555 "$artifact_parent"
 	restore_valid "forbidden-artifact-$artifact_case"
@@ -467,6 +529,9 @@ mkdir "$bad_web_link"
 ln -s /etc/passwd "$bad_web_link/index.html"
 build_server reject-linked-web-file "$root/servers/reject-linked-web-file"
 expect_stage_failure linked-web-source-file reject-linked-web-file "$root/servers/reject-linked-web-file" "$root/stage-rejects" "$bad_web_link" "$root/codex-bundle"
+
+build_server reject-partial-target "$root/servers/reject-partial-target"
+expect_limited_stage_failure partial-target-cleanup reject-partial-target "$root/servers/reject-partial-target" "$root/stage-rejects" "$root/source-web" "$root/codex-bundle"
 
 # Stage normalization remains deterministic for both restrictive and
 # permissive umasks, and source execute bits are not inherited by ordinary
@@ -585,6 +650,7 @@ else
 	ownership_fixture_mode=identity-mismatch
 fi
 printf 'OWNERSHIP_FIXTURE_MODE=%s\n' "$ownership_fixture_mode"
+ownership_path_cases=0
 
 test "$(stat -c %u "$release_dir")" = "$phase12_uid"
 test "$(stat -c %g "$release_dir")" = "$phase12_gid"
@@ -615,33 +681,34 @@ restore_group() {
 expect_ownership_failure() {
 	label=$1
 	owned_path=$2
-	if test "$ownership_fixture_mode" = group; then
-		change_group "$owned_path"
-		expect_verify_failure "$label"
-		restore_group "$owned_path"
-		restore_valid "$label"
-	else
-		expect_identity_failure "$label"
-	fi
+	change_group "$owned_path"
+	expect_verify_failure "$label"
+	restore_group "$owned_path"
+	restore_valid "$label"
+	ownership_path_cases=$((ownership_path_cases + 1))
 }
 
-expect_identity_failure root-owner-numeric-drift
+expect_identity_failure effective-identity-mismatch
 
-for ownership_case in root-group release-directory-group required-executable-group ordinary-file-group manifest-group; do
-	case "$ownership_case" in
-	root-group) ownership_path=$release_dir ;;
-	release-directory-group) ownership_path=$release_dir/web ;;
-	required-executable-group) ownership_path=$release_dir/bin/codex ;;
-	ordinary-file-group) ownership_path=$release_dir/web/index.html ;;
-	manifest-group) ownership_path=$release_dir/SHA256SUMS ;;
-	esac
-	expect_ownership_failure "$ownership_case-drift" "$ownership_path"
-done
+if test "$ownership_fixture_mode" = group; then
+	for ownership_case in root-group release-directory-group required-executable-group ordinary-file-group manifest-group; do
+		case "$ownership_case" in
+		root-group) ownership_path=$release_dir ;;
+		release-directory-group) ownership_path=$release_dir/web ;;
+		required-executable-group) ownership_path=$release_dir/bin/codex ;;
+		ordinary-file-group) ownership_path=$release_dir/web/index.html ;;
+		manifest-group) ownership_path=$release_dir/SHA256SUMS ;;
+		esac
+		expect_ownership_failure "$ownership_case-drift" "$ownership_path"
+	done
+else
+	printf 'OWNERSHIP_PATH_CASES_BLOCKED=managed-group-mutation-unavailable\n'
+fi
 
 # This count is intentionally explicit: a missing block or an early green exit
 # cannot satisfy Phase 1.3 merely by returning status zero.
-expected_negative_cases=57
-expected_restored_cases=57
+expected_negative_cases=$((54 + ownership_path_cases))
+expected_restored_cases=$((54 + ownership_path_cases))
 expected_positive_cases=4
 test "$negative_cases" -eq "$expected_negative_cases"
 test "$restored_cases" -eq "$expected_restored_cases"
@@ -650,4 +717,5 @@ verify_test_release >/dev/null
 printf 'PHASE13_NEGATIVE_CASES=%s\n' "$negative_cases"
 printf 'PHASE13_RESTORATIONS=%s\n' "$restored_cases"
 printf 'PHASE13_POSITIVE_CASES=%s\n' "$positive_cases"
+printf 'PHASE13_OWNERSHIP_PATH_CASES=%s\n' "$ownership_path_cases"
 printf 'PHASE13_FINAL_PRISTINE=1\n'

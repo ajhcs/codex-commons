@@ -38,7 +38,7 @@ verify_tmp=
 cleanup_verify_tmp() {
 	test -z "$verify_tmp" || rm -f -- "$verify_tmp"
 }
-trap cleanup_verify_tmp EXIT HUP INT TERM
+trap cleanup_verify_tmp 0 1 2 15
 verify_tmp=$(mktemp)
 find "$COMMONS_RELEASE_DIR" -type f -perm 0555 -printf '%P\n' | LC_ALL=C sort > "$verify_tmp"
 printf '%s\n' "bin/codex" "bin/codex-code-mode-host" "codex-resources/bwrap" "codex-resources/zsh/bin/zsh" "codex-path/rg" "commons-server" | LC_ALL=C sort | cmp -s - "$verify_tmp" || { rm -f -- "$verify_tmp"; exit 64; }
@@ -67,7 +67,7 @@ cleanup() {
 	test -z "$actual_dirs" || rm -f -- "$actual_dirs"
 	test -z "$allowed_dirs" || rm -f -- "$allowed_dirs"
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup 0 1 2 15
 manifest_paths=$(mktemp)
 actual_files=$(mktemp)
 actual_dirs=$(mktemp)
@@ -98,6 +98,9 @@ LC_ALL=C awk '
 }
 END { exit invalid }
 ' "$COMMONS_RELEASE_DIR/SHA256SUMS" > "$manifest_paths"
+# stage-release.sh emits one canonical bytewise ordering. Reject a reordered
+# manifest instead of normalizing it silently before the inventory comparison.
+LC_ALL=C sort -c "$manifest_paths" >/dev/null 2>&1
 LC_ALL=C sort -o "$manifest_paths" "$manifest_paths"
 
 LC_ALL=C find "$COMMONS_RELEASE_DIR" -mindepth 1 -type f -printf '%P\n' |

@@ -30,7 +30,20 @@ stage_uid=$(id -u) || exit 64
 stage_gid=$(id -g) || exit 64
 case "$stage_uid" in *[!0-9]*|'') exit 64;; esac
 case "$stage_gid" in *[!0-9]*|'') exit 64;; esac
-mkdir -m 0755 "$target" "$target/web" "$target/ops" "$target/bin" "$target/codex-resources" "$target/codex-resources/zsh" "$target/codex-resources/zsh/bin" "$target/codex-path"
+stage_target=
+cleanup_stage_target() {
+	test -z "$stage_target" || {
+		find "$stage_target" -type d -exec chmod u+w {} + 2>/dev/null || true
+		rm -rf -- "$stage_target"
+	}
+}
+trap cleanup_stage_target 0
+trap 'exit 129' 1
+trap 'exit 130' 2
+trap 'exit 143' 15
+mkdir -m 0755 "$target"
+stage_target=$target
+mkdir -m 0755 "$target/web" "$target/ops" "$target/bin" "$target/codex-resources" "$target/codex-resources/zsh" "$target/codex-resources/zsh/bin" "$target/codex-path"
 printf '%s\n' "$id" > "$target/VERSION"
 cp "$COMMONS_SERVER_SOURCE" "$target/commons-server"
 for file in bin/codex bin/codex-code-mode-host codex-resources/bwrap codex-resources/zsh/bin/zsh codex-path/rg codex-package.json; do cp "$bundle/$file" "$target/$file"; done
@@ -53,3 +66,5 @@ find "$target" -type f -exec chmod 0444 {} + || exit 64
 chmod 0555 "$target/commons-server" "$target/bin/codex" "$target/bin/codex-code-mode-host" "$target/codex-resources/bwrap" "$target/codex-resources/zsh/bin/zsh" "$target/codex-path/rg" || exit 64
 test "$(stat -c %a "$target")" = 555 || exit 64
 test "$(stat -c %a "$target/SHA256SUMS")" = 444 || exit 64
+stage_target=
+trap - 0 1 2 15
