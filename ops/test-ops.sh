@@ -257,3 +257,168 @@ test "$(sed -n '1p' "$firstlog")" = '--user restart codex-commons.service'
 test "$(sed -n '2p' "$firstlog")" = '--user is-active --quiet codex-commons.service'
 test "$(sed -n '3p' "$firstlog")" = '--user stop codex-commons.service'
 test "$(wc -l < "$firstlog")" -eq 3
+
+# Restore the main disposable release after the Phase 1.1 tamper cases before
+# exercising Phase 1.2 mode and ownership checks.
+cp "$root/source-web/index.html" "$release_dir/web/index.html"
+chmod 0444 "$release_dir/web/index.html"
+chmod 0555 "$release_dir"
+
+# Phase 1.2: deterministic mode and ownership normalization.
+phase12_uid=$(id -u) || exit 1
+phase12_gid=$(id -g) || exit 1
+phase12_primary_group=$(id -gn) || exit 1
+phase12_alt_group=""
+phase12_alt_gid=""
+for gname in $(id -Gn); do
+	if test "$gname" != "$phase12_primary_group"; then
+		phase12_alt_group=$gname
+		break
+	fi
+done
+for gid in $(id -G); do
+	if test "$gid" != "$phase12_gid"; then
+		phase12_alt_gid=$gid
+		break
+	fi
+done
+if test -z "$phase12_alt_group"; then
+	phase12_alt_group=$phase12_primary_group
+fi
+if test -z "$phase12_alt_gid"; then
+	phase12_alt_gid=$phase12_gid
+fi
+
+# Ensure the current clean tree has the Phase 1.2 normalized modes/ownership.
+test "$(stat -c %a "$release_dir")" = 555
+test "$(stat -c %u "$release_dir")" = "$phase12_uid"
+test "$(stat -c %g "$release_dir")" = "$phase12_gid"
+test -z "$(find "$release_dir" -type d \! -perm 0555 -print -quit)"
+test -z "$(find "$release_dir" -type f \! -perm 0444 \! -perm 0555 -print -quit)"
+phase12_tmp=$(mktemp)
+find "$release_dir" -type f -perm 0555 -printf "%P\n" | LC_ALL=C sort > "$phase12_tmp"
+printf "%s\n" "bin/codex" "bin/codex-code-mode-host" "codex-resources/bwrap" "codex-resources/zsh/bin/zsh" "codex-path/rg" "commons-server" | LC_ALL=C sort | cmp -s - "$phase12_tmp" || exit 1
+rm -f -- "$phase12_tmp"
+test "$(stat -c %a "$release_dir/VERSION")" = 444
+test "$(stat -c %a "$release_dir/SHA256SUMS")" = 444
+test "$(stat -c %a "$release_dir/codex-package.json")" = 444
+test -z "$(find "$release_dir/web" "$release_dir/ops" -type f \! -perm 0444 -print -quit)"
+
+# Root mode drift is rejected before manifest verification.
+chmod u+w "$release_dir"
+chmod 0777 "$release_dir"
+expect_verify_failure
+chmod 0555 "$release_dir"
+verify_test_release
+
+# Nested directory mode drift is rejected.
+chmod u+w "$release_dir/web"
+chmod 0777 "$release_dir/web"
+expect_verify_failure
+chmod 0555 "$release_dir/web"
+chmod u+w "$release_dir/ops"
+chmod 0777 "$release_dir/ops"
+expect_verify_failure
+chmod 0555 "$release_dir/ops"
+chmod 0555 "$release_dir"
+verify_test_release
+
+# Explicit executable mode drift is rejected (each of the six).
+for exec_file in commons-server bin/codex bin/codex-code-mode-host codex-resources/bwrap codex-resources/zsh/bin/zsh codex-path/rg; do
+	chmod u+w "$release_dir/$exec_file"
+	chmod 0644 "$release_dir/$exec_file"
+	expect_verify_failure
+	chmod 0555 "$release_dir/$exec_file"
+	verify_test_release
+done
+
+# Ordinary file mode drift is rejected (VERSION, codex-package.json, web asset, ops file).
+for ordinary_file in VERSION codex-package.json web/index.html ops/backup.sh SHA256SUMS; do
+	chmod u+w "$release_dir/$ordinary_file"
+	chmod 0644 "$release_dir/$ordinary_file"
+	expect_verify_failure
+	chmod 0444 "$release_dir/$ordinary_file"
+	verify_test_release
+done
+# Also reject unexpected executable bits on ordinary files.
+chmod u+w "$release_dir/web/index.html"
+chmod 0555 "$release_dir/web/index.html"
+expect_verify_failure
+chmod 0444 "$release_dir/web/index.html"
+verify_test_release
+
+# Manifest mode drift is rejected (SHA256SUMS must be 0444).
+chmod u+w "$release_dir/SHA256SUMS"
+chmod 0644 "$release_dir/SHA256SUMS"
+expect_verify_failure
+chmod 0444 "$release_dir/SHA256SUMS"
+verify_test_release
+
+# Source execute-bit normalization: staged tree must not inherit source +x.
+chmod 0755 "$root/source-web/index.html"
+/bin/sh ops/build-release.sh release-execbit "$root/commons-server-execbit"
+COMMONS_RELEASE_ROOT="$root/releases" COMMONS_SERVER_SOURCE="$root/commons-server-execbit" COMMONS_WEB_SOURCE="$root/source-web" COMMONS_CODEX_BUNDLE_SOURCE="$root/codex-bundle" /bin/sh ops/stage-release.sh release-execbit
+test "$(stat -c %a "$root/releases/release-execbit/web/index.html")" = 444
+test "$(stat -c %a "$root/releases/release-execbit")" = 555
+test -z "$(find "$root/releases/release-execbit" -type d \! -perm 0555 -print -quit)"
+chmod 0644 "$root/source-web/index.html"
+COMMONS_RELEASE_ROOT="$root/releases" COMMONS_RELEASE_DIR="$root/releases/release-execbit" COMMONS_CODEX_BIN="$root/releases/release-execbit/bin/codex" COMMONS_WEB_DIR="$root/releases/release-execbit/web" COMMONS_CODEX_SHA256="$sha" COMMONS_CODE_MODE_HOST_SHA256="$host_sha" COMMONS_CODEX_BWRAP_SHA256="$bwrap_sha" COMMONS_CODEX_ZSH_SHA256="$zsh_sha" COMMONS_CODEX_RG_SHA256="$rg_sha" COMMONS_CODEX_PACKAGE_SHA256="$package_sha" /bin/sh "$root/releases/release-execbit/ops/verify-release.sh" >/dev/null 2>&1 || exit 1
+chmod -R u+w "$root/releases/release-execbit" 2>/dev/null || true
+rm -rf -- "$root/releases/release-execbit"
+
+# Restrictive umask (077) must still produce deterministic 0555/0444.
+(umask 077; /bin/sh ops/build-release.sh release-umask077 "$root/commons-server-umask077")
+COMMONS_RELEASE_ROOT="$root/releases" COMMONS_SERVER_SOURCE="$root/commons-server-umask077" COMMONS_WEB_SOURCE="$root/source-web" COMMONS_CODEX_BUNDLE_SOURCE="$root/codex-bundle" /bin/sh -c "umask 077; exec /bin/sh ops/stage-release.sh release-umask077"
+test "$(stat -c %a "$root/releases/release-umask077")" = 555
+test -z "$(find "$root/releases/release-umask077" -type d \! -perm 0555 -print -quit)"
+test "$(stat -c %a "$root/releases/release-umask077/VERSION")" = 444
+test "$(stat -c %a "$root/releases/release-umask077/SHA256SUMS")" = 444
+test "$(stat -c %a "$root/releases/release-umask077/commons-server")" = 555
+test -z "$(find "$root/releases/release-umask077/web" "$root/releases/release-umask077/ops" -type f \! -perm 0444 -print -quit)"
+COMMONS_RELEASE_ROOT="$root/releases" COMMONS_RELEASE_DIR="$root/releases/release-umask077" COMMONS_CODEX_BIN="$root/releases/release-umask077/bin/codex" COMMONS_WEB_DIR="$root/releases/release-umask077/web" COMMONS_CODEX_SHA256="$sha" COMMONS_CODE_MODE_HOST_SHA256="$host_sha" COMMONS_CODEX_BWRAP_SHA256="$bwrap_sha" COMMONS_CODEX_ZSH_SHA256="$zsh_sha" COMMONS_CODEX_RG_SHA256="$rg_sha" COMMONS_CODEX_PACKAGE_SHA256="$package_sha" /bin/sh "$root/releases/release-umask077/ops/verify-release.sh" >/dev/null 2>&1 || exit 1
+chmod -R u+w "$root/releases/release-umask077" 2>/dev/null || true
+rm -rf -- "$root/releases/release-umask077"
+
+# Permissive umask (000) must still produce deterministic 0555/0444.
+(umask 000; /bin/sh ops/build-release.sh release-umask000 "$root/commons-server-umask000")
+COMMONS_RELEASE_ROOT="$root/releases" COMMONS_SERVER_SOURCE="$root/commons-server-umask000" COMMONS_WEB_SOURCE="$root/source-web" COMMONS_CODEX_BUNDLE_SOURCE="$root/codex-bundle" /bin/sh -c "umask 000; exec /bin/sh ops/stage-release.sh release-umask000"
+test "$(stat -c %a "$root/releases/release-umask000")" = 555
+test -z "$(find "$root/releases/release-umask000" -type d \! -perm 0555 -print -quit)"
+test "$(stat -c %a "$root/releases/release-umask000/VERSION")" = 444
+test "$(stat -c %a "$root/releases/release-umask000/SHA256SUMS")" = 444
+test "$(stat -c %a "$root/releases/release-umask000/commons-server")" = 555
+test -z "$(find "$root/releases/release-umask000/web" "$root/releases/release-umask000/ops" -type f \! -perm 0444 -print -quit)"
+COMMONS_RELEASE_ROOT="$root/releases" COMMONS_RELEASE_DIR="$root/releases/release-umask000" COMMONS_CODEX_BIN="$root/releases/release-umask000/bin/codex" COMMONS_WEB_DIR="$root/releases/release-umask000/web" COMMONS_CODEX_SHA256="$sha" COMMONS_CODE_MODE_HOST_SHA256="$host_sha" COMMONS_CODEX_BWRAP_SHA256="$bwrap_sha" COMMONS_CODEX_ZSH_SHA256="$zsh_sha" COMMONS_CODEX_RG_SHA256="$rg_sha" COMMONS_CODEX_PACKAGE_SHA256="$package_sha" /bin/sh "$root/releases/release-umask000/ops/verify-release.sh" >/dev/null 2>&1 || exit 1
+chmod -R u+w "$root/releases/release-umask000" 2>/dev/null || true
+rm -rf -- "$root/releases/release-umask000"
+
+# Ownership mismatch without sudo: use only an available supplementary group.
+if test "$phase12_alt_group" != "$phase12_primary_group" || test "$phase12_alt_gid" != "$phase12_gid"; then
+	chown -h "$phase12_uid:$phase12_alt_gid" "$release_dir" 2>/dev/null || chgrp "$phase12_alt_group" "$release_dir"
+	expect_verify_failure
+	chown -h "$phase12_uid:$phase12_gid" "$release_dir" || chgrp "$phase12_primary_group" "$release_dir" || exit 1
+	verify_test_release
+	chown "$phase12_uid:$phase12_alt_gid" "$release_dir/web/index.html" 2>/dev/null || chgrp "$phase12_alt_group" "$release_dir/web/index.html"
+	expect_verify_failure
+	chown "$phase12_uid:$phase12_gid" "$release_dir/web/index.html" || chgrp "$phase12_primary_group" "$release_dir/web/index.html" || exit 1
+	verify_test_release
+	chown "$phase12_uid:$phase12_alt_gid" "$release_dir/web" 2>/dev/null || chgrp "$phase12_alt_group" "$release_dir/web"
+	expect_verify_failure
+	chown "$phase12_uid:$phase12_gid" "$release_dir/web" || chgrp "$phase12_primary_group" "$release_dir/web" || exit 1
+	test -z "$(find "$release_dir" -mindepth 1 \! -uid "$phase12_uid" -print -quit)"
+	test -z "$(find "$release_dir" -mindepth 1 \! -gid "$phase12_gid" -print -quit)"
+	verify_test_release
+else
+	echo "no alternate group available: ownership drift test skipped" >&2
+	exit 1
+fi
+
+# Restored success after all Phase 1.2 drifts.
+chmod -R u+w "$release_dir" 2>/dev/null || true
+chmod 0555 "$release_dir" 2>/dev/null || true
+find "$release_dir" -type d -exec chmod 0555 {} + 2>/dev/null || true
+find "$release_dir" -type f -exec chmod 0444 {} + 2>/dev/null || true
+chmod 0555 "$release_dir/commons-server" "$release_dir/bin/codex" "$release_dir/bin/codex-code-mode-host" "$release_dir/codex-resources/bwrap" "$release_dir/codex-resources/zsh/bin/zsh" "$release_dir/codex-path/rg" 2>/dev/null || true
+test "$(stat -c %a "$release_dir")" = 555
+test -z "$(find "$release_dir" -type d \! -perm 0555 -print -quit)"
+verify_test_release

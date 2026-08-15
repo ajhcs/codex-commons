@@ -26,6 +26,10 @@ test -d ops; test ! -L ops
 # SHA256SUMS is deliberately line-oriented. Keep packaged path components to
 # a grammar that cannot be confused with shell, awk, or sha256sum syntax.
 test -z "$(find "$COMMONS_WEB_SOURCE" ops -mindepth 1 \( -type l -o \! -type f \! -type d -o -name '*[!A-Za-z0-9._-]*' \) -print -quit)"
+stage_uid=$(id -u) || exit 64
+stage_gid=$(id -g) || exit 64
+case "$stage_uid" in *[!0-9]*|'') exit 64;; esac
+case "$stage_gid" in *[!0-9]*|'') exit 64;; esac
 mkdir -m 0755 "$target" "$target/web" "$target/ops" "$target/bin" "$target/codex-resources" "$target/codex-resources/zsh" "$target/codex-resources/zsh/bin" "$target/codex-path"
 printf '%s\n' "$id" > "$target/VERSION"
 cp "$COMMONS_SERVER_SOURCE" "$target/commons-server"
@@ -37,5 +41,15 @@ chmod 0644 "$target/codex-package.json"
 find "$target/web" "$target/ops" -type d -exec chmod 0755 {} +
 find "$target/web" -type f -exec chmod 0644 {} +
 find "$target/ops" -type f -exec chmod 0644 {} +
+chmod 0644 "$target/VERSION"
+chmod 0755 "$target"
 (cd "$target" && find . -type f \! -path './SHA256SUMS' -printf '%P\0' | LC_ALL=C sort -z | xargs -0 sha256sum -- > SHA256SUMS)
-chmod -R a-w "$target"
+chown -R "$stage_uid:$stage_gid" "$target" || exit 64
+test -z "$(find "$target" \! -uid "$stage_uid" -print -quit)" || exit 64
+test -z "$(find "$target" \! -gid "$stage_gid" -print -quit)" || exit 64
+chmod 0555 "$target" || exit 64
+find "$target" -type d -exec chmod 0555 {} + || exit 64
+find "$target" -type f -exec chmod 0444 {} + || exit 64
+chmod 0555 "$target/commons-server" "$target/bin/codex" "$target/bin/codex-code-mode-host" "$target/codex-resources/bwrap" "$target/codex-resources/zsh/bin/zsh" "$target/codex-path/rg" || exit 64
+test "$(stat -c %a "$target")" = 555 || exit 64
+test "$(stat -c %a "$target/SHA256SUMS")" = 444 || exit 64
