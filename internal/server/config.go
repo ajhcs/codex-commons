@@ -35,6 +35,7 @@ type Config struct {
 	Credentials                  []httpapi.Credential
 	HumanAuth                    *httpapi.HumanAuthConfig
 	CodexAuth                    bool
+	RequireCodexReady            bool
 	CodexBin                     string
 	CodexVersion                 string
 	CodexBindingKeyFile          string
@@ -101,6 +102,11 @@ func ParseConfig(args []string, getenv func(string) string, stderr io.Writer) (C
 	config.EnableRecoveryLogin = envBool(getenv, "COMMONS_ENABLE_RECOVERY_LOGIN")
 	config.EnableExperimentalHistorian = envBool(getenv, "COMMONS_EXPERIMENTAL_HISTORIAN_TASKS")
 	config.EnableNativeArchaeologyApply = envBool(getenv, "COMMONS_NATIVE_ARCHAEOLOGY_APPLY")
+	var err error
+	config.RequireCodexReady, err = envBoolStrict(getenv, "COMMONS_REQUIRE_CODEX_READY")
+	if err != nil {
+		return Config{}, err
+	}
 
 	credentialsFile := strings.TrimSpace(getenv("COMMONS_CREDENTIALS_FILE"))
 	humanSecretFile := strings.TrimSpace(getenv("COMMONS_HUMAN_ADMIN_SECRET_FILE"))
@@ -120,6 +126,7 @@ func ParseConfig(args []string, getenv func(string) string, stderr io.Writer) (C
 	flags.BoolVar(&config.DemoSeed, "demo-seed", config.DemoSeed, "idempotently seed explicit prototype data before listening")
 	flags.StringVar(&config.ArchaeologyRootsFile, "archaeology-roots-file", config.ArchaeologyRootsFile, "mode-0600 JSON allowlist of project roots eligible for metadata discovery")
 	flags.BoolVar(&config.CodexAuth, "codex-auth", config.CodexAuth, "enable managed Codex account authentication")
+	flags.BoolVar(&config.RequireCodexReady, "require-codex-ready", config.RequireCodexReady, "delay Type=notify readiness until managed Codex is ready; fail after bounded required-Codex exhaustion")
 	flags.StringVar(&config.CodexBin, "codex-bin", config.CodexBin, "absolute Codex executable path")
 	flags.StringVar(&config.CodexVersion, "codex-version", config.CodexVersion, "verified pinned Codex CLI version")
 	flags.StringVar(&config.CodexBindingKeyFile, "codex-binding-key-file", config.CodexBindingKeyFile, "mode-0600 private binding-key file")
@@ -239,6 +246,9 @@ func (c Config) Validate() error {
 	if c.AnonymousRead && !isLoopbackHost(host) && !c.AllowAnonymousLAN {
 		return errors.New("anonymous-read on a non-loopback address requires --allow-anonymous-lan")
 	}
+	if c.RequireCodexReady && !c.CodexAuth {
+		return errors.New("required Codex readiness requires managed Codex auth")
+	}
 	if c.HumanAuth != nil {
 		if !isLoopbackHost(host) && !c.AllowInsecureHumanLAN {
 			return errors.New("human auth on a plaintext non-loopback listener requires --allow-insecure-human-lan")
@@ -319,6 +329,18 @@ func envOr(getenv func(string) string, key, fallback string) string {
 func envBool(getenv func(string) string, key string) bool {
 	value, _ := strconv.ParseBool(strings.TrimSpace(getenv(key)))
 	return value
+}
+
+func envBoolStrict(getenv func(string) string, key string) (bool, error) {
+	raw := strings.TrimSpace(getenv(key))
+	if raw == "" {
+		return false, nil
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("%s must be a boolean", key)
+	}
+	return value, nil
 }
 
 func credentialFromEnv(getenv func(string) string) (*httpapi.Credential, error) {
