@@ -13,7 +13,7 @@ import (
 	"codex-commons/migrations"
 )
 
-func TestMigrationOneAndThirteenUpgradeToFifteenCleanly(t *testing.T) {
+func TestMigrationOneAndThirteenUpgradeToSixteenCleanly(t *testing.T) {
 	for _, from := range []int{1, 13} {
 		t.Run(fmt.Sprintf("from_%d", from), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "fixture.sqlite3")
@@ -47,7 +47,7 @@ func TestMigrationOneAndThirteenUpgradeToFifteenCleanly(t *testing.T) {
 			defer s.Close()
 			var version int
 			must(t, s.db.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&version))
-			if version != 15 {
+			if version != 16 {
 				t.Fatalf("version=%d", version)
 			}
 			var integrity string
