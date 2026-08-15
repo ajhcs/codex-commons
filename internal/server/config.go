@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,38 +26,43 @@ const (
 )
 
 type Config struct {
-	Listen                      string
-	DatabasePath                string
-	WebDir                      string
-	Version                     string
-	Credentials                 []httpapi.Credential
-	HumanAuth                   *httpapi.HumanAuthConfig
-	CodexAuth                   bool
-	CodexBin                    string
-	CodexBindingKeyFile         string
-	CodexBindingKey             [32]byte
-	CodexBindingKeySet          bool
-	CodexClient                 codexauth.Client
-	AllowFirstCodexBindLAN      bool
-	EnableRecoveryLogin         bool
-	EnableExperimentalHistorian bool
-	AnonymousRead               bool
-	AllowAnonymousLAN           bool
-	AllowInsecureHumanLAN       bool
-	DemoSeed                    bool
-	ArchaeologyRootsFile        string
-	ArchaeologyRoots            []ArchaeologyRoot
-	ReadTimeout                 time.Duration
-	ReadHeaderTimeout           time.Duration
-	WriteTimeout                time.Duration
-	IdleTimeout                 time.Duration
-	ShutdownTimeout             time.Duration
+	Listen                       string
+	PublicOrigin                 string
+	DatabasePath                 string
+	WebDir                       string
+	Version                      string
+	ReleaseIdentityFile          string
+	Credentials                  []httpapi.Credential
+	HumanAuth                    *httpapi.HumanAuthConfig
+	CodexAuth                    bool
+	CodexBin                     string
+	CodexVersion                 string
+	CodexBindingKeyFile          string
+	CodexBindingKey              [32]byte
+	CodexBindingKeySet           bool
+	CodexClient                  codexauth.Client
+	AllowFirstCodexBindLAN       bool
+	EnableRecoveryLogin          bool
+	EnableExperimentalHistorian  bool
+	EnableNativeArchaeologyApply bool
+	AnonymousRead                bool
+	AllowAnonymousLAN            bool
+	AllowInsecureHumanLAN        bool
+	DemoSeed                     bool
+	ArchaeologyRootsFile         string
+	ArchaeologyRoots             []ArchaeologyRoot
+	ReadTimeout                  time.Duration
+	ReadHeaderTimeout            time.Duration
+	WriteTimeout                 time.Duration
+	IdleTimeout                  time.Duration
+	ShutdownTimeout              time.Duration
 }
 
 func DefaultConfig() Config {
 	return Config{
 		Listen: defaultListen, WebDir: defaultWebDir, Version: defaultVersion,
-		ReadTimeout: 15 * time.Second, ReadHeaderTimeout: 5 * time.Second,
+		CodexVersion: "0.147.0",
+		ReadTimeout:  15 * time.Second, ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second,
 		ShutdownTimeout: 10 * time.Second,
 	}
@@ -71,9 +77,17 @@ func ParseConfig(args []string, getenv func(string) string, stderr io.Writer) (C
 	}
 	config := DefaultConfig()
 	config.Listen = envOr(getenv, "COMMONS_LISTEN", config.Listen)
+	config.PublicOrigin = strings.TrimSpace(getenv("COMMONS_PUBLIC_ORIGIN"))
 	config.DatabasePath = strings.TrimSpace(getenv("COMMONS_DB"))
 	config.WebDir = envOr(getenv, "COMMONS_WEB_DIR", config.WebDir)
-	config.Version = envOr(getenv, "COMMONS_VERSION", config.Version)
+	config.ReleaseIdentityFile = strings.TrimSpace(getenv("COMMONS_RELEASE_IDENTITY_FILE"))
+	if config.ReleaseIdentityFile != "" {
+		identity, readErr := readReleaseIdentity(config.ReleaseIdentityFile)
+		if readErr != nil {
+			return Config{}, readErr
+		}
+		config.Version = identity
+	}
 	config.AnonymousRead = envBool(getenv, "COMMONS_ANONYMOUS_READ")
 	config.AllowAnonymousLAN = envBool(getenv, "COMMONS_ALLOW_ANONYMOUS_LAN")
 	config.AllowInsecureHumanLAN = envBool(getenv, "COMMONS_ALLOW_INSECURE_HUMAN_LAN")
@@ -81,10 +95,12 @@ func ParseConfig(args []string, getenv func(string) string, stderr io.Writer) (C
 	config.ArchaeologyRootsFile = strings.TrimSpace(getenv("COMMONS_ARCHAEOLOGY_ROOTS_FILE"))
 	config.CodexAuth = envBool(getenv, "COMMONS_CODEX_AUTH")
 	config.CodexBin = strings.TrimSpace(getenv("COMMONS_CODEX_BIN"))
+	config.CodexVersion = strings.TrimSpace(getenv("COMMONS_CODEX_VERSION"))
 	config.CodexBindingKeyFile = strings.TrimSpace(getenv("COMMONS_CODEX_BINDING_KEY_FILE"))
 	config.AllowFirstCodexBindLAN = envBool(getenv, "COMMONS_ALLOW_FIRST_CODEX_BIND_LAN")
 	config.EnableRecoveryLogin = envBool(getenv, "COMMONS_ENABLE_RECOVERY_LOGIN")
 	config.EnableExperimentalHistorian = envBool(getenv, "COMMONS_EXPERIMENTAL_HISTORIAN_TASKS")
+	config.EnableNativeArchaeologyApply = envBool(getenv, "COMMONS_NATIVE_ARCHAEOLOGY_APPLY")
 
 	credentialsFile := strings.TrimSpace(getenv("COMMONS_CREDENTIALS_FILE"))
 	humanSecretFile := strings.TrimSpace(getenv("COMMONS_HUMAN_ADMIN_SECRET_FILE"))
@@ -93,9 +109,9 @@ func ParseConfig(args []string, getenv func(string) string, stderr io.Writer) (C
 	flags := flag.NewFlagSet("commons-server", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.StringVar(&config.Listen, "listen", config.Listen, "literal listen address (host:port)")
+	flags.StringVar(&config.PublicOrigin, "public-origin", config.PublicOrigin, "exact HTTPS browser origin when served by a trusted loopback reverse proxy")
 	flags.StringVar(&config.DatabasePath, "db", config.DatabasePath, "persistent SQLite database path")
 	flags.StringVar(&config.WebDir, "web-dir", config.WebDir, "built frontend directory")
-	flags.StringVar(&config.Version, "version", config.Version, "health response version")
 	flags.StringVar(&credentialsFile, "credentials-file", credentialsFile, "mode-0600 JSON credentials file (secret values are not accepted as flags)")
 	flags.StringVar(&humanSecretFile, "human-admin-secret-file", humanSecretFile, "mode-0600 human admin bootstrap-secret file")
 	flags.BoolVar(&config.AnonymousRead, "anonymous-read", config.AnonymousRead, "allow unauthenticated API reads with a fixed server-attested prototype identity")
@@ -105,10 +121,12 @@ func ParseConfig(args []string, getenv func(string) string, stderr io.Writer) (C
 	flags.StringVar(&config.ArchaeologyRootsFile, "archaeology-roots-file", config.ArchaeologyRootsFile, "mode-0600 JSON allowlist of project roots eligible for metadata discovery")
 	flags.BoolVar(&config.CodexAuth, "codex-auth", config.CodexAuth, "enable managed Codex account authentication")
 	flags.StringVar(&config.CodexBin, "codex-bin", config.CodexBin, "absolute Codex executable path")
+	flags.StringVar(&config.CodexVersion, "codex-version", config.CodexVersion, "verified pinned Codex CLI version")
 	flags.StringVar(&config.CodexBindingKeyFile, "codex-binding-key-file", config.CodexBindingKeyFile, "mode-0600 private binding-key file")
 	flags.BoolVar(&config.AllowFirstCodexBindLAN, "allow-first-codex-bind-lan", config.AllowFirstCodexBindLAN, "acknowledge first Codex account binding from LAN")
 	flags.BoolVar(&config.EnableRecoveryLogin, "enable-recovery-login", config.EnableRecoveryLogin, "enable the secondary recovery-key login")
 	flags.BoolVar(&config.EnableExperimentalHistorian, "experimental-historian-tasks", config.EnableExperimentalHistorian, "enable experimental visible Codex historian tasks with dynamic tools")
+	flags.BoolVar(&config.EnableNativeArchaeologyApply, "native-archaeology-apply", config.EnableNativeArchaeologyApply, "enable reviewed native historian canonical Apply")
 	if err := flags.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -142,7 +160,7 @@ func ParseConfig(args []string, getenv func(string) string, stderr io.Writer) (C
 		config.HumanAuth = &httpapi.HumanAuthConfig{
 			AdminSecret: humanSecret, DisplayName: humanName, Handle: humanHandle, Principal: domain.HumanLocalPrincipal,
 			Actor: "local-admin", Session: "human-local-admin", Host: "browser",
-			SessionTTL:      12 * time.Hour,
+			SessionTTL:      30 * 24 * time.Hour,
 			RecoveryEnabled: config.EnableRecoveryLogin && humanSecret != "",
 			CodexEnabled:    config.CodexAuth,
 		}
@@ -155,6 +173,29 @@ func ParseConfig(args []string, getenv func(string) string, stderr io.Writer) (C
 		return Config{}, err
 	}
 	return config, nil
+}
+
+func readReleaseIdentity(path string) (string, error) {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return "", errors.New("release identity file must be an absolute clean path")
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o222 != 0 {
+		return "", errors.New("release identity file must be a regular non-symlink file not writable by group or other")
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil || !filepath.IsAbs(resolved) {
+		return "", errors.New("resolve release identity file")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", errors.New("read release identity file")
+	}
+	value := strings.TrimSuffix(string(raw), "\n")
+	if value == "" || len(value) > 200 || strings.ContainsAny(value, "\r\n\x00") || filepath.Base(filepath.Dir(resolved)) != value {
+		return "", errors.New("release identity must exactly match its immutable release directory")
+	}
+	return value, nil
 }
 
 func (c Config) Validate() error {
@@ -186,6 +227,15 @@ func (c Config) Validate() error {
 	if ip != nil && ip.IsUnspecified() {
 		return errors.New("wildcard listen addresses are not allowed; use a literal loopback or LAN address")
 	}
+	if c.PublicOrigin != "" {
+		origin, parseErr := url.Parse(c.PublicOrigin)
+		if parseErr != nil || origin.Scheme != "https" || origin.Host == "" || origin.User != nil || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" || !isLoopbackHost(host) {
+			return errors.New("public origin must be an exact HTTPS origin and is allowed only with a loopback listener")
+		}
+		if origin.Hostname() == "" || net.ParseIP(origin.Hostname()) != nil {
+			return errors.New("public origin must use a DNS hostname")
+		}
+	}
 	if c.AnonymousRead && !isLoopbackHost(host) && !c.AllowAnonymousLAN {
 		return errors.New("anonymous-read on a non-loopback address requires --allow-anonymous-lan")
 	}
@@ -215,9 +265,15 @@ func (c Config) Validate() error {
 	if c.EnableExperimentalHistorian && !c.CodexAuth {
 		return errors.New("experimental historian tasks require managed Codex auth")
 	}
+	if c.EnableNativeArchaeologyApply && !c.EnableExperimentalHistorian {
+		return errors.New("native archaeology Apply requires experimental historian tasks")
+	}
 	if c.CodexAuth {
 		if !filepath.IsAbs(strings.TrimSpace(c.CodexBin)) || strings.ContainsAny(c.CodexBin, "\r\n\x00") {
 			return errors.New("managed Codex auth requires an absolute Codex executable path")
+		}
+		if c.CodexVersion == "" || len(c.CodexVersion) > 40 || strings.ContainsAny(c.CodexVersion, "\r\n\x00") {
+			return errors.New("managed Codex auth requires a bounded verified Codex version")
 		}
 		if !c.CodexBindingKeySet || c.CodexBindingKey == [32]byte{} {
 			return errors.New("managed Codex auth requires a loaded, non-zero binding key")

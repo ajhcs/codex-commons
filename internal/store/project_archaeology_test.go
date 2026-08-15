@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -129,6 +130,50 @@ func TestProjectArchaeologyMigrationProtectsProvenance(t *testing.T) {
 	}
 	if _, err = s.DB().ExecContext(ctx, `DELETE FROM archaeology_provenance WHERE outcome_id='o'`); err == nil {
 		t.Fatal("append-only provenance was deletable")
+	}
+}
+
+func TestLegacyArchaeologyProjectionKeepsLatestBoundedReviewWithoutDeletingAuditRows(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	s, err := Open(ctx, ":memory:", WithClock(func() time.Time { return now }))
+	must(t, err)
+	defer s.Close()
+	session, err := s.ReplaceArchaeologyDiscovery(ctx, domain.ArchaeologyMutation{Principal: domain.HumanLocalPrincipal, RequestID: "legacy-page-discover"}, domain.ArchaeologyDiscovery{Candidates: []domain.ArchaeologyCandidate{{ID: "legacy-page", Name: "Legacy page", PathLabel: "Legacy page", HasGit: true, DurationMinSeconds: 1, DurationMaxSeconds: 2, RelativeCost: "low"}}})
+	must(t, err)
+	_, err = s.DB().ExecContext(ctx, `INSERT INTO archaeology_runs(id,session_id,candidate_id,state,created_at,updated_at) VALUES('legacy-page-run',?,'legacy-page','completed',?,?)`, session.ID, stamp(now), stamp(now))
+	must(t, err)
+	digest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	for outcomeIndex := 0; outcomeIndex < domain.ArchaeologyLegacyOutcomePage+2; outcomeIndex++ {
+		outcomeID := fmt.Sprintf("legacy-outcome-%02d", outcomeIndex)
+		at := stamp(now.Add(time.Duration(outcomeIndex) * time.Second))
+		_, err = s.DB().ExecContext(ctx, `INSERT INTO archaeology_outcomes(id,run_id,project_id,title,summary,source_count,proposal_json,created_at) VALUES(?,'legacy-page-run','legacy-page',?,?,9,'{}',?)`, outcomeID, outcomeID, "bounded audit", at)
+		must(t, err)
+		for sourceIndex := 0; sourceIndex < domain.ArchaeologyLegacyProvenancePerOutcome+1; sourceIndex++ {
+			_, err = s.DB().ExecContext(ctx, `INSERT INTO archaeology_provenance(outcome_id,position,kind,stable_id,digest,occurred_at) VALUES(?,?,'git',?,?,?)`, outcomeID, sourceIndex, fmt.Sprintf("commit:%040x", outcomeIndex*100+sourceIndex+1), digest, at)
+			must(t, err)
+		}
+		for memberIndex := 0; memberIndex < domain.ArchaeologyLegacyContributorsPerOutcome+1; memberIndex++ {
+			_, err = s.DB().ExecContext(ctx, `INSERT INTO archaeology_outcome_contributors(outcome_id,session_id,contribution,confidence) VALUES(?,?,?,'verified')`, outcomeID, fmt.Sprintf("session-%02d", memberIndex), "bounded contributor")
+			must(t, err)
+		}
+	}
+	loaded, err := s.ArchaeologySession(ctx, domain.HumanLocalPrincipal)
+	must(t, err)
+	if len(loaded.Outcomes) != domain.ArchaeologyLegacyOutcomePage || loaded.Outcomes[0].ID != "legacy-outcome-02" || loaded.Outcomes[len(loaded.Outcomes)-1].ID != "legacy-outcome-31" {
+		t.Fatalf("bounded outcomes=%d first=%q last=%q", len(loaded.Outcomes), loaded.Outcomes[0].ID, loaded.Outcomes[len(loaded.Outcomes)-1].ID)
+	}
+	for _, outcome := range loaded.Outcomes {
+		if len(outcome.Provenance) != domain.ArchaeologyLegacyProvenancePerOutcome || len(outcome.Contributors) != domain.ArchaeologyLegacyContributorsPerOutcome {
+			t.Fatalf("outcome %s provenance=%d contributors=%d", outcome.ID, len(outcome.Provenance), len(outcome.Contributors))
+		}
+	}
+	var durableOutcomes, durableProvenance, durableContributors int
+	must(t, s.DB().QueryRowContext(ctx, `SELECT count(*) FROM archaeology_outcomes`).Scan(&durableOutcomes))
+	must(t, s.DB().QueryRowContext(ctx, `SELECT count(*) FROM archaeology_provenance`).Scan(&durableProvenance))
+	must(t, s.DB().QueryRowContext(ctx, `SELECT count(*) FROM archaeology_outcome_contributors`).Scan(&durableContributors))
+	if durableOutcomes != domain.ArchaeologyLegacyOutcomePage+2 || durableProvenance != durableOutcomes*(domain.ArchaeologyLegacyProvenancePerOutcome+1) || durableContributors != durableOutcomes*(domain.ArchaeologyLegacyContributorsPerOutcome+1) {
+		t.Fatalf("durable audit rows outcomes=%d provenance=%d contributors=%d", durableOutcomes, durableProvenance, durableContributors)
 	}
 }
 

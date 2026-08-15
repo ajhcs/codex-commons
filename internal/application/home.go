@@ -43,6 +43,7 @@ type Service struct {
 	archaeologyDiscoverer ArchaeologyDiscoverer
 	archaeologyLauncher   ArchaeologyHistorianLauncher
 	archaeologyScheduler  *ArchaeologyScheduler
+	nativeApplyEnabled    bool
 }
 
 func New(repository HomeRepository, live PresenceRegistry, clock Clock) *Service {

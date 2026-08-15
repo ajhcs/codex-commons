@@ -165,12 +165,53 @@ func (m *ManagedProcessClient) ExperimentalDynamicTools() bool {
 	return client != nil && client.ExperimentalDynamicTools()
 }
 
-func (m *ManagedProcessClient) LaunchHistorianTask(ctx context.Context, cwd, model, effort, prompt, clientUserMessageID, title string, dynamic DynamicToolHandler, terminal TurnTerminalHandler) (TaskLaunch, error) {
+func (m *ManagedProcessClient) LaunchHistorianTask(ctx context.Context, cwd, model, effort, prompt, clientUserMessageID, title string, policy HistorianPolicy, dynamic DynamicToolHandler, terminal TurnTerminalHandler) (TaskLaunch, error) {
 	client := m.current()
 	if client == nil || !client.ExperimentalDynamicTools() {
 		return TaskLaunch{}, ErrUnavailable
 	}
-	return client.LaunchHistorianTask(ctx, cwd, model, effort, prompt, clientUserMessageID, title, dynamic, terminal)
+	return client.LaunchHistorianTask(ctx, cwd, model, effort, prompt, clientUserMessageID, title, policy, dynamic, terminal)
+}
+
+func (m *ManagedProcessClient) FindHistorianTask(ctx context.Context, cwd, title string) (TaskLaunch, bool, error) {
+	var result TaskLaunch
+	var found bool
+	err := m.withRetry(ctx, func(client *ClientImpl) error {
+		var callErr error
+		result, found, callErr = client.FindHistorianTask(ctx, cwd, title)
+		return callErr
+	})
+	return result, found, err
+}
+
+func (m *ManagedProcessClient) ListHistorianTasks(ctx context.Context, cwd string) ([]TaskIdentity, error) {
+	var result []TaskIdentity
+	err := m.withRetry(ctx, func(client *ClientImpl) error {
+		var callErr error
+		result, callErr = client.ListHistorianTasks(ctx, cwd)
+		return callErr
+	})
+	return result, err
+}
+
+func (m *ManagedProcessClient) VerifiedHistorianSettings(threadID string) (TaskLaunch, bool) {
+	client := m.current()
+	if client == nil {
+		return TaskLaunch{}, false
+	}
+	return client.VerifiedHistorianSettings(threadID)
+}
+
+// RenameHistorianTask is part of the accepted-launch boundary and deliberately
+// avoids managed retry. A transport failure after thread/name/set may mean the
+// rename succeeded, so the scheduler must preserve uncertainty instead of
+// replaying the mutation against a restarted App Server.
+func (m *ManagedProcessClient) RenameHistorianTask(ctx context.Context, threadID, title string) error {
+	client := m.current()
+	if client == nil {
+		return ErrUnavailable
+	}
+	return client.RenameHistorianTask(ctx, threadID, title)
 }
 
 func (m *ManagedProcessClient) SetEventHandler(handler func(Event)) {
@@ -208,6 +249,9 @@ func (m *ManagedProcessClient) Close() error {
 var _ Client = (*ManagedProcessClient)(nil)
 var _ ArchaeologyClient = (*ManagedProcessClient)(nil)
 var _ ExperimentalArchaeologyClient = (*ManagedProcessClient)(nil)
+var _ HistorianTaskFinder = (*ManagedProcessClient)(nil)
+var _ HistorianTaskInventory = (*ManagedProcessClient)(nil)
+var _ HistorianTaskRenamer = (*ManagedProcessClient)(nil)
 
 func (m *ManagedProcessClient) InterruptTurn(ctx context.Context, threadID, turnID string) error {
 	client := m.current()

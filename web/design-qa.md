@@ -1,5 +1,25 @@
 # Commons identity, controls, clipboard, and Project Archaeology QA
 
+## Native Project Archaeology release QA — 2026-08-13
+
+- Browser method: the user-selected Chrome/DevTools path only. The production-composition suite uses the repository's direct Chrome DevTools Protocol helper; manual visual QA used Chrome DevTools MCP. No Playwright run or live `:8088` mutation was performed.
+- Production composition: 11/11 scenarios passed four implementation-lane runs plus three consecutive independent post-freeze runs after runner cleanup hardening. The gate mounts Auth, Notifications, AppShell, ProjectArchaeologyFlow, ProjectArchaeologyDialog, and the strict HTTP adapter. Scenarios cover happy lifecycle polling, transient-start canonical recovery with exactly one POST, configuration 409, malformed start, stale start, expired poll authentication, exact-ID resolution success, resolution 409 plus canonical refetch and no retry, identity-less uncertainty with no control/request, batch-bound completed review, and LAN/non-rail onboarding. Every complete run emitted the TAP footer and the DOM pass sentinel.
+- Contract evidence: `npm test` passed 77/77; the production build transformed 103 modules and emitted both generated identity assets plus Sites packaging; `npm run test:sites` passed 4/4. The strict normalizer rejects impossible native timestamp order, preserves a prior review as prior, and never makes native reports apply-capable.
+- Exact review: the completed native report stays attached to batch `ARB-000000000000000000000001`, exposes retained citations and truthful historical membership/reachability/execution/authority facts, returns with `Back to run`, and contains no apply control. The exact proposal storyboard renders its one bounded task, one attribution, one task event, both server manifest and source digests, and keeps Apply disabled until the full server manifest digest is confirmed.
+
+### Rendered evidence
+
+- Normalized reference/current review pair at 1440 × 900: `/tmp/codex-commons-pa-reference-review-1440.png` and `/tmp/codex-commons-pa-final-review-1440.png`. The current view intentionally expands the established white-dialog language to show the batch binding, retained-citation disclosure, explicit review-only capability reason, factual member disclosures, and `Back to run`; comparison found no actionable clipping, spacing, hierarchy, radius, or type mismatch.
+- Current completed run: `/tmp/codex-commons-pa-final-1440.png`; responsive captures: `/tmp/codex-commons-pa-final-390.png` and `/tmp/codex-commons-pa-final-320.png`; exact proposal: `/tmp/codex-commons-pa-final-exact-preview.png`.
+- Theme/input/motion: `/tmp/codex-commons-pa-final-dark-1440.png`, `/tmp/codex-commons-pa-final-200pct.png`, `/tmp/codex-commons-pa-final-keyboard-390.png`, and `/tmp/codex-commons-pa-final-reduced-motion.png`. Desktop, 390 px, 320 px, exact-preview, and 200%-equivalent checks reported zero horizontal overflow. Keyboard focus remained inside the native dialog with a computed 2 px outline. The reduced-motion Chrome run reported `matchMedia('(prefers-reduced-motion: reduce)').matches === true`; the dark capture preserved the original cobalt raster mark and applied only its subtle cobalt shadow.
+- Runner cleanup: an independent forced `SIGTERM` check exited 143 and left no Chrome process group or temporary profile; normal completion also left no residue. Protocol input is capped at 8 MiB, the final snapshot at 2 MiB, and each CDP command at 10 seconds.
+- Chrome console warnings/errors: zero. Final Lighthouse snapshot: Accessibility 100 and Best Practices 100. SEO and agentic scores remained 50 because the standalone internal storyboard intentionally has no meta description, robots policy, or `llms.txt`; these are QA-page metadata findings, not app-dialog accessibility failures. Reports: `/tmp/codex-commons-pa-lighthouse-final/report.html` and `/tmp/codex-commons-pa-lighthouse-final/report.json`.
+- Generated transparent connecting/resolved PNGs and their sanitized provenance are all mode `0644`; the resolved state is the component and favicon default. Motion cross-fades the two original raster states, and reduced motion disables animation/transition. No generic link icon, handcrafted SVG, CSS art, placeholder, or third-party identity was introduced.
+
+final result: passed
+
+---
+
 ## Project picker structural release gate — 2026-08-13
 
 - The production failure was a circular contract: the backend withheld task-launch capability until a project selection was persisted, while the frontend withheld the only action that could persist that local selection. A prior storyboard passed because its `selected_project_ids: []`, `controls.can_start: true`, and launch-capable combination could not be emitted by production.
@@ -21,7 +41,7 @@
 - OFL Open Sans is self-hosted from pinned `google/fonts` variable files with `OFL.txt`; exact reviewed SHA-256 values and upstream provenance are recorded in `src/assets/fonts/open-sans/PROVENANCE.md`, and no runtime font request is made. Controls are normalized by hierarchy rather than indiscriminate pills: actions, filters, toggles, tabs, chips, selects, inputs, dialogs, pagination, menus, notices, and empty/error states share restrained geometry and precise blue focus.
 - Connect → Authorize → Enter Commons passed with selectable readonly pairing code, secure copy success, profile entry, identity resolution, capability-gated history offer, and skip. Skip did not start discovery; account menu reopen remained available.
 - Forced clipboard failure rejected `navigator.clipboard.writeText` and returned false from `execCommand`: no false success, the entire visible code remained focused/selected, and `Ctrl+C` guidance appeared. Unit coverage also passed secure success, LAN/insecure synchronous fallback, rejection fallback, absent `execCommand`, selection restoration, and platform shortcut choice.
-- Project Archaeology passed intro, metadata-only discovery, project selection, depth/sources/concurrency, bounded task-pack handoff, review, mobile, unavailable, and malformed-payload states. Strict normalization remains intact; the fixed canonical `selected_project_ids: []` initial response is accepted without null tolerance. No fake execution percentage or agent-start claim appears.
+- Project Archaeology passed intro, metadata-only discovery, project selection, depth/sources, Codex-managed dispatch, direct native launch, exact-bound lifecycle, review, mobile, unavailable, and malformed-payload states. Strict normalization remains intact; the fixed canonical `selected_project_ids: []` initial response is accepted without null tolerance. No fake execution percentage or agent-start claim appears.
 
 ## Rendered and accessibility evidence
 
@@ -67,7 +87,7 @@ The source screenshot was opened before implementation and used to preserve the 
 - P1 — Rendered lifecycle certification is unavailable. Capture the same states at the named viewports in the user-authorized browser, verify page identity/overlay/console health, keyboard and modal focus, refresh/launch, hidden-tab reconnect, attention/cancel/terminal behavior, and nine legacy rows, then perform the required combined source/implementation comparison.
 - No visual-fix iteration is claimed because post-change browser evidence is unavailable.
 
-final result: blocked
+historical result: blocked; superseded by the 2026-08-13 release QA above
 
 ---
 
@@ -395,9 +415,9 @@ final result: passed
 ## Fidelity and product boundaries
 
 - The selected Option 2 hierarchy is preserved with less clutter: one restrained trust plane, one dominant project catalog, a collapsed Advanced settings disclosure, and a literal task-state ledger. The production application keeps the existing Commons rail instead of adding the mock's permanent activity rail.
-- The rejected pearl companion and raster are removed. The replacement uses the pinned MIT Apps SDK UI `Link` icon in one stable wrapper; no custom SVG, CSS-drawn emblem, mascot, fake Blossom, claimed OpenAI Sans, or copied Grok/X mark is present.
+- The rejected pearl companion and generic Link icon are removed. The replacement uses two original generated transparent RGBA keyframes in one stable wrapper, grounded in the supplied motion reference and selected Option 2 direction; it contains no official OpenAI/Codex/Blossom, Grok/X, or other third-party mark.
 - Open Sans is the pinned OFL build and is not represented as OpenAI Sans. White/ink/neutral surfaces, measured radii, sparse blue action language, native controls, and whitespace align with the studied OpenAI design language without claiming an official OpenAI product identity.
-- Project selection uses the Codex App Server catalog, sanitized display labels, recent-first ordering, search, selected count, visible bulk selection, and progressively disclosed depth/source/concurrency controls. Direct `Start Codex tasks` replaces task-pack copy.
+- Project selection uses the Codex App Server catalog, sanitized display labels, recent-first ordering, search, selected count, visible bulk selection, and progressively disclosed depth/source controls and Codex-managed dispatch. Direct `Start Codex tasks` replaces task-pack copy.
 - Task lifecycle rows expose only literal backend states. Exact thread/turn IDs are secondary copyable provenance; `uncertain` states say that Commons will not retry automatically. No task is imported without later human review and exact-digest confirmation.
 - Auth cooldowns preserve server retry timing; `auth_poll_wait` schedules another poll without becoming a sign-in failure. The one-time code is a selectable readonly field with a unique ID, secure Clipboard API handling, and the tested insecure-LAN fallback.
 
@@ -424,6 +444,6 @@ final result: passed
 
 ## Current QA status — native scheduler lifecycle
 
-The current 2026-08-12 lifecycle implementation is documented in “Native scheduler lifecycle integration QA — 2026-08-12” above. Its required post-change browser capture and combined visual comparison remain unavailable because neither the user's Chrome DevTools nor the Codex in-app Browser is callable in this task, and Playwright substitution is prohibited.
+The 2026-08-12 blocked snapshot above is superseded by the 2026-08-13 native Project Archaeology release QA at the top of this file. The current production-composition Chrome/CDP suite, responsive/dark/zoom/keyboard/reduced-motion captures, console checks, and same-input review comparison are complete.
 
-final result: blocked
+final result: passed

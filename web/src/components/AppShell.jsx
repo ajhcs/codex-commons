@@ -40,6 +40,14 @@ export function AppShell({ route, onNavigate, railContent = null, children }) {
         : notifications.data.unreadCount
           ? `${notifications.data.unreadCount} unread mention${notifications.data.unreadCount === 1 ? "" : "s"}`
           : "No unread mentions";
+  useEffect(() => {
+    const request = auth.projectHistoryRequest;
+    if (!request) return;
+    setArchaeologySeed(request.archaeologySeed);
+    setArchaeologyOpen(true);
+    auth.consumeProjectHistoryRequest(request.id);
+  }, [auth.projectHistoryRequest, auth.consumeProjectHistoryRequest]);
+
 
   useEffect(() => {
     if (!notifications.active) return undefined;

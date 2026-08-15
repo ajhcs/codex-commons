@@ -46,7 +46,7 @@
   --rail-width: 220px;
 }
 * { box-sizing: border-box; }
-html, body, #root { min-width: 320px; min-height: 100%; }
+html, body, #root { min-width: 0; min-height: 100%; }
 body {
   margin: 0;
   min-height: 100vh;
@@ -1033,6 +1033,10 @@ textarea:focus-visible, select:focus-visible, summary:focus-visible { outline: 2
   .auth-journey-steps li { gap: 4px; }
   .pairing-code-card strong { font-size: 19px; letter-spacing: .08em; }
 }
+@media (max-width: 360px) {
+  .auth-journey-steps li { align-items: flex-start; }
+  .auth-journey-steps strong { overflow: visible; text-overflow: clip; white-space: normal; }
+}
 @keyframes auth-thread-breathe {
   from { width: 24%; }
   to { width: 58%; }
@@ -1662,15 +1666,8 @@ html[data-theme="dark"] .notification-band--error { background: color-mix(in srg
 /* Commons identity and control language · Open Sans is self-hosted under OFL-1.1. */
 @font-face {
   font-family: "Open Sans";
-  src: url("./assets/fonts/open-sans/OpenSans-Variable.ttf") format("truetype-variations");
+  src: url("./assets/fonts/open-sans/OpenSans-Variable.woff2") format("woff2");
   font-style: normal;
-  font-weight: 300 800;
-  font-display: swap;
-}
-@font-face {
-  font-family: "Open Sans";
-  src: url("./assets/fonts/open-sans/OpenSans-Italic-Variable.ttf") format("truetype-variations");
-  font-style: italic;
   font-weight: 300 800;
   font-display: swap;
 }
@@ -1755,26 +1752,41 @@ html[data-theme="dark"] .pairing-code-value { background: transparent; color: va
   .auth-dialog form { padding: 24px 22px; }
 }
 
-/* Selected OpenAI/Codex-native identity: stable boundary, library icon only. */
-.commons-mark { --mark-size: 42px; width: var(--mark-size); height: var(--mark-size); display: inline-grid; place-items: center; flex: 0 0 var(--mark-size); border: 1px solid var(--border-strong); border-radius: 13px; background: var(--bg); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.04); transition: transform .48s cubic-bezier(.2,.8,.2,1), border-color .32s ease, background-color .32s ease; }
-.commons-mark svg { width: 48%; height: 48%; transition: transform .48s cubic-bezier(.2,.8,.2,1), opacity .24s ease; }
-.commons-mark--tiny { --mark-size: 26px; border-radius: 8px; }
-.commons-mark--small { --mark-size: 36px; border-radius: 11px; }
-.commons-mark--large { --mark-size: 64px; border-radius: 19px; }
-.commons-mark--connecting { border-color: color-mix(in srgb, var(--blue) 42%, var(--border)); animation: commons-mark-breathe 1.8s ease-in-out infinite; }
-.commons-mark--connecting svg { transform: rotate(-8deg) scale(.9); }
-.commons-mark--authorized { border-color: color-mix(in srgb, var(--blue) 55%, var(--border)); background: color-mix(in srgb, var(--blue-soft) 45%, var(--bg)); }
-.commons-mark--resolved, .commons-mark--offered { border-color: color-mix(in srgb, #0c8a56 50%, var(--border)); background: color-mix(in srgb, #e9f7f0 55%, var(--bg)); }
-.commons-mark--resolved svg { transform: rotate(4deg); }
-@keyframes commons-mark-breathe { 50% { transform: translateY(-2px); } }
+/* Original Commons identity: open enclosure, two history loops, one cobalt junction. */
+.commons-mark { --mark-size: 42px; position: relative; width: var(--mark-size); height: var(--mark-size); display: inline-block; flex: 0 0 var(--mark-size); overflow: visible; isolation: isolate; }
+.commons-mark-image { position: absolute; z-index: 1; top: 50%; left: 50%; width: 190%; height: 190%; max-width: none; object-fit: contain; pointer-events: none; transform: translate3d(-50%,-50%,0); transform-origin: center; transition: opacity 440ms cubic-bezier(.2,.8,.2,1), transform 440ms cubic-bezier(.2,.8,.2,1), filter 320ms ease; }
+.commons-mark-image--connecting { opacity: 1; }
+.commons-mark-image--resolved { opacity: 0; transform: translate3d(-50%,calc(-50% + 1px),0) scale(.985); }
+.commons-mark--tiny { --mark-size: 26px; }
+.commons-mark--small { --mark-size: 36px; }
+.commons-mark--large { --mark-size: 64px; }
+.commons-mark--connecting .commons-mark-image--connecting { animation: commons-mark-connect 2.2s cubic-bezier(.45,.05,.55,.95) infinite; }
+.commons-mark--authorized .commons-mark-image--connecting { animation: commons-mark-authorize 1.55s ease-in-out infinite; }
+.commons-mark:is(.commons-mark--resolved,.commons-mark--offered) .commons-mark-image--connecting { opacity: 0; transform: translate3d(-50%,calc(-50% - 1px),0) scale(.985); }
+.commons-mark:is(.commons-mark--resolved,.commons-mark--offered) .commons-mark-image--resolved { opacity: 1; transform: translate3d(-50%,-50%,0) scale(1); }
+html[data-theme="dark"] .commons-mark::before { content: ""; position: absolute; z-index: 0; inset: 3%; border: 1px solid rgba(255,255,255,.16); border-radius: 24%; background: #f7f7f5; box-shadow: 0 4px 18px rgba(0,0,0,.22); }
+html[data-theme="dark"] .commons-mark-image { filter: drop-shadow(0 0 5px rgba(27, 91, 214, .14)); }
+html[data-theme="dark"] .commons-mark--authorized .commons-mark-image--connecting { animation-name: commons-mark-authorize-dark; }
+@keyframes commons-mark-connect {
+  0%, 100% { transform: translate3d(-50%,-50%,0) rotate(-1.4deg) scale(.98); }
+  50% { transform: translate3d(-50%,calc(-50% - 1px),0) rotate(1.4deg) scale(1.015); }
+}
+@keyframes commons-mark-authorize {
+  0%, 100% { opacity: .88; filter: saturate(1) brightness(1); }
+  50% { opacity: 1; filter: saturate(1.22) brightness(1.12) drop-shadow(0 0 5px color-mix(in srgb, var(--blue) 38%, transparent)); }
+}
 .auth-mark { display: grid; place-items: center; }
 .auth-dialog--codex { background: var(--bg); }
+@keyframes commons-mark-authorize-dark {
+  0%, 100% { opacity: .88; filter: saturate(1) brightness(1) drop-shadow(0 0 5px rgba(27, 91, 214, .14)); }
+  50% { opacity: 1; filter: saturate(1.16) brightness(1.06) drop-shadow(0 0 6px color-mix(in srgb, #1b5bd6 38%, transparent)); }
+}
 .auth-dialog--codex form { background: linear-gradient(180deg, color-mix(in srgb, var(--surface-subtle) 34%, var(--bg)) 0, var(--bg) 132px); }
 .history-offer-visual { min-height: 340px; background: color-mix(in srgb, var(--surface-subtle) 74%, var(--bg)); }
 .history-offer-visual .commons-mark { transform: scale(1.2); }
 @media (prefers-reduced-motion: no-preference) { .history-offer-dialog[open] .history-offer-visual .commons-mark { animation: commons-offer-arrive .72s cubic-bezier(.2,.8,.2,1) both; } }
 @keyframes commons-offer-arrive { from { opacity: 0; transform: translateY(10px) scale(.92); } to { opacity: 1; transform: translateY(0) scale(1.2); } }
-@media (prefers-reduced-motion: reduce) { .commons-mark, .commons-mark svg, .commons-mark--connecting, .history-offer-visual .commons-mark { animation: none !important; transition: none !important; transform: none !important; } }
+@media (prefers-reduced-motion: reduce) { .commons-mark, .commons-mark-image, .history-offer-visual .commons-mark { animation: none !important; transition: none !important; } }
 
 .auth-content-transition { animation: auth-content-arrive 220ms cubic-bezier(.2,.8,.2,1) both; }
 .auth-history-offer { display: grid; }
@@ -1786,3 +1798,25 @@ html[data-theme="dark"] .pairing-code-value { background: transparent; color: va
 @keyframes auth-content-arrive { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 @media (max-width: 520px) { .auth-history-offer footer :is(.primary-button,.secondary-button) { min-height: 44px; } }
 @media (prefers-reduced-motion: reduce) { .auth-content-transition { animation: none !important; } }
+/* First-run sign-in hierarchy: one focused action and one calm escape rail. */
+.auth-dialog--codex form:has(.auth-ready-content) { min-height: 472px; grid-template-rows: auto auto 1fr auto; }
+.auth-ready-content { align-self: center; margin-top: 26px; }
+.auth-ready-content .auth-primary-card { padding-top: 0; }
+.auth-ready-content .auth-primary-card .primary-button { min-width: 164px; }
+.auth-ready-content .auth-privacy { margin-top: 12px; }
+.auth-dialog footer.auth-ready-footer { align-items: center; justify-content: space-between; margin-top: 30px; padding-top: 20px; border-top: 1px solid var(--border); }
+.auth-ready-footer .auth-recovery-link { margin: 0; }
+.auth-thread[data-stage="ready"]::before { background: linear-gradient(90deg, color-mix(in srgb, var(--blue) 34%, var(--border)), var(--border) 42%, var(--border)); }
+.auth-journey--ready .auth-connection-endpoint--codex strong { color: var(--blue); }
+.auth-journey--ready .auth-journey-steps li[data-state="current"] strong { font-weight: 650; }
+@media (max-width: 560px) {
+  .auth-dialog--codex form:has(.auth-ready-content) { min-height: 0; }
+  .auth-ready-content { margin-top: 22px; }
+  .auth-primary-card { grid-template-columns: 1fr; }
+  .auth-primary-card .primary-button { grid-column: 1; grid-row: auto; width: 100%; min-height: 44px; margin: 12px 0 0; justify-content: center; }
+  .auth-dialog footer.auth-ready-footer { flex-direction: row; }
+}
+@media (max-width: 360px) {
+  .auth-dialog footer.auth-ready-footer { align-items: stretch; flex-direction: column-reverse; }
+  .auth-ready-footer .auth-recovery-link { min-height: 40px; align-self: center; }
+}

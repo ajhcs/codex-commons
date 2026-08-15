@@ -8,8 +8,8 @@ choice.
 flowchart LR
   A["Identity resolved<br/>Taylor · @taylor"] --> B["Discover<br/>Metadata only"]
   B --> C["Choose<br/>Projects, depth, sources"]
-  C --> D["Prepare<br/>One bounded Codex task per project"]
-  D --> E["Claim + report<br/>Codex-owned work, truthful state"]
+  C --> D["Persist + start<br/>One named Codex task per project"]
+  D --> E["Track + report<br/>Exact native scheduler state"]
   E --> F["Review<br/>Outcomes, sources, session members"]
   F --> G["Existing import preview<br/>Human digest confirmation"]
 ```
@@ -21,8 +21,9 @@ flowchart LR
 - Identity line carries the completed profile forward: `Taylor · @taylor`.
 - Primary copy: "Bring your work into Commons".
 - Calm explanation: Commons first checks project names, source signals, and
-  recent activity. It does not read file or conversation contents during
-  discovery.
+  recent activity. Codex 0.147 may send preview bytes on the inventory wire;
+  Commons immediately discards them and retains only sanitized workspace
+  metadata.
 - Primary action: `Find projects`. Secondary action: `Skip for now`.
 - No automatic discovery, spinner, fake percentage, or hidden task start.
 
@@ -37,22 +38,24 @@ flowchart LR
   `1 | 2 at a time`.
 - Cost and privacy copy updates with depth and sources. It never claims exact
   tokens, completion time, or file coverage.
-- Primary action: `Start Codex tasks`. The action states the number of
-  projects and is disabled until at least one project and one source are chosen.
-- Commons does not claim that this launches a task. The prepared pack is a
-  durable, bounded handoff that Codex can claim and report against.
+- Primary action names both durable effects: Commons persists the selected
+  projects, then starts one ordinary named Codex task per project.
+- A malformed or transient start response is reconciled with one canonical
+  read. A validated native batch is restored without a duplicate start; an
+  unverifiable response stays in configuration with no lifecycle claim.
 
-## Frame 3 — Continue in Codex
+## Frame 3 — Follow the native run
 
-- The prepared pack shows its durable handoff ID and one bounded task per
-  selected project. It never renders a spinner, percentage, fake historian, or
-  unsupported launch button.
-- Exact task and thread IDs are secondary provenance. `Close` leaves durable tasks running
-  ready to claim. Both are explicit about what Commons did and did not start.
-- Once Codex claims the pack, the surface waits for a validated result report.
-- Counts appear only when reported by Codex. Pause, resume, and cancel appear
-  only when the backend capability explicitly supports those actions; the
-  export/claim/report pilot does not simulate them.
+- The native ledger shows its batch ID and one bounded task per selected
+  project. It never renders a percentage, fake historian, retry, or unsupported
+  lifecycle control.
+- Exact task and thread IDs are secondary provenance. `Close` only hides the
+  surface: accepted tasks continue and queued tasks remain queued.
+- The surface waits for bounded progress and a validated report from each exact
+  bound native task.
+- Counts appear only when reported by Codex. Cancel appears only when the
+  backend authorizes it; pause, resume, retry, task packs, and external claiming
+  are not native controls.
 - An unavailable handoff is a complete state with its server reason and a calm
   return path, not a disabled primary action.
 
@@ -62,8 +65,9 @@ flowchart LR
   named tasks (`Project history · <project>`). It imports zero Tasks or history.
 - Native rows use separate candidate, canonical project, job, batch, thread, and
   turn identities. Task names lead; identifiers stay secondary and copyable.
-- Exact native states are rendered literally. At most two jobs are active, and
-  queued/active/report/attention counts come from the bounded backend progress.
+- Exact native states are rendered literally. Commons submits every manually
+  confirmed job; Codex governs execution capacity. Queued/active/report/attention
+  counts come from the bounded backend progress.
 - Cancel appears only for a server-authorized native queued/running batch. It
   stops queued work, requests interruption for active work, preserves audit
   history, and never implies pause, retry, or automatic restart.
@@ -84,11 +88,15 @@ flowchart LR
   `offline` or `unauthorized`.
 - Session evidence may show contributions, sources, collaborations,
   demonstrated strengths, and uncertainties. It does not assign a rigid persona.
-- Primary action: `Review import preview`. This passes the validated historical
-  import proposal to the existing canonical preview.
-- The confirmation frame shows the exact source digest, current-wins collision
-  policy, creates/skips/replays, and requires the human to enter the entire
-  digest. Only the existing canonical apply endpoint can mutate project history.
+- Native report details remain view-only (`can_apply=false`) and use `Back to
+  run` when opened from the retained ledger.
+- `Review exact proposal` appears only when both the report and capability
+  authorize it. The production-valid bridge contains every bounded task and
+  evidence row.
+- The confirmation frame shows both the server-derived manifest digest and the
+  source digest, current-wins collision policy, and creates/skips/replays. The
+  human enters the complete manifest digest; the apply request confirms both
+  digests. Only the canonical apply endpoint can mutate project history.
 
 ## Responsive and accessibility contract
 

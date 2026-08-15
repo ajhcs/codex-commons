@@ -51,7 +51,7 @@ function ProfileFields({ value, onChange, disabled = false }) {
           name="display-name"
           autoComplete="name"
           value={value.displayName}
-          onChange={(event) => onChange({ ...value, displayName: event.target.value })}
+          onChange={(event) => onChange((current) => ({ ...current, displayName: event.target.value }))}
           disabled={disabled}
           maxLength={200}
           required
@@ -63,7 +63,7 @@ function ProfileFields({ value, onChange, disabled = false }) {
           name="handle"
           autoComplete="username"
           value={value.handle}
-          onChange={(event) => onChange({ ...value, handle: event.target.value.toLowerCase() })}
+          onChange={(event) => onChange((current) => ({ ...current, handle: event.target.value.toLowerCase() }))}
           disabled={disabled}
           minLength={3}
           maxLength={64}
@@ -307,11 +307,6 @@ export function LoginDialog({ open, onClose, onAuthenticated }) {
   }
 
   async function copyCode() {
-    if (globalThis.isSecureContext !== true) {
-      setCopyState(`Copy isn’t available here. Press ${manualCopyShortcut()} to copy the selected code, or type it in.`);
-      queueMicrotask(() => { codeRef.current?.focus({ preventScroll: true }); codeRef.current?.select(); });
-      return;
-    }
     const copied = await copyText(pairing?.userCode || "");
     if (copied) {
       setCopyState("Code copied.");
@@ -325,7 +320,9 @@ export function LoginDialog({ open, onClose, onAuthenticated }) {
     const model = historyOffer;
     setHistoryOffer(null);
     flowStartedRef.current = false;
-    onAuthenticatedRef.current?.(auth.session, { freshCodexProfile: true, openProjectHistory: true, archaeologySeed: model });
+    auth.requestProjectHistory(model);
+    resetLocal();
+    closeDialog();
   }
 
   function skipHistory() {
@@ -349,13 +346,13 @@ export function LoginDialog({ open, onClose, onAuthenticated }) {
           : "Link this installation to your Codex account to write in Commons.";
 
   return (
-    <dialog ref={dialogRef} className="auth-dialog auth-dialog--codex" onClose={closed} onCancel={cancel} onKeyDown={keepFocusInside}>
+    <dialog ref={dialogRef} className="auth-dialog auth-dialog--codex" aria-labelledby="auth-dialog-title" aria-describedby="auth-dialog-description" onClose={closed} onCancel={cancel} onKeyDown={keepFocusInside}>
       <form onSubmit={profileMode ? submitProfile : recoveryOpen ? submitRecovery : (event) => { event.preventDefault(); beginCodex(); }}>
         <header>
           <span className="auth-mark"><CommonsMark state={completionMode ? "resolved" : pairingMode ? journeyStage === "authorize" ? "authorized" : "connecting" : "idle"} size="small" /></span>
           <div>
-            <h2>{title}</h2>
-            <p>{description}</p>
+            <h2 id="auth-dialog-title">{title}</h2>
+            <p id="auth-dialog-description">{description}</p>
           </div>
         </header>
 
@@ -469,16 +466,18 @@ export function LoginDialog({ open, onClose, onAuthenticated }) {
         ) : (
           <>
             <AuthJourney stage="ready" />
-            <div className="auth-primary-card">
-              <strong>Use your Codex account</strong>
-              <span>Commons receives only the account identity needed to bind this installation.</span>
-              <button type="submit" className="primary-button">Continue with Codex</button>
+            <div className="auth-ready-content">
+              <div className="auth-primary-card">
+                <strong>Continue with your Codex account</strong>
+                <span>Commons receives only the account identity needed to bind this installation.</span>
+                <button type="submit" className="primary-button">Continue with Codex</button>
+              </div>
+              <p className="auth-privacy">Your Codex password, token, and browser credentials stay with Codex.</p>
             </div>
-            <p className="auth-privacy">No Codex password, token, or browser credential is stored by Commons.</p>
-            <footer>
+            <footer className="auth-ready-footer">
+              <button type="button" className="auth-recovery-link" onClick={() => setRecoveryOpen(true)}>Use recovery key</button>
               <button type="button" className="secondary-button" onClick={requestClose}>Cancel</button>
             </footer>
-            <button type="button" className="auth-recovery-link" onClick={() => setRecoveryOpen(true)}>Use recovery key</button>
           </>
         )}
       </form>
@@ -521,11 +520,11 @@ export function ProfileDialog({ open, onClose }) {
   }
 
   return (
-    <dialog ref={dialogRef} className="auth-dialog profile-dialog" onClose={close} onCancel={(event) => { event.preventDefault(); close(); }}>
+    <dialog ref={dialogRef} className="auth-dialog profile-dialog" aria-labelledby="profile-dialog-title" aria-describedby="profile-dialog-description" onClose={close} onCancel={(event) => { event.preventDefault(); close(); }}>
       <form onSubmit={submit}>
         <header>
           <span className="auth-mark"><CommonsMark state="authorized" size="small" /></span>
-          <div><h2>Edit profile</h2><p>Your dynamic human identity is used for new Commons writing.</p></div>
+          <div><h2 id="profile-dialog-title">Edit profile</h2><p id="profile-dialog-description">Your dynamic human identity is used for new Commons writing.</p></div>
         </header>
         <ProfileFields value={profile} onChange={setProfile} disabled={state.state === "loading"} />
         {state.message ? <p className={`form-message form-message--${state.state === "success" ? "success" : "error"}`} role="status">{state.message}</p> : null}

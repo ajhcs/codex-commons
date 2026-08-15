@@ -1,0 +1,13 @@
+[Unit]
+Description=Verify and back up Codex Commons SQLite
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/codex-commons/dogfood.env
+ExecStart=/bin/sh %h/.local/lib/codex-commons/current/ops/backup.sh
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=%h/.local/state/codex-commons
+UMask=0077

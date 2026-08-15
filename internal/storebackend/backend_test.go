@@ -1,11 +1,37 @@
 package storebackend
 
 import (
+	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"codex-commons/internal/codexauth"
+	"codex-commons/internal/httpapi"
 	"codex-commons/internal/presence"
+	commonsstore "codex-commons/internal/store"
 )
+
+type betaCodexClient struct {
+	available bool
+	state     codexauth.AccountState
+	err       error
+}
+
+func (c betaCodexClient) Available() bool { return c.available }
+func (c betaCodexClient) StartDeviceCode(context.Context) (codexauth.DeviceCode, error) {
+	return codexauth.DeviceCode{}, codexauth.ErrUnavailable
+}
+func (c betaCodexClient) PollLogin(context.Context, string) (codexauth.LoginResult, error) {
+	return codexauth.LoginResult{}, codexauth.ErrUnavailable
+}
+func (c betaCodexClient) CancelLogin(context.Context, string) error { return codexauth.ErrUnavailable }
+func (c betaCodexClient) AccountState(context.Context) (codexauth.AccountState, error) {
+	return c.state, c.err
+}
+func (c betaCodexClient) SetEventHandler(func(codexauth.Event)) {}
+func (c betaCodexClient) Close() error                          { return nil }
 
 func TestMatchesPresenceState(t *testing.T) {
 	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
@@ -34,6 +60,98 @@ func TestMatchesPresenceState(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			if got := matchesPresenceState(test.state, test.item, now); got != test.want {
 				t.Fatalf("matchesPresenceState(%q)=%v want %v", test.state, got, test.want)
+			}
+		})
+	}
+}
+
+func TestInstallationStatusRejectsUnreceiptedEvidenceAndPendingRevocation(t *testing.T) {
+	ctx := context.Background()
+	store, err := commonsstore.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	backend, err := New(store, presence.New(nil), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.DB().ExecContext(ctx, `UPDATE installation_status SET
+		backup_status='verified',restore_status='verified',compatibility_status='compatible',reconciliation_status='healthy',
+		report_recovery_status='verified',report_recovery_checked_at='2026-08-13T12:00:00Z',report_recovery_receipt_digest=lower(hex(randomblob(32))),
+		duplicate_launch_status='verified',duplicate_launch_checked_at='2026-08-13T12:00:00Z',duplicate_launch_receipt_digest=lower(hex(randomblob(32))),
+		repository_immutability_status='verified',repository_immutability_checked_at='2026-08-13T12:00:00Z',repository_immutability_receipt_digest=lower(hex(randomblob(32))),
+		canonical_immutability_status='verified',canonical_immutability_checked_at='2026-08-13T12:00:00Z',canonical_immutability_receipt_digest=lower(hex(randomblob(32))),
+		codex_session_revocation_pending=1 WHERE id=1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := backend.InstallationStatus(ctx, httpapi.RequestMeta{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Evidence.ReportRecovery.Status != "unknown" || status.Evidence.DuplicateLaunchCheck.Status != "unknown" || status.Evidence.RepositoryImmutability.Status != "unknown" || status.Evidence.CanonicalImmutability.Status != "unknown" {
+		t.Fatalf("unreceipted evidence was trusted: %+v", status.Evidence)
+	}
+	if !status.Codex.SessionRevocationPending || status.Evidence.BetaPrerequisitesMet {
+		t.Fatalf("pending revocation status=%+v evidence=%+v", status.Codex, status.Evidence)
+	}
+	status.Codex.SessionRevocationPending = false
+	if status.Evidence.BetaPrerequisitesMet {
+		t.Fatal("unconfigured/signed-out Codex account was Beta-ready")
+	}
+}
+
+func TestInstallationStatusBetaRequiresLiveSignedInCodexAndReceiptedEvidence(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		configured bool
+		available  bool
+		state      codexauth.AccountState
+		err        error
+		want       bool
+	}{
+		{name: "signed in", configured: true, available: true, state: codexauth.AccountSignedIn, want: true},
+		{name: "signed out", configured: true, available: true, state: codexauth.AccountSignedOut},
+		{name: "unknown", configured: true, available: true, state: codexauth.AccountUnknown},
+		{name: "account error", configured: true, available: true, state: codexauth.AccountSignedIn, err: errors.New("read failed")},
+		{name: "unavailable", configured: true, state: codexauth.AccountSignedIn},
+		{name: "unconfigured"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			store, err := commonsstore.Open(ctx, ":memory:")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			backend, err := New(store, presence.New(nil), "release-test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.configured {
+				backend.ConfigureCodex(betaCodexClient{available: test.available, state: test.state, err: test.err}, "0.147.0")
+			}
+			checked := "2026-08-13T12:00:00Z"
+			for index, kind := range []string{"report_recovery", "duplicate_launch", "repository_immutability", "canonical_immutability"} {
+				digest := strings.Repeat(string(rune('a'+index)), 64)
+				if _, err = store.DB().ExecContext(ctx, `INSERT INTO installation_evidence_receipts(kind,status,violations,checked_at,scope_digest,receipt_digest,recorded_at) VALUES(?,'verified',0,?,lower(hex(randomblob(32))),?,?)`, kind, checked, digest, checked); err != nil {
+					t.Fatal(err)
+				}
+				if _, err = store.DB().ExecContext(ctx, `UPDATE installation_status SET `+kind+`_status='verified',`+kind+`_violations=0,`+kind+`_checked_at=?,`+kind+`_receipt_digest=? WHERE id=1`, checked, digest); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err = store.DB().ExecContext(ctx, `UPDATE installation_status SET backup_status='verified',restore_status='verified',compatibility_status='compatible',reconciliation_status='healthy',codex_session_revocation_pending=0 WHERE id=1`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			status, err := backend.InstallationStatus(ctx, httpapi.RequestMeta{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if status.Evidence.BetaPrerequisitesMet != test.want {
+				t.Fatalf("Beta ready=%v want=%v Codex=%+v", status.Evidence.BetaPrerequisitesMet, test.want, status.Codex)
 			}
 		})
 	}

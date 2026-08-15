@@ -23,6 +23,56 @@ func (a *Adapter) ProjectArchaeology(ctx context.Context, meta httpapi.RequestMe
 	out, err := a.home.ProjectArchaeology(ctx, meta.Principal)
 	return out, mapProjectCoreError(err, "project archaeology")
 }
+func (a *Adapter) ProjectArchaeologyCatalog(ctx context.Context, input application.ArchaeologyCatalogRequest, meta httpapi.RequestMeta) (application.ArchaeologyCatalogPage, error) {
+	if err := validateArchaeologyRead(meta); err != nil {
+		return application.ArchaeologyCatalogPage{}, err
+	}
+	out, err := a.home.ProjectArchaeologyCatalog(ctx, meta.Principal, input)
+	return out, mapProjectCoreError(err, "project archaeology catalog")
+}
+func (a *Adapter) ProjectArchaeologyBatchHistory(ctx context.Context, cursor string, limit int, meta httpapi.RequestMeta) (application.ArchaeologyBatchHistoryPage, error) {
+	if err := validateArchaeologyRead(meta); err != nil {
+		return application.ArchaeologyBatchHistoryPage{}, err
+	}
+	out, err := a.home.ProjectArchaeologyBatchHistory(ctx, meta.Principal, cursor, limit)
+	return out, mapProjectCoreError(err, "project archaeology history")
+}
+func (a *Adapter) ProjectArchaeologyBatch(ctx context.Context, batchID string, meta httpapi.RequestMeta) (application.ArchaeologyBatchDetail, error) {
+	if err := validateArchaeologyRead(meta); err != nil {
+		return application.ArchaeologyBatchDetail{}, err
+	}
+	out, err := a.home.ProjectArchaeologyBatch(ctx, meta.Principal, batchID)
+	return out, mapProjectCoreError(err, "project archaeology batch")
+}
+func (a *Adapter) ProjectArchaeologyBatchOutcomes(ctx context.Context, batchID, cursor string, meta httpapi.RequestMeta) (application.ArchaeologyOutcomePage, error) {
+	if err := validateArchaeologyRead(meta); err != nil {
+		return application.ArchaeologyOutcomePage{}, err
+	}
+	out, err := a.home.ProjectArchaeologyBatchOutcomes(ctx, meta.Principal, batchID, cursor)
+	return out, mapProjectCoreError(err, "project archaeology batch outcomes")
+}
+func (a *Adapter) PreviewSelectedArchaeologyImports(ctx context.Context, batchID string, input application.ArchaeologySelectedPreviewRequest, meta httpapi.RequestMeta) (application.ArchaeologySelectedPreview, error) {
+	if err := validateCoreWrite(meta, true); err != nil {
+		return application.ArchaeologySelectedPreview{}, err
+	}
+	out, err := a.home.PreviewSelectedArchaeologyImports(ctx, meta.Principal, batchID, input, coreActor(meta))
+	return out, mapProjectCoreError(err, "selected archaeology preview")
+}
+func (a *Adapter) PreviewSelectedArchaeologyImportsPage(ctx context.Context, batchID, cursor string, input application.ArchaeologySelectedPreviewRequest, meta httpapi.RequestMeta) (application.ArchaeologySelectedPreview, error) {
+	if err := validateCoreWrite(meta, true); err != nil {
+		return application.ArchaeologySelectedPreview{}, err
+	}
+	input.ReviewRequestID = meta.IdempotencyKey
+	out, err := a.home.PreviewSelectedArchaeologyImportsPage(ctx, meta.Principal, batchID, cursor, input, coreActor(meta))
+	return out, mapProjectCoreError(err, "selected archaeology preview page")
+}
+func (a *Adapter) ApplySelectedArchaeologyImports(ctx context.Context, batchID string, input application.ArchaeologySelectedApplyRequest, meta httpapi.RequestMeta) (application.ArchaeologySelectedApplyResult, error) {
+	if err := validateCoreWrite(meta, true); err != nil {
+		return application.ArchaeologySelectedApplyResult{}, err
+	}
+	out, err := a.home.ApplySelectedArchaeologyImports(ctx, meta.Principal, meta.IdempotencyKey, batchID, input, coreActor(meta))
+	return out, mapProjectCoreError(err, "selected archaeology apply")
+}
 func (a *Adapter) DiscoverProjectArchaeology(ctx context.Context, meta httpapi.RequestMeta) (application.ArchaeologySession, error) {
 	if err := validateCoreWrite(meta, true); err != nil {
 		return application.ArchaeologySession{}, err
@@ -64,6 +114,14 @@ func (a *Adapter) CancelProjectArchaeology(ctx context.Context, input applicatio
 	}
 	out, err := a.home.CancelProjectArchaeology(ctx, meta.Principal, meta.IdempotencyKey, input)
 	return out, mapProjectCoreError(err, "project archaeology")
+}
+
+func (a *Adapter) ResolveProjectArchaeologyUncertainty(ctx context.Context, input application.ArchaeologyResolutionRequest, meta httpapi.RequestMeta) (application.ArchaeologySession, error) {
+	if err := validateCoreWrite(meta, true); err != nil {
+		return application.ArchaeologySession{}, err
+	}
+	out, err := a.home.ResolveProjectArchaeologyUncertainty(ctx, meta.Principal, meta.IdempotencyKey, input)
+	return out, mapProjectCoreError(err, "project archaeology resolution")
 }
 
 func (a *Adapter) ClaimProjectArchaeology(ctx context.Context, input application.ArchaeologyHandoffClaimRequest, meta httpapi.RequestMeta) (application.ArchaeologySession, error) {

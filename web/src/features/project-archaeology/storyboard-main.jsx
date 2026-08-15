@@ -10,19 +10,9 @@ import {
   archaeologyCanceledFixture,
   archaeologyLegacyFixture,
   archaeologyReviewFixture,
+  archaeologyImportBridgeFixture,
 } from "./projectArchaeologyFixtures.js";
 import "../../styles.css";
-
-const importBridge = {
-  projectId: "codex-commons",
-  request: { sourceDigest: `sha256:${"c".repeat(64)}` },
-  preview: {
-    batchId: "Codex Commons history",
-    sourceDigest: `sha256:${"c".repeat(64)}`,
-    manifestDigest: `sha256:${"d".repeat(64)}`,
-    counts: { tasks: 18, projectThreadAliases: 6, attributions: 22, events: 41 },
-  },
-};
 
 const initialStates = {
   intro: { ...archaeologyReadyFixture, id: "", discovery: { state: "idle", metadataOnly: true, candidates: [] } },
@@ -100,7 +90,7 @@ function Storyboard() {
       />
       <HistoricalImportPreviewDialog
         open={previewOpen}
-        bridge={importBridge}
+        bridge={archaeologyImportBridgeFixture}
         onConfirm={() => setPreviewOpen(false)}
         onClose={() => setPreviewOpen(false)}
       />

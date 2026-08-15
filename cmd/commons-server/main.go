@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -11,11 +12,23 @@ import (
 	"codex-commons/internal/server"
 )
 
+// releaseID is set only by ops/build-release.sh. A production release refuses
+// to stage when this embedded identity differs from its immutable directory.
+var releaseID = "dev"
+
 func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	if len(os.Args) == 2 && os.Args[1] == "--build-id" {
+		fmt.Println(releaseID)
+		return
+	}
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	config, err := server.ParseConfig(os.Args[1:], os.Getenv, os.Stderr)
 	if err != nil {
 		logger.Error("invalid commons server configuration", "error", err)
+		os.Exit(2)
+	}
+	if config.ReleaseIdentityFile != "" && config.Version != releaseID {
+		logger.Error("release identity does not match embedded build identity")
 		os.Exit(2)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

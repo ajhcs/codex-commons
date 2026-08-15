@@ -70,6 +70,11 @@ func readArchaeologyRoots(path string) ([]ArchaeologyRoot, error) {
 		if statErr != nil || !entryInfo.IsDir() {
 			return nil, errors.New("archaeology root must be an existing directory")
 		}
+		resolved, eligible := eligibleWorkspace(root.Path)
+		if !eligible || broadWorkspaceRoot(resolved) {
+			return nil, errors.New("archaeology root must be a bounded project directory")
+		}
+		root.Path = resolved
 		seen[root.ID] = true
 	}
 	sort.Slice(payload.Roots, func(i, j int) bool { return payload.Roots[i].ID < payload.Roots[j].ID })

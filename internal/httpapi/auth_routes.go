@@ -16,7 +16,7 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request, rid string) {
 		h.writeError(w, rid, http.StatusNotFound, "recovery_disabled", "Recovery login is not enabled")
 		return
 	}
-	if !sameOrigin(r) {
+	if !sameOrigin(r, h.config.PublicOrigin) {
 		h.writeError(w, rid, http.StatusForbidden, "origin_forbidden", "same-origin request required")
 		return
 	}
@@ -59,7 +59,7 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request, rid string) {
 		h.writeError(w, rid, http.StatusServiceUnavailable, "unavailable", "could not create session")
 		return
 	}
-	setHumanCookie(w, r, token, session.expiresAt, int(h.humanAuth.ttl/time.Second))
+	setHumanCookie(w, r, h.config.PublicOrigin, token, session.expiresAt, int(h.humanAuth.ttl/time.Second))
 	h.write(w, http.StatusOK, envelope{OK: true, Data: h.humanAuth.result(&session), Meta: responseMeta{RequestID: rid}})
 }
 
@@ -69,7 +69,7 @@ func (h *handler) logout(w http.ResponseWriter, r *http.Request, rid string) {
 		h.writeError(w, rid, http.StatusUnauthorized, "unauthorized", "authenticated human session required")
 		return
 	}
-	if !sameOrigin(r) {
+	if !sameOrigin(r, h.config.PublicOrigin) {
 		h.writeError(w, rid, http.StatusForbidden, "origin_forbidden", "same-origin request required")
 		return
 	}
@@ -81,12 +81,18 @@ func (h *handler) logout(w http.ResponseWriter, r *http.Request, rid string) {
 	if !h.decode(w, r, RequestMeta{RequestID: rid}, &body) {
 		return
 	}
-	h.humanAuth.remove(principal.cookie)
-	setHumanCookie(w, r, "", time.Unix(1, 0), -1)
+	if err := h.humanAuth.remove(principal.cookie); err != nil {
+		h.writeError(w, rid, http.StatusServiceUnavailable, "unavailable", "Commons authentication is temporarily unavailable")
+		return
+	}
+	setHumanCookie(w, r, h.config.PublicOrigin, "", time.Unix(1, 0), -1)
 	h.write(w, http.StatusOK, envelope{OK: true, Data: authSessionResult{Authenticated: false}, Meta: responseMeta{RequestID: rid}})
 }
 
 func constantTimeTokenEqual(a, b string) bool {
+	if a == "" || b == "" || len(a) > 256 || len(b) > 256 {
+		return false
+	}
 	aDigest := sha256.Sum256([]byte(a))
 	bDigest := sha256.Sum256([]byte(b))
 	return subtle.ConstantTimeCompare(aDigest[:], bDigest[:]) == 1

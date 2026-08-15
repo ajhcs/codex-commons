@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { copyText, manualCopyShortcut } from "../browser/copyText.js";
 import Copy from "../icons/Copy.tsx";
 import { Timestamp } from "./Controls.jsx";
 
@@ -19,30 +20,13 @@ function RecordedTime({ value }) {
 }
 
 function ProvenanceFacts({ provenance, recorded }) {
-  const [copied, setCopied] = useState(false);
+  const [copyStatus, setCopyStatus] = useState("");
   if (!provenance?.session) return null;
 
   async function copySession() {
-    try {
-      if (globalThis.navigator?.clipboard?.writeText) {
-        await globalThis.navigator.clipboard.writeText(provenance.session);
-      } else {
-        const field = document.createElement("textarea");
-        field.value = provenance.session;
-        field.setAttribute("readonly", "");
-        field.style.position = "fixed";
-        field.style.opacity = "0";
-        document.body.append(field);
-        field.select();
-        const copied = document.execCommand("copy");
-        field.remove();
-        if (!copied) throw new Error("Copy is unavailable");
-      }
-      setCopied(true);
-      globalThis.setTimeout(() => setCopied(false), 1800);
-    } catch {
-      setCopied(false);
-    }
+    const copied = await copyText(provenance.session);
+    setCopyStatus(copied ? "Session ID copied." : `Copy unavailable. Select the ID and press ${manualCopyShortcut()}.`);
+    globalThis.setTimeout(() => setCopyStatus(""), 2400);
   }
 
   return (
@@ -55,7 +39,7 @@ function ProvenanceFacts({ provenance, recorded }) {
         {recorded || provenance.recordedAt ? <div><dt>Recorded</dt><dd><RecordedTime value={provenance.recordedAt || recorded} /></dd></div> : null}
       </dl>
       <p>Historical provenance—not live presence, assignment, reachability, or a chat control.</p>
-      <span className="sr-only" aria-live="polite">{copied ? "Session ID copied" : ""}</span>
+      <span className={copyStatus.includes("unavailable") ? "provenance-copy-status is-error" : "sr-only"} role="status">{copyStatus}</span>
     </div>
   );
 }

@@ -672,7 +672,7 @@ func TestOversizedLineFailsPendingRequest(t *testing.T) {
 		errorCh <- err
 	}()
 	nextRequest(t, transport)
-	oversized := append(bytes.Repeat([]byte{'x'}, MaxLineBytes+1), '\n')
+	oversized := append(bytes.Repeat([]byte{'x'}, MaxReadLineBytes+1), '\n')
 	go func() { _ = transport.respondRaw(oversized) }()
 
 	select {
@@ -748,5 +748,16 @@ func TestApprovedEnvironmentFiltersToAllowlist(t *testing.T) {
 	}
 	if got := ApprovedEnvironment(source); !reflect.DeepEqual(got, want) {
 		t.Fatalf("ApprovedEnvironment = %#v, want %#v", got, want)
+	}
+}
+
+func TestCloseReportsManagedProcessExitTimeout(t *testing.T) {
+	client, _ := newTestClient(t)
+	client.waitDone = make(chan struct{})
+	prior := processExitWait
+	processExitWait = 10 * time.Millisecond
+	t.Cleanup(func() { processExitWait = prior })
+	if err := client.Close(); !errors.Is(err, ErrProcessExitTimeout) {
+		t.Fatalf("close err=%v", err)
 	}
 }

@@ -1,69 +1,26 @@
-# Slice 15.5 — truthful real-project cutover
+# Slice 15.5 — controlled native Project Archaeology
 
-Slice 15.5 closes the Project Archaeology integration seam without pretending
-the Commons Go server can create or attest Codex tasks. It keeps the existing
-historical import boundary authoritative: current data wins, preview is
-non-mutating, and only the signed-in human may apply the exact digest-confirmed
-payload.
+Slice 15.5 connects Project Archaeology to the paired Codex App Server without making Commons an orchestrator or granting model output write authority. It is experimental trusted single-human dogfood, not share-ready.
 
 ## Bounded flow
 
-1. The operator configures a mode-0600 JSON allowlist with explicit project
-   roots. Discovery reads filesystem metadata only and returns configured
-   labels, never raw paths, file bodies, prompts, transcripts, or secrets.
-2. The human chooses candidates and sources. Closing or skipping this UI sends
-   no request and records nothing.
-3. Start creates a durable `ready_to_claim` historian task pack. It does not
-   spawn a process, call a model, or claim work is running.
-4. An authenticated Codex agent calls the claim endpoint. Its server-attested
-   exact session ID becomes the immutable claimant.
-5. That same session reports a bounded result with exact source digests and
-   contributor session IDs. A completed report creates truthful completed-run
-   receipts and a durable review manifest.
-6. The human selects one outcome and calls `import-preview`. The response
-   contains the canonical historical-import request plus the existing preview
-   receipt. Apply remains the existing project endpoint and requires the same
-   request with `confirm_source_digest` set to the exact source digest.
+1. Commons groups active and archived Codex-known workspace metadata into a bounded project catalog. Optional mode-0600 roots add operator-approved projects. Remote or co-located App Server metadata is in scope; a launch still requires an eligible working directory available to that App Server.
+2. The human selects projects, depth, and admissible evidence kinds. Source selection governs evidence that may be cited; it does not provide filesystem isolation. Closing or skipping performs no write.
+3. Start persists the exact policy, maps only empty project/topic shells, and queues one named `gpt-5.6-luna`/`max` read-only, never-approve task per project. Commons submits every manually confirmed task in the batch, up to 30 selections; Codex App Server governs execution capacity and allowance scheduling.
+4. Commons durably binds each accepted Codex thread, session, and turn. A lost or malformed acceptance response is uncertain and is never retried blindly. Bounded metadata-only recovery requires one exact title-and-working-directory match across active and archived tasks; otherwise the uncertainty gate remains closed.
+5. The exact bound task may report bounded progress and a source-grounded proposal through the two Project Archaeology tools. Disabled evidence kinds, invalid stable IDs, mismatched identities, oversized reports, excess rows, or inconsistent contributor/provenance claims are rejected.
+6. Native output is retained for human review. Apply is default-off until both report acceptances pass. When enabled, every selected five-item preview page must be reviewed under a principal-bound session; the final completion token authorizes one stale-rejecting, append-only-audited SQLite transaction. Review stays bound to its exact source batch even while a newer batch is queued.
 
-## Configuration
+## Recovery and lifecycle
 
-Set `COMMONS_ARCHAEOLOGY_ROOTS_FILE` or `--archaeology-roots-file` to a private
-JSON file:
+Queued cancellation is final without waiting for a callback. Active cancellation requests one exact turn interruption; a lost turn becomes uncertain. Human resolution requires the stored job, thread, and turn IDs and an append-only `confirmed_stopped` record. Identity-less recovery has no action and no retry. Native pause, resume, retry, and automatic restart are deliberately absent. Persisted native history never falls back to the legacy control plane when native execution is disabled.
 
-```json
-{
-  "roots": [{
-    "id": "codex-commons",
-    "name": "Codex Commons",
-    "path": "/absolute/operator-approved/path",
-    "path_label": "~/projects/codex-commons",
-    "repository_label": "codex-commons"
-  }]
-}
-```
+## Import boundary
 
-The file must be mode 0600. Paths must be absolute existing directories. The
-path is used only by the metadata adapter and is not stored in archaeology
-tables or returned through the API.
-
-## Endpoints and authority
-
-- Human: `GET /v1/project-archaeology`
-- Human: `POST /v1/project-archaeology/discover`
-- Human: `PUT /v1/project-archaeology/config`
-- Human: `POST /v1/project-archaeology/start`
-- Agent: `POST /v1/project-archaeology/handoff/claim`
-- Same claimed agent: `POST /v1/project-archaeology/handoff/report`
-- Human: `POST /v1/project-archaeology/import-preview`
-- Human: existing `/v1/projects/{id}/historical-imports/apply`
-
-All mutations require normal authentication, CSRF where applicable, and an
-`Idempotency-Key`. Historical contributor IDs are community provenance, but
-their review facts explicitly say `historical_or_unknown`, `not_attested`, and
-`provenance_only`; membership does not invent reachability or write authority.
+Native review never mutates Tasks, Wiki, Posts, or canonical historical-import tables. The feature-flagged selected Apply route is the only native import path; generic historical Apply rejects native proposals. The separate legacy bridge may apply eligible non-native proposals after complete diff review and exact digest confirmation. Current records win collisions.
 
 ## Deliberate exclusions
 
-No automatic apply, shell spawning, hidden task launch, moderator, Pals,
-multi-human/RBAC, separate communication object, live database mutation, or
-bulk demo content is part of this slice.
+No automatic apply, arbitrary filesystem discovery, write-capable historian, hidden task launch, invented identity, multi-human/RBAC, team/profile semantics, messaging, agent wake, deployment, or live multi-host pilot is part of this slice. Catalog discovery is revision-bound and paginated at 100 projects per page across 10,000 task records. Batch/outcome history is durably paginated and keeps immutable project-name snapshots.
+
+Codex 0.147.0 sends preview bytes as part of inventory JSONL. Commons receives those protocol-mandated bytes under a 16 MiB line cap but never represents, persists, projects, or logs them. The private loopback/HTTPS bootstrap, immutable release, backup, restore, and rollback sequence is defined in `deploy/CONTINUOUS_DOGFOOD_RUNBOOK.md`.

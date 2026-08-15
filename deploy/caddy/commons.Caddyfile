@@ -1,0 +1,18 @@
+commons.plumbob.lan {
+	tls internal
+	respond /v1/internal/* 404
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+	reverse_proxy 127.0.0.1:8088 {
+		header_up Host {host}
+		transport http {
+			dial_timeout 5s
+			response_header_timeout 65s
+		}
+	}
+}

@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -17,6 +18,77 @@ type fakeArchaeologyDiscoverer struct{}
 
 func (fakeArchaeologyDiscoverer) DiscoverMetadata(context.Context) (domain.ArchaeologyDiscovery, error) {
 	return domain.ArchaeologyDiscovery{SourceRootsScanned: 1, Candidates: []domain.ArchaeologyCandidate{{ID: "p", Name: "Project", PathLabel: "Project", HasGit: true, DurationMinSeconds: 60, DurationMaxSeconds: 120, RelativeCost: "low", PrivacyNote: "Metadata only."}}}, nil
+}
+
+type countingArchaeologyDiscoverer struct{ calls int }
+
+func (d *countingArchaeologyDiscoverer) DiscoverMetadata(context.Context) (domain.ArchaeologyDiscovery, error) {
+	d.calls++
+	return fakeArchaeologyDiscoverer{}.DiscoverMetadata(context.Background())
+}
+
+func TestProjectArchaeologyRefreshNeverCallsInventoryDuringLiveNativeWork(t *testing.T) {
+	ctx := context.Background()
+	repository, err := commonsstore.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	value, err := repository.ReplaceArchaeologyDiscovery(ctx, domain.ArchaeologyMutation{Principal: domain.HumanLocalPrincipal, RequestID: "discover"}, domain.ArchaeologyDiscovery{Candidates: []domain.ArchaeologyCandidate{{ID: "p", Name: "Project", PathLabel: "Project", HasGit: true, DurationMinSeconds: 1, DurationMaxSeconds: 2, RelativeCost: "low"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err = repository.ConfigureArchaeology(ctx, domain.ArchaeologyMutation{Principal: domain.HumanLocalPrincipal, RequestID: "configure", Config: domain.ArchaeologyConfig{SelectedProjectIDs: []string{"p"}, Depth: "quick", Sources: domain.ArchaeologySources{Git: true}, MaxConcurrency: 1}, BaseRevision: value.Revision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err = repository.QueueArchaeologyNativeBatch(ctx, domain.ArchaeologyNativeBatchRequest{Principal: domain.HumanLocalPrincipal, RequestID: "start", BaseRevision: value.Revision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobID := value.NativeBatches[0].Jobs[0].ID
+	discoverer := &countingArchaeologyDiscoverer{}
+	service := New(repository, nil, nil)
+	service.ConfigureProjectArchaeology(discoverer, nil)
+	for _, state := range []string{"queued", "starting", "active", "report_ready", "cancel_requested"} {
+		if _, err = repository.DB().ExecContext(ctx, `UPDATE archaeology_native_jobs SET state=? WHERE id=?`, state, jobID); err != nil {
+			t.Fatal(err)
+		}
+		before, err := repository.ArchaeologySession(ctx, domain.HumanLocalPrincipal)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = service.DiscoverProjectArchaeology(ctx, domain.HumanLocalPrincipal, "refresh-"+state); !errors.Is(err, domain.ErrConflict) {
+			t.Fatalf("state=%s err=%v", state, err)
+		}
+		after, err := repository.ArchaeologySession(ctx, domain.HumanLocalPrincipal)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if discoverer.calls != 0 || after.Revision != before.Revision || len(after.Config.SelectedProjectIDs) != len(before.Config.SelectedProjectIDs) {
+			t.Fatalf("state=%s calls=%d before_revision=%d after=%+v", state, discoverer.calls, before.Revision, after)
+		}
+	}
+}
+
+func TestSelectedPreviewTraversesMoreThanFiveAndRejectsCursorBypass(t *testing.T) {
+	value := ArchaeologySelectedPreview{Projects: make([]ArchaeologySelectedProjectPreview, 6)}
+	for index := range value.Projects {
+		value.Projects[index].OutcomeID = fmt.Sprintf("outcome-%d", index)
+	}
+	first, err := selectedPreviewPage(value, "")
+	if err != nil || len(first.Projects) != 5 || first.NextCursor != "5" {
+		t.Fatalf("first=%+v err=%v", first, err)
+	}
+	second, err := selectedPreviewPage(value, first.NextCursor)
+	if err != nil || len(second.Projects) != 1 || second.Projects[0].OutcomeID != "outcome-5" || second.NextCursor != "" {
+		t.Fatalf("second=%+v err=%v", second, err)
+	}
+	for _, cursor := range []string{"-1", "1", "6", "9", "5junk", "05"} {
+		if _, err = selectedPreviewPage(value, cursor); !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("cursor=%q err=%v", cursor, err)
+		}
+	}
 }
 
 func TestArchaeologyReportBridgesToCanonicalNonMutatingPreview(t *testing.T) {
@@ -102,6 +174,9 @@ func (capabilityNativeLauncher) LaunchNative(context.Context, domain.Archaeology
 func (capabilityNativeLauncher) InterruptNative(context.Context, domain.ArchaeologyNativeJob) error {
 	return domain.ErrUnavailable
 }
+func (capabilityNativeLauncher) FinalizeNative(context.Context, domain.ArchaeologyNativeJob, domain.ArchaeologyCandidate, domain.ArchaeologyLaunchResult) error {
+	return domain.ErrUnavailable
+}
 
 func TestProjectArchaeologyNativeSchedulerCapabilityUsesRuntimeAvailability(t *testing.T) {
 	for _, test := range []struct {
@@ -127,6 +202,100 @@ func TestProjectArchaeologyNativeSchedulerCapabilityUsesRuntimeAvailability(t *t
 				t.Fatalf("empty persisted selection exposed Start: %+v", view.Controls)
 			}
 		})
+	}
+}
+
+func TestNativeArchaeologyMaximumCanonicalResponseFitsBrowserBudget(t *testing.T) {
+	now := time.Now().UTC()
+	value := domain.ArchaeologySession{
+		ID: "AR-max", State: "running", DiscoveryState: "ready", Revision: 100, UpdatedAt: now,
+		Config: domain.ArchaeologyConfig{Depth: "deep", Sources: domain.ArchaeologySources{Docs: true}, MaxConcurrency: 2},
+	}
+	for index := 0; index < 100; index++ {
+		candidateID := fmt.Sprintf("candidate-%03d-%s", index, strings.Repeat("i", 100))
+		value.Candidates = append(value.Candidates, domain.ArchaeologyCandidate{
+			ID: candidateID, CanonicalProjectID: fmt.Sprintf("project-%03d", index), Name: strings.Repeat("N", 200), PathLabel: strings.Repeat("P", 300), RepositoryLabel: strings.Repeat("R", 300),
+			LastActivityAt: now, HasGit: true, HasDocs: true, HasCodexHistory: true, FromCodexMetadata: true, FromConfiguredRoot: true,
+			DurationMinSeconds: 1, DurationMaxSeconds: 600, RelativeCost: "high", PrivacyNote: strings.Repeat("V", 500), CodexThreadCount: 10000,
+		})
+		if index < domain.ArchaeologyNativeMaxProjects {
+			value.Config.SelectedProjectIDs = append(value.Config.SelectedProjectIDs, candidateID)
+		}
+	}
+	for index := 0; index < 100; index++ {
+		value.Runs = append(value.Runs, domain.ArchaeologyRun{ID: fmt.Sprintf("run-%03d", index), ProjectID: fmt.Sprintf("project-%03d", index), State: "completed", PhaseLabel: strings.Repeat("F", 120), Error: strings.Repeat("E", 500), UpdatedAt: now})
+	}
+	batch := domain.ArchaeologyNativeBatch{ID: strings.Repeat("b", 120), State: "completed", Mode: "app_server_dynamic_tools", MaxConcurrency: 2, PolicyAttested: true, Policy: domain.ArchaeologyExecutionPolicy{Depth: "deep", Sources: domain.ArchaeologySources{Docs: true}}, CreatedAt: now, UpdatedAt: now}
+	for index := 0; index < domain.ArchaeologyNativeMaxProjects; index++ {
+		batch.Jobs = append(batch.Jobs, domain.ArchaeologyNativeJob{
+			ID: fmt.Sprintf("job-%03d-%s", index, strings.Repeat("j", 100)), BatchID: batch.ID, CandidateID: value.Config.SelectedProjectIDs[index], ProjectID: fmt.Sprintf("project-%03d", index), Mode: "app_server_dynamic_tools", State: "completed",
+			ThreadID: strings.Repeat("t", 120), TurnID: strings.Repeat("u", 120), PhaseLabel: strings.Repeat("L", 120), SourcesExamined: 1000, CreatedAt: now, UpdatedAt: now,
+		})
+	}
+	value.NativeBatches = []domain.ArchaeologyNativeBatch{batch}
+	for index := 0; index < domain.ArchaeologyNativeMaxProjects*2; index++ {
+		outcome := domain.ArchaeologyOutcome{ID: fmt.Sprintf("outcome-%03d", index), Title: strings.Repeat("T", 200), Summary: strings.Repeat("S", 300), ProjectID: fmt.Sprintf("project-%03d", index/2), SourceCount: 1000, ProposalJSON: `{}`}
+		for sourceIndex := 0; sourceIndex < 4; sourceIndex++ {
+			outcome.Provenance = append(outcome.Provenance, domain.ArchaeologyProvenance{Kind: "docs", StableID: strings.Repeat("d", 300), Digest: "sha256:" + strings.Repeat("a", 64), OccurredAt: now})
+		}
+		outcome.Contributors = []domain.ArchaeologyContributor{{SessionID: fmt.Sprintf("session-%03d-%s", index, strings.Repeat("s", 100)), Contribution: strings.Repeat("C", 300), DemonstratedStrength: strings.Repeat("G", 120), Uncertainty: strings.Repeat("U", 200), Confidence: "verified"}}
+		value.Outcomes = append(value.Outcomes, outcome)
+	}
+	view := (&Service{}).archaeologySessionView(value)
+	encoded, err := json.Marshal(struct {
+		Data ArchaeologySession `json:"data"`
+	}{Data: view})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) >= 1<<20 {
+		t.Fatalf("maximum archaeology response=%d bytes", len(encoded))
+	}
+	if len(view.Discovery.Candidates) != 100 || len(view.Runs) != 100 || view.Handoff == nil || len(view.Handoff.Tasks) != 30 || view.Review == nil || len(view.Review.ProposedOutcomes) != 60 || len(view.Review.MemberSessions) != 60 {
+		t.Fatalf("bounded cardinality candidates=%d runs=%d handoff=%+v review=%+v", len(view.Discovery.Candidates), len(view.Runs), view.Handoff, view.Review)
+	}
+}
+
+func TestLegacyArchaeologyMaximumBoundedCanonicalResponseFitsBrowserBudget(t *testing.T) {
+	now := time.Now().UTC()
+	value := domain.ArchaeologySession{
+		ID: "AR-legacy-max", State: "completed", DiscoveryState: "ready", Revision: 100, UpdatedAt: now,
+		Config:  domain.ArchaeologyConfig{Depth: "deep", Sources: domain.ArchaeologySources{Git: true, Docs: true, CodexHistory: true}, MaxConcurrency: 2},
+		Handoff: &domain.ArchaeologyHandoff{ID: strings.Repeat("h", 120), State: "claimed", ClaimedBy: strings.Repeat("c", 120), CreatedAt: now, UpdatedAt: now, ClaimedAt: now},
+	}
+	for index := 0; index < 100; index++ {
+		candidateID := fmt.Sprintf("candidate-%03d-%s", index, strings.Repeat("i", 100))
+		value.Config.SelectedProjectIDs = append(value.Config.SelectedProjectIDs, candidateID)
+		value.Candidates = append(value.Candidates, domain.ArchaeologyCandidate{
+			ID: candidateID, CanonicalProjectID: fmt.Sprintf("project-%03d", index), Name: strings.Repeat("N", 200), PathLabel: strings.Repeat("P", 300), RepositoryLabel: strings.Repeat("R", 300),
+			LastActivityAt: now, HasGit: true, HasDocs: true, HasCodexHistory: true, FromCodexMetadata: true, FromConfiguredRoot: true,
+			DurationMinSeconds: 1, DurationMaxSeconds: 600, RelativeCost: "high", PrivacyNote: strings.Repeat("V", 500), CodexThreadCount: 10000,
+		})
+		value.Runs = append(value.Runs, domain.ArchaeologyRun{ID: fmt.Sprintf("run-%03d", index), ProjectID: candidateID, State: "completed", PhaseLabel: strings.Repeat("F", 120), Error: strings.Repeat("E", 500), UpdatedAt: now})
+		value.TaskLaunches = append(value.TaskLaunches, domain.ArchaeologyTaskLaunch{ID: fmt.Sprintf("launch-%03d-%s", index, strings.Repeat("l", 100)), ProjectID: candidateID, State: "completed", ThreadID: strings.Repeat("t", 120), TurnID: strings.Repeat("u", 120), CreatedAt: now, UpdatedAt: now})
+	}
+	for outcomeIndex := 0; outcomeIndex < domain.ArchaeologyLegacyOutcomePage; outcomeIndex++ {
+		outcome := domain.ArchaeologyOutcome{ID: fmt.Sprintf("legacy-outcome-%03d", outcomeIndex), Title: strings.Repeat("T", 300), Summary: strings.Repeat("S", 4000), ProjectID: fmt.Sprintf("project-%03d", outcomeIndex), SourceCount: 1000, ProposalJSON: `{}`}
+		for sourceIndex := 0; sourceIndex < domain.ArchaeologyLegacyProvenancePerOutcome; sourceIndex++ {
+			outcome.Provenance = append(outcome.Provenance, domain.ArchaeologyProvenance{Kind: "docs", StableID: strings.Repeat("d", 300), Digest: "sha256:" + strings.Repeat("a", 64), OccurredAt: now})
+		}
+		for memberIndex := 0; memberIndex < domain.ArchaeologyLegacyContributorsPerOutcome; memberIndex++ {
+			outcome.Contributors = append(outcome.Contributors, domain.ArchaeologyContributor{SessionID: fmt.Sprintf("session-%03d-%d-%s", outcomeIndex, memberIndex, strings.Repeat("s", 170)), Contribution: strings.Repeat("C", 1000), DemonstratedStrength: strings.Repeat("G", 300), Uncertainty: strings.Repeat("U", 500), Confidence: "verified"})
+		}
+		value.Outcomes = append(value.Outcomes, outcome)
+	}
+	view := (&Service{}).archaeologySessionView(value)
+	encoded, err := json.Marshal(struct {
+		Data ArchaeologySession `json:"data"`
+	}{Data: view})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) >= 1<<20 {
+		t.Fatalf("maximum bounded legacy archaeology response=%d bytes", len(encoded))
+	}
+	if len(view.Discovery.Candidates) != 100 || len(view.Runs) != 100 || view.Handoff == nil || len(view.Handoff.Tasks) != 100 || view.Review == nil || len(view.Review.ProposedOutcomes) != domain.ArchaeologyLegacyOutcomePage || len(view.Review.MemberSessions) != domain.ArchaeologyLegacyOutcomePage*domain.ArchaeologyLegacyContributorsPerOutcome {
+		t.Fatalf("bounded legacy cardinality candidates=%d runs=%d handoff=%+v review=%+v", len(view.Discovery.Candidates), len(view.Runs), view.Handoff, view.Review)
 	}
 }
 
@@ -323,7 +492,7 @@ func (f *boundedTaskLauncher) LaunchProject(_ context.Context, _ domain.Archaeol
 	return domain.ArchaeologyLaunchResult{ThreadID: "thread-" + candidate.ID, CodexSessionID: "session-" + candidate.ID, TurnID: "turn-" + candidate.ID}, nil
 }
 
-func TestProjectArchaeologyLaunchesTenSelectedProjectsWithBoundedConcurrencyAndNoReplay(t *testing.T) {
+func TestProjectArchaeologySubmitsThirtySelectedProjectsWithoutCommonsConcurrencyCapOrReplay(t *testing.T) {
 	ctx := context.Background()
 	repository, err := commonsstore.Open(ctx, ":memory:")
 	if err != nil {
@@ -332,12 +501,12 @@ func TestProjectArchaeologyLaunchesTenSelectedProjectsWithBoundedConcurrencyAndN
 	defer repository.Close()
 	service := New(repository, nil, nil)
 	launcher := &boundedTaskLauncher{perProject: map[string]int{}}
-	service.ConfigureProjectArchaeology(manyArchaeologyDiscoverer{count: 12}, launcher)
+	service.ConfigureProjectArchaeology(manyArchaeologyDiscoverer{count: 30}, launcher)
 	session, err := service.DiscoverProjectArchaeology(ctx, domain.HumanLocalPrincipal, "discover-many")
 	if err != nil {
 		t.Fatal(err)
 	}
-	selected := make([]string, 10)
+	selected := make([]string, 30)
 	for index := range selected {
 		selected[index] = fmt.Sprintf("project-%02d", index)
 	}
@@ -350,11 +519,11 @@ func TestProjectArchaeologyLaunchesTenSelectedProjectsWithBoundedConcurrencyAndN
 	if err != nil {
 		t.Fatal(err)
 	}
-	if started.Handoff == nil || len(started.Handoff.Tasks) != 10 {
+	if started.Handoff == nil || len(started.Handoff.Tasks) != 30 {
 		t.Fatalf("handoff=%+v", started.Handoff)
 	}
 	launcher.mu.Lock()
-	if launcher.total != 10 || launcher.max < 2 || launcher.max > 2 {
+	if launcher.total != 30 || launcher.max <= 2 {
 		t.Fatalf("total=%d max=%d", launcher.total, launcher.max)
 	}
 	for _, id := range selected {
@@ -368,7 +537,7 @@ func TestProjectArchaeologyLaunchesTenSelectedProjectsWithBoundedConcurrencyAndN
 	}
 	launcher.mu.Lock()
 	defer launcher.mu.Unlock()
-	if launcher.total != 10 {
+	if launcher.total != 30 {
 		t.Fatalf("idempotent replay created tasks: total=%d", launcher.total)
 	}
 }
@@ -410,7 +579,7 @@ func TestProjectArchaeologyUpgradeRediscoveryStartsOneDirectTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if configured.Handoff != nil || !configured.Controls.CanStart {
+	if configured.Config.MaxConcurrency != 2 || configured.Handoff != nil || !configured.Controls.CanStart {
 		t.Fatalf("legacy handoff still controls native UI: handoff=%+v controls=%+v", configured.Handoff, configured.Controls)
 	}
 	baseRevision := configured.Revision
@@ -482,5 +651,36 @@ func TestNativeSchedulerHidesClaimedLegacyLaunchRowsFromCurrentWorkflow(t *testi
 	}
 	if len(value.TaskLaunches) != 9 || value.Handoff == nil {
 		t.Fatalf("projection mutated durable audit input: launches=%d handoff=%+v", len(value.TaskLaunches), value.Handoff)
+	}
+}
+
+func TestArchaeologyViewCoheresAsyncNativeTimestampsWithoutMutatingAuditRows(t *testing.T) {
+	sessionAt := time.Date(2026, 8, 14, 14, 52, 19, 724165176, time.UTC)
+	batchAt := sessionAt.Add(70 * time.Millisecond)
+	jobAt := batchAt.Add(4 * time.Millisecond)
+	value := domain.ArchaeologySession{
+		ID:             "AR-coherent",
+		State:          "cancel_requested",
+		DiscoveryState: "ready",
+		Revision:       4,
+		UpdatedAt:      sessionAt,
+		Config: domain.ArchaeologyConfig{
+			SelectedProjectIDs: []string{"candidate"},
+			Depth:              "standard",
+			Sources:            domain.ArchaeologySources{Git: true},
+			MaxConcurrency:     2,
+		},
+		NativeBatches: []domain.ArchaeologyNativeBatch{{
+			ID: "batch", State: "cancel_requested", MaxConcurrency: 2, PolicyAttested: true, UpdatedAt: batchAt,
+			Policy: domain.ArchaeologyExecutionPolicy{Depth: "standard", Sources: domain.ArchaeologySources{Git: true}},
+			Jobs:   []domain.ArchaeologyNativeJob{{ID: "job", BatchID: "batch", CandidateID: "candidate", ProjectID: "project", State: "cancel_requested", UpdatedAt: jobAt}},
+		}},
+	}
+	view := archaeologyView(value)
+	if view.UpdatedAt == nil || !view.UpdatedAt.Equal(jobAt) || view.Handoff == nil || view.Handoff.UpdatedAt == nil || !view.Handoff.UpdatedAt.Equal(jobAt) || view.Handoff.Progress.UpdatedAt == nil || !view.Handoff.Progress.UpdatedAt.Equal(jobAt) {
+		t.Fatalf("session=%v handoff=%+v", view.UpdatedAt, view.Handoff)
+	}
+	if !value.UpdatedAt.Equal(sessionAt) || !value.NativeBatches[0].UpdatedAt.Equal(batchAt) || !value.NativeBatches[0].Jobs[0].UpdatedAt.Equal(jobAt) {
+		t.Fatalf("projection mutated durable input: %+v", value)
 	}
 }

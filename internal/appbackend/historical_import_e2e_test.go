@@ -89,6 +89,13 @@ func TestHistoricalImportHTTPIsHumanOnlyAndAttestsRecorder(t *testing.T) {
 		t.Fatalf("preview mutated batches=%d err=%v", batches, err)
 	}
 	request.ConfirmSourceDigest = request.SourceDigest
+	var previewEnvelope struct {
+		Data httpapi.HistoricalImportResult `json:"data"`
+	}
+	if err = json.Unmarshal(preview.Body.Bytes(), &previewEnvelope); err != nil || previewEnvelope.Data.ManifestDigest == "" {
+		t.Fatalf("preview manifest decode err=%v data=%+v", err, previewEnvelope.Data)
+	}
+	request.ConfirmManifestDigest = previewEnvelope.Data.ManifestDigest
 	applyBody, err := json.Marshal(request)
 	if err != nil {
 		t.Fatal(err)
@@ -108,7 +115,7 @@ func TestHistoricalImportHTTPIsHumanOnlyAndAttestsRecorder(t *testing.T) {
 		t.Fatalf("apply decode err=%v data=%+v body=%s", err, envelope.Data, apply.Body.String())
 	}
 	replay := projectCoreRequest(handler, http.MethodPost, "/v1/projects/commons/historical-imports/apply", string(applyBody), "", cookie, csrf, "history-apply")
-	if replay.Code != http.StatusOK || !strings.Contains(replay.Body.String(), `"disposition":"replayed"`) {
+	if replay.Code != http.StatusOK || !strings.Contains(replay.Body.String(), envelope.Data.ManifestDigest) || !strings.Contains(replay.Body.String(), envelope.Data.Tasks[0].ID) {
 		t.Fatalf("replay code=%d body=%s", replay.Code, replay.Body.String())
 	}
 	open := projectCoreRequest(handler, http.MethodGet, "/v1/tasks/"+envelope.Data.Tasks[0].ID+"?events_limit=50", "", "agent-secret", nil, "", "")

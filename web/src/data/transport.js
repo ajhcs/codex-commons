@@ -1,4 +1,4 @@
-import { MAX_API_RESPONSE_BYTES, MAX_BROWSE_LIMIT, MAX_NOTIFICATIONS, MAX_OVERVIEW_LIMIT, MAX_TASK_EVENTS, MAX_TASK_LIST, MAX_WIKI_REVISIONS } from "../contracts/commons.js";
+import { MAX_API_RESPONSE_BYTES, MAX_BROWSE_LIMIT, MAX_NOTIFICATIONS, MAX_OVERVIEW_LIMIT, MAX_PROJECT_ARCHAEOLOGY_CATALOG_PAGE, MAX_PROJECT_ARCHAEOLOGY_HISTORY_PAGE, MAX_TASK_EVENTS, MAX_TASK_LIST, MAX_WIKI_REVISIONS } from "../contracts/commons.js";
 
 const encoder = new TextEncoder();
 
@@ -224,6 +224,29 @@ export function createHTTPTransport({
     readProjectArchaeology(signal) {
       return read("/v1/project-archaeology", {}, signal);
     },
+    readProjectArchaeologyCatalog(query, signal) {
+      return read("/v1/project-archaeology/catalog", {
+        cursor: query.cursor,
+        limit: boundedLimit(query.limit, MAX_PROJECT_ARCHAEOLOGY_CATALOG_PAGE),
+        sort: query.sort,
+        q: boundedText(query.q, 200),
+      }, signal);
+    },
+    readProjectArchaeologyBatches(query, signal) {
+      return read("/v1/project-archaeology/batches", {
+        cursor: query.cursor,
+        limit: boundedLimit(query.limit, MAX_PROJECT_ARCHAEOLOGY_HISTORY_PAGE),
+      }, signal);
+    },
+    readProjectArchaeologyBatch(batchID, signal) {
+      return read(`/v1/project-archaeology/batches/${encodeURIComponent(batchID)}`, {}, signal);
+    },
+    readProjectArchaeologyBatchOutcomes(batchID, query, signal) {
+      return read(`/v1/project-archaeology/batches/${encodeURIComponent(batchID)}/outcomes`, { cursor: query.cursor }, signal);
+    },
+    readInstallationStatus(signal) {
+      return read("/v1/installation-status", {}, signal);
+    },
     discoverProjectArchaeology(writeOptions, signal) {
       return write("/v1/project-archaeology/discover", {}, writeOptions, signal);
     },
@@ -233,6 +256,15 @@ export function createHTTPTransport({
     startProjectArchaeology(input, writeOptions, signal) {
       return write("/v1/project-archaeology/start", input, writeOptions, signal);
     },
+    previewProjectArchaeologyBatchImport(batchID, input, writeOptions, signal) {
+      return write(`/v1/project-archaeology/batches/${encodeURIComponent(batchID)}/import-preview`, input, writeOptions, signal);
+    },
+    previewProjectArchaeologyBatchImportPage(batchID, cursor, input, writeOptions, signal) {
+      return mutate("POST", `/v1/project-archaeology/batches/${encodeURIComponent(batchID)}/import-preview-page?cursor=${encodeURIComponent(cursor)}`, input, writeOptions, signal);
+    },
+    applyProjectArchaeologyBatchImport(batchID, input, writeOptions, signal) {
+      return write(`/v1/project-archaeology/batches/${encodeURIComponent(batchID)}/import-apply`, input, writeOptions, signal);
+    },
     pauseProjectArchaeology(input, writeOptions, signal) {
       return write("/v1/project-archaeology/pause", input, writeOptions, signal);
     },
@@ -241,6 +273,9 @@ export function createHTTPTransport({
     },
     cancelProjectArchaeology(input, writeOptions, signal) {
       return write("/v1/project-archaeology/cancel", input, writeOptions, signal);
+    },
+    resolveProjectArchaeology(input, writeOptions, signal) {
+      return write("/v1/project-archaeology/resolve", input, writeOptions, signal);
     },
     previewProjectArchaeologyImport(input, writeOptions, signal) {
       return write("/v1/project-archaeology/import-preview", input, writeOptions, signal);

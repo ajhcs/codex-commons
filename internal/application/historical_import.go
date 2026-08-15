@@ -54,13 +54,14 @@ type HistoricalTaskRequest struct {
 }
 
 type HistoricalImportRequest struct {
-	SchemaVersion        int                                   `json:"schema_version"`
-	BatchID              string                                `json:"batch_id"`
-	SourceDigest         string                                `json:"source_digest"`
-	ConfirmSourceDigest  string                                `json:"confirm_source_digest,omitempty"`
-	CollisionPolicy      string                                `json:"collision_policy"`
-	ProjectThreadAliases []HistoricalProjectThreadAliasRequest `json:"project_thread_aliases,omitempty"`
-	Tasks                []HistoricalTaskRequest               `json:"tasks"`
+	SchemaVersion         int                                   `json:"schema_version"`
+	BatchID               string                                `json:"batch_id"`
+	SourceDigest          string                                `json:"source_digest"`
+	ConfirmSourceDigest   string                                `json:"confirm_source_digest,omitempty"`
+	ConfirmManifestDigest string                                `json:"confirm_manifest_digest,omitempty"`
+	CollisionPolicy       string                                `json:"collision_policy"`
+	ProjectThreadAliases  []HistoricalProjectThreadAliasRequest `json:"project_thread_aliases,omitempty"`
+	Tasks                 []HistoricalTaskRequest               `json:"tasks"`
 }
 
 type SupersedeHistoricalImportRequest struct {
@@ -93,6 +94,7 @@ type HistoricalImportResult struct {
 	RecordedAt      *time.Time                    `json:"recorded_at,omitempty"`
 	Tasks           []HistoricalImportTaskReceipt `json:"tasks"`
 	Counts          HistoricalImportCounts        `json:"counts"`
+	ProjectRevision int64                         `json:"project_revision"`
 }
 
 func historicalSource(input HistoricalSourceRequest) domain.HistoricalSource {
@@ -105,7 +107,8 @@ func historicalImportCommand(project string, input HistoricalImportRequest, acto
 	command := domain.HistoricalImportCommand{
 		ProjectID: project, SchemaVersion: input.SchemaVersion, BatchID: input.BatchID,
 		SourceDigest: input.SourceDigest, ConfirmSourceDigest: input.ConfirmSourceDigest,
-		CollisionPolicy: input.CollisionPolicy, Meta: coreMeta(actor),
+		ConfirmManifestDigest: input.ConfirmManifestDigest,
+		CollisionPolicy:       input.CollisionPolicy, Meta: coreMeta(actor),
 		ProjectThreadAliases: make([]domain.HistoricalProjectThreadAliasInput, 0, len(input.ProjectThreadAliases)),
 		Tasks:                make([]domain.HistoricalTaskInput, 0, len(input.Tasks)),
 	}
@@ -149,6 +152,7 @@ func historicalImportResult(receipt domain.HistoricalImportReceipt) HistoricalIm
 			Created: receipt.Counts.Created, SkippedCurrent: receipt.Counts.SkippedCurrent,
 			Replayed: receipt.Counts.Replayed,
 		},
+		ProjectRevision: receipt.ProjectRevision,
 	}
 	for _, task := range receipt.Tasks {
 		out.Tasks = append(out.Tasks, HistoricalImportTaskReceipt{Key: task.Key, ID: task.TaskID, Disposition: task.Disposition})

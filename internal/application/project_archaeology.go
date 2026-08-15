@@ -5,9 +5,12 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +32,24 @@ type ArchaeologyRepository interface {
 	ReportArchaeologyTaskLaunch(context.Context, domain.ArchaeologyTaskReport) (domain.ArchaeologySession, error)
 	ClaimArchaeologyHandoff(context.Context, domain.ArchaeologyHandoffClaim) (domain.ArchaeologySession, error)
 	ReportArchaeologyHandoff(context.Context, domain.ArchaeologyHandoffReport) (domain.ArchaeologySession, error)
+}
+type ArchaeologyCatalogRepository interface {
+	ArchaeologyCatalog(context.Context, string, domain.ArchaeologyCatalogQuery) (domain.ArchaeologyCatalogPage, error)
+}
+type ArchaeologyHistoryRepository interface {
+	ArchaeologyBatchHistory(context.Context, string, domain.ArchaeologyBatchHistoryQuery) (domain.ArchaeologyBatchHistoryPage, error)
+	ArchaeologyBatch(context.Context, string, string) (domain.ArchaeologyBatchDetail, error)
+	ArchaeologyBatchOutcomes(context.Context, string, string, domain.ArchaeologyOutcomePageQuery) (domain.ArchaeologyOutcomePage, error)
+}
+type ArchaeologySelectedOutcomesRepository interface {
+	ArchaeologySelectedOutcomes(context.Context, string, string, []string) ([]domain.ArchaeologyOutcome, error)
+}
+type ArchaeologySelectedApplyRepository interface {
+	ReplayArchaeologySelectedImports(context.Context, domain.ArchaeologySelectedApplyReplayQuery) (domain.ArchaeologySelectedApplyReceipt, bool, error)
+	ApplyArchaeologySelectedImports(context.Context, domain.ArchaeologySelectedApplyCommand) (domain.ArchaeologySelectedApplyReceipt, error)
+}
+type ArchaeologySelectedPreviewRepository interface {
+	PreviewArchaeologySelectedImports(context.Context, domain.ArchaeologySelectedPreviewCommand) (domain.ArchaeologySelectedPreviewReceipt, error)
 }
 
 type ArchaeologyDiscoverer interface {
@@ -83,6 +104,50 @@ type ArchaeologyDiscovery struct {
 	SourceRootsScanned int                    `json:"source_roots_scanned"`
 	MetadataOnly       bool                   `json:"metadata_only"`
 	Error              string                 `json:"error,omitempty"`
+	TasksExamined      int                    `json:"tasks_examined"`
+	ProjectsGrouped    int                    `json:"projects_grouped"`
+	Truncated          bool                   `json:"truncated"`
+	CompletedAt        *time.Time             `json:"completed_at,omitempty"`
+	AppServerIdentity  string                 `json:"app_server_identity,omitempty"`
+}
+type ArchaeologyCatalogRequest struct {
+	Cursor, Sort, Search string
+	Limit                int
+}
+type ArchaeologyCatalogPage struct {
+	Items      []ArchaeologyCandidate `json:"items"`
+	NextCursor string                 `json:"next_cursor,omitempty"`
+	Total      int                    `json:"total"`
+}
+type ArchaeologyBatchSummary struct {
+	BatchID        string             `json:"batch_id"`
+	State          string             `json:"state"`
+	Mode           string             `json:"mode"`
+	Depth          string             `json:"depth"`
+	Sources        ArchaeologySources `json:"sources"`
+	Concurrency    int                `json:"concurrency"`
+	SelectedTotal  int                `json:"selected_total"`
+	QueuedCount    int                `json:"queued_count"`
+	ActiveCount    int                `json:"active_count"`
+	CompletedCount int                `json:"completed_count"`
+	AttentionCount int                `json:"attention_count"`
+	HasReport      bool               `json:"has_report"`
+	CreatedAt      *time.Time         `json:"created_at,omitempty"`
+	UpdatedAt      *time.Time         `json:"updated_at,omitempty"`
+}
+type ArchaeologyBatchHistoryPage struct {
+	Items      []ArchaeologyBatchSummary `json:"items"`
+	NextCursor string                    `json:"next_cursor,omitempty"`
+}
+type ArchaeologyBatchDetail struct {
+	ArchaeologyBatchSummary
+	Tasks              []ArchaeologyTaskLaunch `json:"tasks"`
+	Review             *ArchaeologyReview      `json:"review,omitempty"`
+	OutcomesNextCursor string                  `json:"outcomes_next_cursor,omitempty"`
+}
+type ArchaeologyOutcomePage struct {
+	Items      []ArchaeologyOutcome `json:"items"`
+	NextCursor string               `json:"next_cursor,omitempty"`
 }
 type ArchaeologyRun struct {
 	ID              string     `json:"id"`
@@ -119,11 +184,13 @@ type ArchaeologyOutcome struct {
 	Title          string                     `json:"title"`
 	Summary        string                     `json:"summary"`
 	ProjectID      string                     `json:"project_id"`
+	SourceDigest   string                     `json:"source_digest,omitempty"`
 	SourceCount    int                        `json:"source_count"`
 	Provenance     []ArchaeologyProvenance    `json:"provenance"`
 	MemberSessions []ArchaeologyMemberSession `json:"member_sessions"`
 }
 type ArchaeologyReview struct {
+	BatchID                  string                     `json:"batch_id,omitempty"`
 	ProposedOutcomes         []ArchaeologyOutcome       `json:"proposed_outcomes"`
 	MemberSessions           []ArchaeologyMemberSession `json:"member_sessions"`
 	ProvenanceSummary        string                     `json:"provenance_summary"`
@@ -162,6 +229,7 @@ type ArchaeologyHandoff struct {
 	Depth          string                    `json:"depth"`
 	Sources        ArchaeologySources        `json:"sources"`
 	Concurrency    int                       `json:"concurrency"`
+	PolicyAttested bool                      `json:"policy_attested"`
 	CandidateIDs   []string                  `json:"candidate_ids"`
 	Tasks          []ArchaeologyTaskLaunch   `json:"tasks"`
 	Progress       ArchaeologyLaunchProgress `json:"progress"`
@@ -177,6 +245,7 @@ type ArchaeologyTaskLaunch struct {
 	LaunchID         string     `json:"launch_id"`
 	CandidateID      string     `json:"candidate_id,omitempty"`
 	ProjectID        string     `json:"project_id"`
+	ProjectName      string     `json:"project_name,omitempty"`
 	State            string     `json:"state"`
 	ThreadID         string     `json:"thread_id,omitempty"`
 	TurnID           string     `json:"turn_id,omitempty"`
@@ -222,7 +291,15 @@ type ArchaeologyConfigRequest struct {
 	BaseRevision       int64              `json:"base_revision"`
 }
 type ArchaeologyTransitionRequest struct {
-	BaseRevision int64 `json:"base_revision"`
+	BaseRevision          int64 `json:"base_revision"`
+	AcknowledgeLargeBatch bool  `json:"acknowledge_large_batch"`
+}
+type ArchaeologyResolutionRequest struct {
+	BaseRevision int64  `json:"base_revision"`
+	JobID        string `json:"job_id"`
+	ThreadID     string `json:"thread_id"`
+	TurnID       string `json:"turn_id"`
+	Resolution   string `json:"resolution"`
 }
 type ArchaeologyHandoffReportRequest struct {
 	Outcomes []ArchaeologyOutcomeReportRequest `json:"outcomes"`
@@ -288,10 +365,102 @@ type ArchaeologyImportPreview struct {
 	Request   HistoricalImportRequest `json:"request"`
 	Preview   HistoricalImportResult  `json:"preview"`
 }
+type ArchaeologySelectedPreviewRequest struct {
+	OutcomeIDs         []string `json:"outcome_ids"`
+	ReviewSessionToken string   `json:"review_session_token,omitempty"`
+	ReviewRequestID    string   `json:"-"`
+}
+type ArchaeologySelectedApplyRequest struct {
+	OutcomeIDs            []string `json:"outcome_ids"`
+	SelectionDigest       string   `json:"selection_digest"`
+	ManifestDigest        string   `json:"manifest_digest"`
+	ReviewAcknowledged    bool     `json:"review_acknowledged"`
+	ReviewCompletionToken string   `json:"review_completion_token"`
+}
+type ArchaeologySelectedProjectPreview struct {
+	OutcomeID string                  `json:"outcome_id"`
+	ProjectID string                  `json:"project_id"`
+	Request   HistoricalImportRequest `json:"request"`
+	Preview   HistoricalImportResult  `json:"preview"`
+}
+type ArchaeologySelectedPreview struct {
+	BatchID               string                              `json:"batch_id"`
+	OutcomeIDs            []string                            `json:"outcome_ids"`
+	SelectionDigest       string                              `json:"selection_digest"`
+	ManifestDigest        string                              `json:"manifest_digest"`
+	Projects              []ArchaeologySelectedProjectPreview `json:"projects"`
+	NextCursor            string                              `json:"next_cursor,omitempty"`
+	ReviewSessionToken    string                              `json:"review_session_token"`
+	ReviewCompletionToken string                              `json:"review_completion_token,omitempty"`
+	ReviewExpiresAt       time.Time                           `json:"review_expires_at"`
+}
+
+func selectedPreviewPage(value ArchaeologySelectedPreview, cursor string) (ArchaeologySelectedPreview, error) {
+	offset := 0
+	if cursor != "" {
+		var err error
+		offset, err = strconv.Atoi(cursor)
+		if err != nil || strconv.Itoa(offset) != cursor || offset < 0 || offset%5 != 0 || offset >= len(value.Projects) {
+			return value, domain.ErrInvalid
+		}
+	}
+	end := offset + 5
+	if end > len(value.Projects) {
+		end = len(value.Projects)
+	}
+	all := value.Projects
+	value.Projects = append([]ArchaeologySelectedProjectPreview(nil), all[offset:end]...)
+	if end < len(all) {
+		value.NextCursor = fmt.Sprintf("%d", end)
+	}
+	return value, nil
+}
+func (s *Service) PreviewSelectedArchaeologyImportsPage(ctx context.Context, principal, batchID, cursor string, input ArchaeologySelectedPreviewRequest, actor ProjectCoreActor) (ArchaeologySelectedPreview, error) {
+	out, err := s.PreviewSelectedArchaeologyImports(ctx, principal, batchID, input, actor)
+	if err != nil {
+		return out, err
+	}
+	page, err := selectedPreviewPage(out, cursor)
+	if err != nil {
+		return page, err
+	}
+	pageIndex := 0
+	if cursor != "" {
+		pageIndex, _ = strconv.Atoi(cursor)
+		pageIndex /= 5
+	}
+	pageCount := (len(out.OutcomeIDs) + 4) / 5
+	reviewRepository, ok := s.repository.(interface {
+		AdvanceArchaeologySelectedReview(context.Context, domain.ArchaeologySelectedReviewCommand) (domain.ArchaeologySelectedReviewReceipt, error)
+	})
+	if !ok {
+		return page, domain.ErrUnavailable
+	}
+	receipt, err := reviewRepository.AdvanceArchaeologySelectedReview(ctx, domain.ArchaeologySelectedReviewCommand{Principal: principal, BatchID: batchID, SelectionDigest: out.SelectionDigest, ManifestDigest: out.ManifestDigest, SessionToken: input.ReviewSessionToken, RequestID: input.ReviewRequestID, OutcomeIDs: out.OutcomeIDs, Page: pageIndex, PageCount: pageCount})
+	if err != nil {
+		return page, err
+	}
+	page.ReviewSessionToken, page.ReviewCompletionToken, page.ReviewExpiresAt = receipt.SessionToken, receipt.CompletionToken, receipt.ExpiresAt
+	return page, nil
+}
+
+type ArchaeologySelectedApplyResult struct {
+	BatchID         string   `json:"batch_id"`
+	OutcomeIDs      []string `json:"outcome_ids"`
+	SelectionDigest string   `json:"selection_digest"`
+	ManifestDigest  string   `json:"manifest_digest"`
+	Applied         bool     `json:"applied"`
+	AuditID         string   `json:"audit_id"`
+}
 
 func (s *Service) ConfigureProjectArchaeology(discoverer ArchaeologyDiscoverer, launcher ArchaeologyHistorianLauncher) {
 	s.archaeologyDiscoverer = discoverer
 	s.archaeologyLauncher = launcher
+}
+func (s *Service) ConfigureNativeArchaeologyApply(enabled bool) {
+	if s != nil {
+		s.nativeApplyEnabled = enabled
+	}
 }
 func (s *Service) archaeologyRepository() (ArchaeologyRepository, error) {
 	if s == nil {
@@ -321,6 +490,28 @@ func optionalArchaeologyTime(value time.Time) *time.Time {
 	return &copy
 }
 
+func latestArchaeologyTime(values ...*time.Time) *time.Time {
+	var latest time.Time
+	for _, value := range values {
+		if value != nil && value.After(latest) {
+			latest = *value
+		}
+	}
+	return optionalArchaeologyTime(latest)
+}
+
+func cohereArchaeologyViewTimes(value *ArchaeologySession) {
+	if value == nil || value.Handoff == nil {
+		return
+	}
+	latest := latestArchaeologyTime(value.Handoff.UpdatedAt, value.Handoff.Progress.UpdatedAt)
+	for _, task := range value.Handoff.Tasks {
+		latest = latestArchaeologyTime(latest, task.UpdatedAt)
+	}
+	value.Handoff.UpdatedAt = latest
+	value.UpdatedAt = latestArchaeologyTime(value.UpdatedAt, latest)
+}
+
 func archaeologyNativeMappingReady(value domain.ArchaeologySession) bool {
 	if len(value.Config.SelectedProjectIDs) == 0 {
 		return false
@@ -343,7 +534,7 @@ func archaeologyNativeMappingReady(value domain.ArchaeologySession) bool {
 func archaeologyView(value domain.ArchaeologySession) ArchaeologySession {
 	selectedProjectIDs := make([]string, len(value.Config.SelectedProjectIDs))
 	copy(selectedProjectIDs, value.Config.SelectedProjectIDs)
-	out := ArchaeologySession{ID: value.ID, State: value.State, Discovery: ArchaeologyDiscovery{State: value.DiscoveryState, MetadataOnly: true, SourceRootsScanned: value.SourceRootsScanned, DiscoveredAt: optionalArchaeologyTime(value.DiscoveredAt), Error: value.DiscoveryError, Candidates: []ArchaeologyCandidate{}}, Config: ArchaeologyConfig{SelectedProjectIDs: selectedProjectIDs, Depth: value.Config.Depth, Sources: ArchaeologySources{Git: value.Config.Sources.Git, Docs: value.Config.Sources.Docs, CodexHistory: value.Config.Sources.CodexHistory}, MaxConcurrency: value.Config.MaxConcurrency}, Runs: []ArchaeologyRun{}, Revision: value.Revision, UpdatedAt: optionalArchaeologyTime(value.UpdatedAt)}
+	out := ArchaeologySession{ID: value.ID, State: value.State, Discovery: ArchaeologyDiscovery{State: value.DiscoveryState, MetadataOnly: true, SourceRootsScanned: value.SourceRootsScanned, TasksExamined: value.TasksExamined, ProjectsGrouped: value.ProjectsGrouped, Truncated: value.CatalogTruncated, AppServerIdentity: value.AppServerIdentity, DiscoveredAt: optionalArchaeologyTime(value.DiscoveredAt), CompletedAt: optionalArchaeologyTime(value.DiscoveredAt), Error: value.DiscoveryError, Candidates: []ArchaeologyCandidate{}}, Config: ArchaeologyConfig{SelectedProjectIDs: selectedProjectIDs, Depth: value.Config.Depth, Sources: ArchaeologySources{Git: value.Config.Sources.Git, Docs: value.Config.Sources.Docs, CodexHistory: value.Config.Sources.CodexHistory}, MaxConcurrency: value.Config.MaxConcurrency}, Runs: []ArchaeologyRun{}, Revision: value.Revision, UpdatedAt: optionalArchaeologyTime(value.UpdatedAt)}
 	for _, candidate := range value.Candidates {
 		sources := []string{}
 		if candidate.FromCodexMetadata {
@@ -352,7 +543,7 @@ func archaeologyView(value domain.ArchaeologySession) ArchaeologySession {
 		if candidate.FromConfiguredRoot {
 			sources = append(sources, "configured_root")
 		}
-		out.Discovery.Candidates = append(out.Discovery.Candidates, ArchaeologyCandidate{ID: candidate.ID, Name: candidate.Name, PathLabel: candidate.PathLabel, RepositoryLabel: candidate.RepositoryLabel, LastActivityAt: optionalArchaeologyTime(candidate.LastActivityAt), Signals: ArchaeologySignals{Git: candidate.HasGit, Docs: candidate.HasDocs, CodexHistory: candidate.HasCodexHistory}, Estimate: ArchaeologyEstimate{DurationSecondsMin: candidate.DurationMinSeconds, DurationSecondsMax: candidate.DurationMaxSeconds, RelativeCost: candidate.RelativeCost}, PrivacyNote: candidate.PrivacyNote, SelectedByDefault: false, Sources: sources, CodexThreadCount: candidate.CodexThreadCount})
+		out.Discovery.Candidates = append(out.Discovery.Candidates, archaeologyCandidateView(candidate, sources))
 	}
 	for _, run := range value.Runs {
 		out.Runs = append(out.Runs, ArchaeologyRun{ID: run.ID, ProjectID: run.ProjectID, State: run.State, PhaseLabel: run.PhaseLabel, CompletedUnits: run.CompletedUnits, TotalUnits: run.TotalUnits, OutcomesFound: run.OutcomesFound, SourcesExamined: run.SourcesExamined, Error: run.Error, UpdatedAt: optionalArchaeologyTime(run.UpdatedAt)})
@@ -391,8 +582,11 @@ func archaeologyView(value domain.ArchaeologySession) ArchaeologySession {
 		for _, job := range batch.Jobs {
 			ids = append(ids, job.CandidateID)
 			errorMessage := ""
-			if job.State == "uncertain" {
-				errorMessage = "Codex may have accepted this task, but Commons cannot safely retry it. Review the exact task ID."
+			if job.State == "uncertain" && job.ThreadID != "" && job.TurnID != "" {
+				errorMessage = "Codex may have accepted this task, but Commons cannot safely retry it. Confirm that the exact Codex task has stopped before resolving it."
+			}
+			if job.State == "uncertain" && (job.ThreadID == "" || job.TurnID == "") {
+				errorMessage = "Codex may have accepted this task, but Commons could not recover one exact task identity. Starting remains blocked."
 			}
 			if job.State == "attention" {
 				errorMessage = "This task needs attention before project history can continue."
@@ -400,19 +594,36 @@ func archaeologyView(value domain.ArchaeologySession) ArchaeologySession {
 			if job.State == "failed" || job.State == "interrupted" {
 				errorMessage = "This Codex task stopped without a review-ready report."
 			}
-			tasks = append(tasks, ArchaeologyTaskLaunch{JobID: job.ID, BatchID: job.BatchID, CandidateID: job.CandidateID, Mode: job.Mode, PhaseLabel: job.PhaseLabel, SourcesExamined: job.SourcesExamined, DurationMS: job.DurationMS, LaunchID: job.ID, ProjectID: job.ProjectID, State: job.State, ThreadID: job.ThreadID, TurnID: job.TurnID, CreatedAt: optionalArchaeologyTime(job.CreatedAt), UpdatedAt: optionalArchaeologyTime(job.UpdatedAt), Error: errorMessage, AvailableActions: []string{}})
+			actions := []string{}
+			if job.State == "uncertain" && job.ThreadID != "" && job.TurnID != "" {
+				actions = append(actions, "resolve")
+			}
+			tasks = append(tasks, ArchaeologyTaskLaunch{JobID: job.ID, BatchID: job.BatchID, CandidateID: job.CandidateID, Mode: job.Mode, PhaseLabel: job.PhaseLabel, SourcesExamined: job.SourcesExamined, DurationMS: job.DurationMS, LaunchID: job.ID, ProjectID: job.ProjectID, ProjectName: job.ProjectName, State: job.State, ThreadID: job.ThreadID, TurnID: job.TurnID, CreatedAt: optionalArchaeologyTime(job.CreatedAt), UpdatedAt: optionalArchaeologyTime(job.UpdatedAt), Error: errorMessage, AvailableActions: actions})
 		}
 		progress := archaeologyLaunchProgress(tasks)
-		out.Handoff = &ArchaeologyHandoff{BatchID: batch.ID, State: batch.State, CreatedAt: optionalArchaeologyTime(batch.CreatedAt), UpdatedAt: optionalArchaeologyTime(batch.UpdatedAt), Depth: out.Config.Depth, Sources: out.Config.Sources, Concurrency: batch.MaxConcurrency, CandidateIDs: ids, Tasks: tasks, Progress: progress, AllowedActions: []string{}}
-		out.Controls.CanStart = value.State == "draft" && (batch.State == "completed") && archaeologyNativeMappingReady(value)
+		batchActions := []string{}
+		for _, task := range tasks {
+			if task.State == "uncertain" && task.ThreadID != "" && task.TurnID != "" {
+				batchActions = append(batchActions, "resolve")
+				break
+			}
+		}
+		out.Handoff = &ArchaeologyHandoff{BatchID: batch.ID, State: batch.State, CreatedAt: optionalArchaeologyTime(batch.CreatedAt), UpdatedAt: optionalArchaeologyTime(batch.UpdatedAt), Depth: batch.Policy.Depth, Sources: ArchaeologySources{Git: batch.Policy.Sources.Git, Docs: batch.Policy.Sources.Docs, CodexHistory: batch.Policy.Sources.CodexHistory}, Concurrency: batch.MaxConcurrency, PolicyAttested: batch.PolicyAttested, CandidateIDs: ids, Tasks: tasks, Progress: progress, AllowedActions: batchActions}
+		restartableTerminal := batch.State == "completed" || batch.State == "canceled" ||
+			(batch.State == "attention" && progress.QueuedCount == 0 && progress.ActiveCount == 0 && progress.UncertainCount == 0)
+		out.Controls.CanStart = value.State == "draft" && restartableTerminal && archaeologyNativeMappingReady(value)
 		out.Controls.CanPause, out.Controls.CanResume = false, false
 		out.Controls.CanCancel = batch.State == "queued" || batch.State == "running"
 	}
 	if len(value.Outcomes) > 0 || value.State == "completed" {
-		review := ArchaeologyReview{ProposedOutcomes: []ArchaeologyOutcome{}, MemberSessions: []ArchaeologyMemberSession{}, RequiresExplicitApproval: true}
+		review := ArchaeologyReview{BatchID: value.NativeReviewBatchID, ProposedOutcomes: []ArchaeologyOutcome{}, MemberSessions: []ArchaeologyMemberSession{}, RequiresExplicitApproval: true}
 		members := map[string]*ArchaeologyMemberSession{}
 		for _, item := range value.Outcomes {
-			outcome := ArchaeologyOutcome{ID: item.ID, Title: item.Title, Summary: item.Summary, ProjectID: item.ProjectID, SourceCount: item.SourceCount, Provenance: []ArchaeologyProvenance{}, MemberSessions: []ArchaeologyMemberSession{}}
+			var proposalIdentity struct {
+				SourceDigest string `json:"source_digest"`
+			}
+			_ = json.Unmarshal([]byte(item.ProposalJSON), &proposalIdentity)
+			outcome := ArchaeologyOutcome{ID: item.ID, Title: item.Title, Summary: item.Summary, ProjectID: item.ProjectID, SourceDigest: proposalIdentity.SourceDigest, SourceCount: item.SourceCount, Provenance: []ArchaeologyProvenance{}, MemberSessions: []ArchaeologyMemberSession{}}
 			for _, source := range item.Provenance {
 				outcome.Provenance = append(outcome.Provenance, ArchaeologyProvenance{SourceKind: source.Kind, SourceLabel: source.StableID, Digest: source.Digest, RecordedAt: optionalArchaeologyTime(source.OccurredAt)})
 			}
@@ -444,11 +655,16 @@ func archaeologyView(value domain.ArchaeologySession) ArchaeologySession {
 		sort.Slice(review.MemberSessions, func(i, j int) bool { return review.MemberSessions[i].SessionID < review.MemberSessions[j].SessionID })
 		review.ProvenanceSummary = "Exact digests retained; proposed outcomes require canonical preview and explicit human approval."
 		review.CanApply = false
-		for _, item := range value.Outcomes {
-			var request HistoricalImportRequest
-			if json.Unmarshal([]byte(item.ProposalJSON), &request) == nil && request.SchemaVersion == domain.HistoricalImportSchemaVersion && request.CollisionPolicy == domain.HistoricalCollisionCurrentWins && len(request.Tasks) > 0 {
-				review.CanApply = true
-				break
+		// Native historian outcomes remain review-only until Commons presents an
+		// exact task/evidence diff and confirms a server-derived manifest digest.
+		// A model-supplied source digest is not sufficient human authorization.
+		if len(value.NativeBatches) == 0 {
+			for _, item := range value.Outcomes {
+				var request HistoricalImportRequest
+				if json.Unmarshal([]byte(item.ProposalJSON), &request) == nil && request.SchemaVersion == domain.HistoricalImportSchemaVersion && request.CollisionPolicy == domain.HistoricalCollisionCurrentWins && len(request.Tasks) > 0 {
+					review.CanApply = true
+					break
+				}
 			}
 		}
 		out.Review = &review
@@ -459,9 +675,14 @@ func archaeologyView(value domain.ArchaeologySession) ArchaeologySession {
 		Discovery:        ArchaeologyCapability{Configured: false, Available: false, Mode: "allowlisted_metadata", Reason: "Configure an explicit project-root allowlist to enable metadata discovery."},
 		HistorianHandoff: ArchaeologyCapability{Configured: true, Available: true, Mode: "exact_task_claim_report", Reason: "Historian reports remain bound to exact launched task identity and human review."},
 		Review:           ArchaeologyCapability{Configured: true, Available: out.Review != nil, Mode: "durable_manifest"},
-		CanonicalApply:   ArchaeologyCapability{Configured: true, Available: out.Review != nil && out.Review.CanApply, Mode: "preview_digest_confirm", Reason: "A signed-in human must preview and explicitly confirm the exact source digest."},
+		CanonicalApply:   ArchaeologyCapability{Configured: true, Available: out.Review != nil && out.Review.CanApply, Mode: "preview_manifest_confirm", Reason: "A signed-in human must review the exact task and evidence diff, then confirm the server-derived manifest digest and source digest."},
 	}
+	cohereArchaeologyViewTimes(&out)
 	return out
+}
+
+func archaeologyCandidateView(candidate domain.ArchaeologyCandidate, sources []string) ArchaeologyCandidate {
+	return ArchaeologyCandidate{ID: candidate.ID, Name: candidate.Name, PathLabel: candidate.PathLabel, RepositoryLabel: candidate.RepositoryLabel, LastActivityAt: optionalArchaeologyTime(candidate.LastActivityAt), Signals: ArchaeologySignals{Git: candidate.HasGit, Docs: candidate.HasDocs, CodexHistory: candidate.HasCodexHistory}, Estimate: ArchaeologyEstimate{DurationSecondsMin: candidate.DurationMinSeconds, DurationSecondsMax: candidate.DurationMaxSeconds, RelativeCost: candidate.RelativeCost}, PrivacyNote: candidate.PrivacyNote, SelectedByDefault: candidate.Selected, Sources: sources, CodexThreadCount: candidate.CodexThreadCount}
 }
 func archaeologyLaunchProgress(tasks []ArchaeologyTaskLaunch) ArchaeologyLaunchProgress {
 	out := ArchaeologyLaunchProgress{SelectedTotal: len(tasks)}
@@ -533,9 +754,12 @@ func (s *Service) archaeologySessionView(value domain.ArchaeologySession) Archae
 				out.Handoff = &ArchaeologyHandoff{State: "launching", Depth: out.Config.Depth, Sources: out.Config.Sources, Concurrency: out.Config.MaxConcurrency, CandidateIDs: ids, Tasks: legacyTasks, AllowedActions: []string{}}
 			}
 		}
+		if len(value.NativeBatches) > 0 && !schedulerNative {
+			out.Controls.CanStart, out.Controls.CanPause, out.Controls.CanResume, out.Controls.CanCancel = false, false, false, false
+		}
 	}
 	if s != nil && s.archaeologyDiscoverer != nil {
-		out.Capabilities.Discovery = ArchaeologyCapability{Configured: true, Available: true, Mode: "codex_known_metadata", Reason: "Catalog uses bounded Codex thread metadata plus configured roots; message bodies are not read."}
+		out.Capabilities.Discovery = ArchaeologyCapability{Configured: true, Available: true, Mode: "codex_known_metadata", Reason: "Catalog uses workspace metadata only. Codex 0.147 protocol preview bytes may arrive, but Commons does not represent, retain, persist, project, or log them."}
 		out.Capabilities.ProjectCatalog = ArchaeologyCapability{Configured: true, Available: true, Mode: "codex_metadata", Reason: "Projects are grouped from Codex-known workspaces and additive configured roots."}
 	}
 	if s != nil && s.archaeologyLauncher != nil {
@@ -548,9 +772,16 @@ func (s *Service) archaeologySessionView(value domain.ArchaeologySession) Archae
 		// these facts separate lets a client persist its local selection before it
 		// asks the server to start that newly eligible configuration.
 		if err == nil {
-			out.Capabilities.TaskLaunch = ArchaeologyCapability{Configured: true, Available: true, Mode: "app_server_stdio", Reason: "Commons can start one ordinary Codex historian task for each selected project."}
+			out.Capabilities.TaskLaunch = ArchaeologyCapability{Configured: true, Available: true, Mode: "app_server_stdio", Reason: "Commons can submit one ordinary Codex historian task for every manually confirmed project; Codex governs execution capacity."}
 		} else {
-			out.Capabilities.TaskLaunch = ArchaeologyCapability{Configured: true, Available: false, Mode: "app_server_stdio", Reason: "Historian task launch is paused until Commons can durably limit active Codex tasks and reconcile their terminal state."}
+			out.Capabilities.TaskLaunch = ArchaeologyCapability{Configured: true, Available: false, Mode: "app_server_stdio", Reason: "Historian task launch is paused until Commons can reach the paired Codex App Server and reconcile terminal state."}
+		}
+	}
+	if s != nil && len(value.NativeBatches) > 0 {
+		available := s.nativeApplyEnabled && out.Review != nil && len(out.Review.ProposedOutcomes) > 0
+		out.Capabilities.CanonicalApply = ArchaeologyCapability{Configured: s.nativeApplyEnabled, Available: available, Mode: "selected_preview_manifest_confirm", Reason: "Native Apply is enabled only after acceptance; selected outcomes require exact preview, review acknowledgement, and both selection and manifest digests."}
+		if out.Review != nil {
+			out.Review.CanApply = available
 		}
 	}
 	return out
@@ -583,6 +814,212 @@ func (s *Service) ProjectArchaeology(ctx context.Context, principal string) (Arc
 	}
 	return s.archaeologySessionView(value), err
 }
+func (s *Service) ProjectArchaeologyCatalog(ctx context.Context, principal string, input ArchaeologyCatalogRequest) (ArchaeologyCatalogPage, error) {
+	repository, ok := s.repository.(ArchaeologyCatalogRepository)
+	if !ok {
+		return ArchaeologyCatalogPage{}, domain.ErrUnavailable
+	}
+	page, err := repository.ArchaeologyCatalog(ctx, principal, domain.ArchaeologyCatalogQuery{Cursor: input.Cursor, Limit: input.Limit, Sort: input.Sort, Search: input.Search})
+	if err != nil {
+		return ArchaeologyCatalogPage{}, err
+	}
+	out := ArchaeologyCatalogPage{Items: make([]ArchaeologyCandidate, 0, len(page.Candidates)), NextCursor: page.NextCursor, Total: page.Total}
+	for _, candidate := range page.Candidates {
+		sources := []string{}
+		if candidate.FromCodexMetadata {
+			sources = append(sources, "codex_metadata")
+		}
+		if candidate.FromConfiguredRoot {
+			sources = append(sources, "configured_root")
+		}
+		out.Items = append(out.Items, archaeologyCandidateView(candidate, sources))
+	}
+	return out, nil
+}
+func archaeologyBatchSummaryView(item domain.ArchaeologyBatchSummary) ArchaeologyBatchSummary {
+	return ArchaeologyBatchSummary{BatchID: item.ID, State: item.State, Mode: item.Mode, Depth: item.Policy.Depth, Sources: ArchaeologySources{Git: item.Policy.Sources.Git, Docs: item.Policy.Sources.Docs, CodexHistory: item.Policy.Sources.CodexHistory}, Concurrency: item.MaxConcurrency, SelectedTotal: item.SelectedTotal, QueuedCount: item.QueuedCount, ActiveCount: item.ActiveCount, CompletedCount: item.CompletedCount, AttentionCount: item.AttentionCount, HasReport: item.HasReport, CreatedAt: optionalArchaeologyTime(item.CreatedAt), UpdatedAt: optionalArchaeologyTime(item.UpdatedAt)}
+}
+func (s *Service) ProjectArchaeologyBatchHistory(ctx context.Context, principal, cursor string, limit int) (ArchaeologyBatchHistoryPage, error) {
+	repository, ok := s.repository.(ArchaeologyHistoryRepository)
+	if !ok {
+		return ArchaeologyBatchHistoryPage{}, domain.ErrUnavailable
+	}
+	page, err := repository.ArchaeologyBatchHistory(ctx, principal, domain.ArchaeologyBatchHistoryQuery{Cursor: cursor, Limit: limit})
+	if err != nil {
+		return ArchaeologyBatchHistoryPage{}, err
+	}
+	out := ArchaeologyBatchHistoryPage{Items: make([]ArchaeologyBatchSummary, 0, len(page.Items)), NextCursor: page.NextCursor}
+	for _, item := range page.Items {
+		out.Items = append(out.Items, archaeologyBatchSummaryView(item))
+	}
+	return out, nil
+}
+func (s *Service) ProjectArchaeologyBatch(ctx context.Context, principal, batchID string) (ArchaeologyBatchDetail, error) {
+	repository, ok := s.repository.(ArchaeologyHistoryRepository)
+	if !ok {
+		return ArchaeologyBatchDetail{}, domain.ErrUnavailable
+	}
+	detail, err := repository.ArchaeologyBatch(ctx, principal, batchID)
+	if err != nil {
+		return ArchaeologyBatchDetail{}, err
+	}
+	summary := domain.ArchaeologyBatchSummary{ID: detail.Batch.ID, State: detail.Batch.State, Mode: detail.Batch.Mode, Policy: detail.Batch.Policy, MaxConcurrency: detail.Batch.MaxConcurrency, SelectedTotal: len(detail.Batch.Jobs), CreatedAt: detail.Batch.CreatedAt, UpdatedAt: detail.Batch.UpdatedAt, HasReport: len(detail.Outcomes) > 0}
+	pageOutcomes := detail.Outcomes
+	if len(pageOutcomes) > 5 {
+		pageOutcomes = pageOutcomes[:5]
+	}
+	temp := domain.ArchaeologySession{NativeBatches: []domain.ArchaeologyNativeBatch{detail.Batch}, NativeReviewBatchID: detail.Batch.ID, Outcomes: pageOutcomes}
+	view := archaeologyView(temp)
+	out := ArchaeologyBatchDetail{ArchaeologyBatchSummary: archaeologyBatchSummaryView(summary), Tasks: []ArchaeologyTaskLaunch{}}
+	if view.Handoff != nil {
+		out.Tasks = view.Handoff.Tasks
+	}
+	out.Review = view.Review
+	out.OutcomesNextCursor = detail.OutcomesNextCursor
+	if out.Review != nil {
+		out.Review.CanApply = s.nativeApplyEnabled && detail.Batch.State == "completed" && len(detail.Outcomes) > 0
+	}
+	return out, nil
+}
+func (s *Service) ProjectArchaeologyBatchOutcomes(ctx context.Context, principal, batchID, cursor string) (ArchaeologyOutcomePage, error) {
+	repository, ok := s.repository.(ArchaeologyHistoryRepository)
+	if !ok {
+		return ArchaeologyOutcomePage{}, domain.ErrUnavailable
+	}
+	page, err := repository.ArchaeologyBatchOutcomes(ctx, principal, batchID, domain.ArchaeologyOutcomePageQuery{Cursor: cursor, Limit: 5})
+	if err != nil {
+		return ArchaeologyOutcomePage{}, err
+	}
+	temp := domain.ArchaeologySession{NativeReviewBatchID: batchID, Outcomes: page.Items}
+	view := archaeologyView(temp)
+	out := ArchaeologyOutcomePage{Items: []ArchaeologyOutcome{}, NextCursor: page.NextCursor}
+	if view.Review != nil {
+		out.Items = view.Review.ProposedOutcomes
+	}
+	return out, nil
+}
+
+func selectedSHA(value any) string {
+	body, _ := json.Marshal(value)
+	sum := sha256.Sum256(body)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+func (s *Service) PreviewSelectedArchaeologyImports(ctx context.Context, principal, batchID string, input ArchaeologySelectedPreviewRequest, actor ProjectCoreActor) (ArchaeologySelectedPreview, error) {
+	ids := append([]string(nil), input.OutcomeIDs...)
+	sort.Strings(ids)
+	if len(ids) < 1 || len(ids) > domain.ArchaeologyNativeMaxProjects*2 {
+		return ArchaeologySelectedPreview{}, domain.ErrInvalid
+	}
+	selectedRepository, ok := s.repository.(ArchaeologySelectedOutcomesRepository)
+	if !ok {
+		return ArchaeologySelectedPreview{}, domain.ErrUnavailable
+	}
+	selected, err := selectedRepository.ArchaeologySelectedOutcomes(ctx, principal, batchID, ids)
+	if err != nil {
+		return ArchaeologySelectedPreview{}, err
+	}
+	byID := map[string]domain.ArchaeologyOutcome{}
+	for _, o := range selected {
+		byID[o.ID] = o
+	}
+	out := ArchaeologySelectedPreview{BatchID: batchID, OutcomeIDs: ids, Projects: []ArchaeologySelectedProjectPreview{}}
+	imports := []domain.HistoricalImportCommand{}
+	seenSources := map[string]struct{}{}
+	for index, id := range ids {
+		if index > 0 && ids[index-1] == id {
+			return out, domain.ErrInvalid
+		}
+		o, exists := byID[id]
+		if !exists {
+			return out, domain.ErrNotFound
+		}
+		var request HistoricalImportRequest
+		if json.Unmarshal([]byte(o.ProposalJSON), &request) != nil {
+			return out, domain.ErrInvalid
+		}
+		sourceKey := o.ProjectID + "\x00" + request.SourceDigest
+		if _, duplicate := seenSources[sourceKey]; duplicate {
+			return out, domain.ErrConflict
+		}
+		seenSources[sourceKey] = struct{}{}
+		imports = append(imports, historicalImportCommand(o.ProjectID, request, actor))
+		out.Projects = append(out.Projects, ArchaeologySelectedProjectPreview{OutcomeID: id, ProjectID: o.ProjectID, Request: request})
+	}
+	previewRepository, ok := s.repository.(ArchaeologySelectedPreviewRepository)
+	if !ok {
+		return out, domain.ErrUnavailable
+	}
+	requestID := selectedSHA(struct {
+		Principal, BatchID string
+		IDs                []string
+	}{principal, batchID, ids})
+	receipt, err := previewRepository.PreviewArchaeologySelectedImports(ctx, domain.ArchaeologySelectedPreviewCommand{BatchID: batchID, Principal: principal, RequestID: requestID, OutcomeIDs: ids, Imports: imports})
+	if err != nil {
+		return out, err
+	}
+	if len(receipt.Imports) != len(out.Projects) {
+		return out, domain.ErrConflict
+	}
+	out.SelectionDigest, out.ManifestDigest = receipt.SelectionDigest, receipt.ManifestDigest
+	for index := range out.Projects {
+		out.Projects[index].Preview = historicalImportResult(receipt.Imports[index])
+	}
+	return out, nil
+}
+func selectedApplyResult(receipt domain.ArchaeologySelectedApplyReceipt) (ArchaeologySelectedApplyResult, error) {
+	if receipt.AuditID == "" || len(receipt.OutcomeIDs) < 1 || len(receipt.Imports) != len(receipt.OutcomeIDs) {
+		return ArchaeologySelectedApplyResult{}, domain.ErrConflict
+	}
+	return ArchaeologySelectedApplyResult{BatchID: receipt.BatchID, OutcomeIDs: append([]string(nil), receipt.OutcomeIDs...), SelectionDigest: receipt.SelectionDigest, ManifestDigest: receipt.ManifestDigest, Applied: true, AuditID: receipt.AuditID}, nil
+}
+func (s *Service) ApplySelectedArchaeologyImports(ctx context.Context, principal, requestID, batchID string, input ArchaeologySelectedApplyRequest, actor ProjectCoreActor) (ArchaeologySelectedApplyResult, error) {
+	if !s.nativeApplyEnabled {
+		return ArchaeologySelectedApplyResult{}, domain.ErrUnavailable
+	}
+	if !input.ReviewAcknowledged {
+		return ArchaeologySelectedApplyResult{}, domain.ErrInvalid
+	}
+	repository, ok := s.repository.(ArchaeologySelectedApplyRepository)
+	if !ok {
+		return ArchaeologySelectedApplyResult{}, domain.ErrUnavailable
+	}
+	ids := append([]string(nil), input.OutcomeIDs...)
+	sort.Strings(ids)
+	if len(ids) < 1 || len(ids) > domain.ArchaeologyNativeMaxProjects*2 {
+		return ArchaeologySelectedApplyResult{}, domain.ErrInvalid
+	}
+	for index, id := range ids {
+		if id == "" || index > 0 && ids[index-1] == id {
+			return ArchaeologySelectedApplyResult{}, domain.ErrInvalid
+		}
+	}
+	prior, found, err := repository.ReplayArchaeologySelectedImports(ctx, domain.ArchaeologySelectedApplyReplayQuery{BatchID: batchID, Principal: principal, RequestID: requestID, SelectionDigest: input.SelectionDigest, ManifestDigest: input.ManifestDigest, OutcomeIDs: ids})
+	if err != nil {
+		return ArchaeologySelectedApplyResult{}, err
+	}
+	if found {
+		return selectedApplyResult(prior)
+	}
+	preview, err := s.PreviewSelectedArchaeologyImports(ctx, principal, batchID, ArchaeologySelectedPreviewRequest{OutcomeIDs: input.OutcomeIDs}, actor)
+	if err != nil {
+		return ArchaeologySelectedApplyResult{}, err
+	}
+	if preview.SelectionDigest != input.SelectionDigest || preview.ManifestDigest != input.ManifestDigest {
+		return ArchaeologySelectedApplyResult{}, domain.ErrConflict
+	}
+	imports := make([]domain.HistoricalImportCommand, 0, len(preview.Projects))
+	for _, project := range preview.Projects {
+		request := project.Request
+		request.ConfirmSourceDigest = request.SourceDigest
+		request.ConfirmManifestDigest = project.Preview.ManifestDigest
+		imports = append(imports, historicalImportCommand(project.ProjectID, request, actor))
+	}
+	receipt, err := repository.ApplyArchaeologySelectedImports(ctx, domain.ArchaeologySelectedApplyCommand{BatchID: batchID, Principal: principal, RequestID: requestID, SelectionDigest: preview.SelectionDigest, ManifestDigest: preview.ManifestDigest, ReviewCompletionToken: input.ReviewCompletionToken, OutcomeIDs: preview.OutcomeIDs, Imports: imports})
+	if err != nil {
+		return ArchaeologySelectedApplyResult{}, err
+	}
+	return selectedApplyResult(receipt)
+}
 func (s *Service) DiscoverProjectArchaeology(ctx context.Context, principal, requestID string) (ArchaeologySession, error) {
 	repository, err := s.archaeologyRepository()
 	if err != nil {
@@ -590,6 +1027,19 @@ func (s *Service) DiscoverProjectArchaeology(ctx context.Context, principal, req
 	}
 	if s.archaeologyDiscoverer == nil {
 		return ArchaeologySession{}, domain.ErrUnavailable
+	}
+	current, currentErr := repository.ArchaeologySession(ctx, principal)
+	if currentErr == nil {
+		for _, batch := range current.NativeBatches {
+			for _, job := range batch.Jobs {
+				switch job.State {
+				case "queued", "starting", "active", "report_ready", "cancel_requested":
+					return ArchaeologySession{}, domain.ErrConflict
+				}
+			}
+		}
+	} else if !errors.Is(currentErr, domain.ErrNotFound) {
+		return ArchaeologySession{}, currentErr
 	}
 	discovery, err := s.archaeologyDiscoverer.DiscoverMetadata(ctx)
 	if err != nil {
@@ -604,7 +1054,9 @@ func (s *Service) ConfigureArchaeologySession(ctx context.Context, principal, re
 		return ArchaeologySession{}, err
 	}
 	mutation := archaeologyMutation(principal, requestID, input.BaseRevision)
-	mutation.Config = domain.ArchaeologyConfig{SelectedProjectIDs: input.SelectedProjectIDs, Depth: input.Depth, Sources: domain.ArchaeologySources{Git: input.Sources.Git, Docs: input.Sources.Docs, CodexHistory: input.Sources.CodexHistory}, MaxConcurrency: input.MaxConcurrency}
+	// MaxConcurrency remains fixed for schema, wire, and audit compatibility; it
+	// is not an execution-capacity promise. Codex governs capacity after submit.
+	mutation.Config = domain.ArchaeologyConfig{SelectedProjectIDs: input.SelectedProjectIDs, Depth: input.Depth, Sources: domain.ArchaeologySources{Git: input.Sources.Git, Docs: input.Sources.Docs, CodexHistory: input.Sources.CodexHistory}, MaxConcurrency: 2}
 	value, err := repository.ConfigureArchaeology(ctx, mutation)
 	return s.archaeologySessionView(value), err
 }
@@ -614,7 +1066,7 @@ func (s *Service) StartProjectArchaeology(ctx context.Context, principal, reques
 		return ArchaeologySession{}, err
 	}
 	if s.archaeologyScheduler != nil {
-		value, queueErr := s.queueNativeProjectArchaeology(ctx, principal, requestID, input.BaseRevision)
+		value, queueErr := s.queueNativeProjectArchaeology(ctx, principal, requestID, input.BaseRevision, input.AcknowledgeLargeBatch)
 		if queueErr != nil {
 			return ArchaeologySession{}, queueErr
 		}
@@ -641,13 +1093,7 @@ func (s *Service) StartProjectArchaeology(ctx context.Context, principal, reques
 			candidates = append(candidates, candidate)
 		}
 	}
-	workers := value.Config.MaxConcurrency
-	if workers < 1 {
-		workers = 1
-	}
-	if workers > 2 {
-		workers = 2
-	}
+	workers := len(candidates)
 	jobs := make(chan domain.ArchaeologyCandidate)
 	errs := make(chan error, len(candidates))
 	var group sync.WaitGroup
@@ -709,6 +1155,9 @@ func (s *Service) launchArchaeologyCandidate(ctx context.Context, repository Arc
 	return err
 }
 func (s *Service) PauseProjectArchaeology(ctx context.Context, principal, requestID string, input ArchaeologyTransitionRequest) (ArchaeologySession, error) {
+	if s.archaeologyScheduler != nil {
+		return ArchaeologySession{}, domain.ErrUnavailable
+	}
 	repository, err := s.archaeologyRepository()
 	if err != nil {
 		return ArchaeologySession{}, err
@@ -717,6 +1166,9 @@ func (s *Service) PauseProjectArchaeology(ctx context.Context, principal, reques
 	return s.archaeologySessionView(value), err
 }
 func (s *Service) ResumeProjectArchaeology(ctx context.Context, principal, requestID string, input ArchaeologyTransitionRequest) (ArchaeologySession, error) {
+	if s.archaeologyScheduler != nil {
+		return ArchaeologySession{}, domain.ErrUnavailable
+	}
 	repository, err := s.archaeologyRepository()
 	if err != nil {
 		return ArchaeologySession{}, err

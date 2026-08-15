@@ -342,12 +342,12 @@ func pairingHash(value string) string {
 	return string(digest[:])
 }
 
-func setPairingCookie(w http.ResponseWriter, r *http.Request, value string, maxAge int) {
-	http.SetCookie(w, &http.Cookie{Name: pairingCookieName, Value: value, Path: pairingCookiePath, MaxAge: maxAge, Expires: time.Now().Add(pairingTTL), HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode})
+func setPairingCookie(w http.ResponseWriter, r *http.Request, publicOrigin, value string, maxAge int) {
+	http.SetCookie(w, &http.Cookie{Name: pairingCookieName, Value: value, Path: pairingCookiePath, MaxAge: maxAge, Expires: time.Now().Add(pairingTTL), HttpOnly: true, Secure: secureRequest(r, publicOrigin), SameSite: http.SameSiteStrictMode})
 }
 
-func clearPairingCookie(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{Name: pairingCookieName, Value: "", Path: pairingCookiePath, MaxAge: -1, Expires: time.Unix(1, 0), HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode})
+func clearPairingCookie(w http.ResponseWriter, r *http.Request, publicOrigin string) {
+	http.SetCookie(w, &http.Cookie{Name: pairingCookieName, Value: "", Path: pairingCookiePath, MaxAge: -1, Expires: time.Unix(1, 0), HttpOnly: true, Secure: secureRequest(r, publicOrigin), SameSite: http.SameSiteStrictMode})
 }
 
 func requestRemoteKey(r *http.Request) string {
@@ -409,6 +409,9 @@ func (h *handler) firstBindAllowed(r *http.Request) (bool, error) {
 		return false, err
 	}
 	config, ok := h.codexConfig()
+	if h.config.PublicOrigin != "" {
+		return ok && config.AllowFirstBindLAN, nil
+	}
 	return requestIsLoopback(r) || ok && config.AllowFirstBindLAN, nil
 }
 
@@ -426,6 +429,14 @@ func (h *handler) authRoute(w http.ResponseWriter, r *http.Request, rid string) 
 			return true
 		}
 		session := humanSession{csrf: principal.csrfToken, authMethod: principal.authMethod, bindingRevision: principal.bindingRevision}
+		if session.csrf == "" {
+			cookie, _ := r.Cookie(humanSessionCookie)
+			session, ok = h.humanAuth.rotateCSRF(cookie.Value)
+			if !ok {
+				h.write(w, http.StatusServiceUnavailable, envelope{OK: false, Error: &errorPayload{Code: "unavailable", Message: "could not refresh session security"}, Meta: responseMeta{RequestID: rid}})
+				return true
+			}
+		}
 		h.write(w, http.StatusOK, envelope{OK: true, Data: h.humanAuth.result(&session), Meta: responseMeta{RequestID: rid}})
 		return true
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/auth/codex/status":
@@ -491,7 +502,7 @@ func (h *handler) codexStart(w http.ResponseWriter, r *http.Request, rid string)
 		h.writeError(w, rid, http.StatusServiceUnavailable, "codex_unavailable", "Codex authentication is unavailable")
 		return
 	}
-	if !sameOrigin(r) {
+	if !sameOrigin(r, h.config.PublicOrigin) {
 		h.writeError(w, rid, http.StatusForbidden, "origin_forbidden", "same-origin request required")
 		return
 	}
@@ -549,7 +560,7 @@ func (h *handler) codexStart(w http.ResponseWriter, r *http.Request, rid string)
 		return
 	}
 	if setCookie {
-		setPairingCookie(w, r, pairingValue, int(pairingTTL/time.Second))
+		setPairingCookie(w, r, h.config.PublicOrigin, pairingValue, int(pairingTTL/time.Second))
 	}
 	h.write(w, http.StatusOK, envelope{OK: true, Data: codexStartResult{DestinationBehavior: "manual_code_required", AttemptID: attempt.id, VerificationURL: device.VerificationURL, UserCode: device.UserCode, ExpiresAt: attempt.expiresAt, PollAfterMS: 1500}, Meta: responseMeta{RequestID: rid}})
 }
@@ -560,7 +571,7 @@ func (h *handler) codexPoll(w http.ResponseWriter, r *http.Request, rid string) 
 		h.writeError(w, rid, http.StatusServiceUnavailable, "codex_unavailable", "Codex authentication is unavailable")
 		return
 	}
-	if !sameOrigin(r) {
+	if !sameOrigin(r, h.config.PublicOrigin) {
 		h.writeError(w, rid, http.StatusForbidden, "origin_forbidden", "same-origin request required")
 		return
 	}
@@ -582,7 +593,7 @@ func (h *handler) codexPoll(w http.ResponseWriter, r *http.Request, rid string) 
 		return
 	}
 	if expired || attempt.state == pairingExpired {
-		clearPairingCookie(w, r)
+		clearPairingCookie(w, r, h.config.PublicOrigin)
 		h.write(w, http.StatusOK, envelope{OK: true, Data: codexPollResult{State: string(pairingExpired)}, Meta: responseMeta{RequestID: rid}})
 		return
 	}
@@ -607,7 +618,7 @@ func (h *handler) codexPoll(w http.ResponseWriter, r *http.Request, rid string) 
 		return
 	}
 	if active.state == pairingExpired || loginID == "" {
-		clearPairingCookie(w, r)
+		clearPairingCookie(w, r, h.config.PublicOrigin)
 		h.write(w, http.StatusOK, envelope{OK: true, Data: codexPollResult{State: string(pairingExpired)}, Meta: responseMeta{RequestID: rid}})
 		return
 	}
@@ -615,7 +626,7 @@ func (h *handler) codexPoll(w http.ResponseWriter, r *http.Request, rid string) 
 	result, err := config.Client.PollLogin(r.Context(), loginID)
 	if err != nil {
 		h.pairings.markFailed(input.AttemptID, "codex_unavailable")
-		clearPairingCookie(w, r)
+		clearPairingCookie(w, r, h.config.PublicOrigin)
 		h.writeError(w, rid, http.StatusServiceUnavailable, "codex_unavailable", "Codex authentication is unavailable")
 		return
 	}
@@ -625,7 +636,7 @@ func (h *handler) codexPoll(w http.ResponseWriter, r *http.Request, rid string) 
 	}
 	if result.State == "cancelled" || result.State == "failed" {
 		h.pairings.markFailed(input.AttemptID, "authorization_cancelled")
-		clearPairingCookie(w, r)
+		clearPairingCookie(w, r, h.config.PublicOrigin)
 		code, message := "authorization_failed", "Codex authorization was not completed."
 		if result.State == "cancelled" {
 			code, message = "authorization_cancelled", "Codex authorization was cancelled."
@@ -635,7 +646,7 @@ func (h *handler) codexPoll(w http.ResponseWriter, r *http.Request, rid string) 
 	}
 	if result.State != "success" || result.Account == nil || result.Account.Type != "chatgpt" || result.Account.Email == nil || strings.TrimSpace(*result.Account.Email) == "" {
 		h.pairings.markFailed(input.AttemptID, "codex_identity_unavailable")
-		clearPairingCookie(w, r)
+		clearPairingCookie(w, r, h.config.PublicOrigin)
 		h.write(w, http.StatusOK, envelope{OK: true, Data: codexPollResult{State: string(pairingFailed), Code: "codex_identity_unavailable", Message: "Codex did not provide a bindable account identity."}, Meta: responseMeta{RequestID: rid}})
 		return
 	}
@@ -649,7 +660,7 @@ func (h *handler) codexPoll(w http.ResponseWriter, r *http.Request, rid string) 
 		matches := len(binding.ProviderSubjectDigest) == len(subject) && subtle.ConstantTimeCompare(binding.ProviderSubjectDigest, subject[:]) == 1
 		if !matches {
 			h.pairings.markFailed(input.AttemptID, "account_mismatch")
-			clearPairingCookie(w, r)
+			clearPairingCookie(w, r, h.config.PublicOrigin)
 			h.write(w, http.StatusOK, envelope{OK: true, Data: codexPollResult{State: string(pairingFailed), Code: "account_mismatch", Message: "This Commons installation is bound to a different Codex account."}, Meta: responseMeta{RequestID: rid}})
 			return
 		}
@@ -662,20 +673,20 @@ func (h *handler) codexPoll(w http.ResponseWriter, r *http.Request, rid string) 
 			h.writeError(w, rid, http.StatusServiceUnavailable, "unavailable", "Could not create a Commons session")
 			return
 		}
-		setHumanCookie(w, r, token, session.expiresAt, int(h.humanAuth.ttl/time.Second))
-		clearPairingCookie(w, r)
+		setHumanCookie(w, r, h.config.PublicOrigin, token, session.expiresAt, int(h.humanAuth.ttl/time.Second))
+		clearPairingCookie(w, r, h.config.PublicOrigin)
 		h.write(w, http.StatusOK, envelope{OK: true, Data: h.humanAuth.result(&session), Meta: responseMeta{RequestID: rid}})
 		return
 	}
 	if !errors.Is(bindingErr, domain.ErrNotFound) {
 		h.pairings.markFailed(input.AttemptID, "unavailable")
-		clearPairingCookie(w, r)
+		clearPairingCookie(w, r, h.config.PublicOrigin)
 		h.writeError(w, rid, http.StatusServiceUnavailable, "unavailable", "Commons authentication is temporarily unavailable")
 		return
 	}
 	if allowed, _ := h.firstBindAllowed(r); !allowed {
 		h.pairings.markFailed(input.AttemptID, "first_bind_lan_forbidden")
-		clearPairingCookie(w, r)
+		clearPairingCookie(w, r, h.config.PublicOrigin)
 		h.write(w, http.StatusOK, envelope{OK: true, Data: codexPollResult{State: string(pairingFailed), Code: "first_bind_lan_forbidden", Message: "The first Codex account binding must begin on loopback or with explicit LAN acknowledgement."}, Meta: responseMeta{RequestID: rid}})
 		return
 	}
@@ -690,7 +701,7 @@ func (h *handler) codexProfile(w http.ResponseWriter, r *http.Request, rid strin
 		h.writeError(w, rid, http.StatusServiceUnavailable, "codex_unavailable", "Codex authentication is unavailable")
 		return
 	}
-	if !sameOrigin(r) {
+	if !sameOrigin(r, h.config.PublicOrigin) {
 		h.writeError(w, rid, http.StatusForbidden, "origin_forbidden", "same-origin request required")
 		return
 	}
@@ -710,7 +721,7 @@ func (h *handler) codexProfile(w http.ResponseWriter, r *http.Request, rid strin
 	attempt, found, expired := h.pairings.lookup(input.AttemptID, pairingHash(pairingValue))
 	if !found || expired || attempt.state != pairingNeedsProfile || !attempt.hasDigest {
 		if expired {
-			clearPairingCookie(w, r)
+			clearPairingCookie(w, r, h.config.PublicOrigin)
 		}
 		h.writeError(w, rid, http.StatusConflict, "profile_unavailable", "This Codex onboarding step is no longer available.")
 		return
@@ -740,7 +751,10 @@ func (h *handler) codexProfile(w http.ResponseWriter, r *http.Request, rid strin
 		h.writeError(w, rid, http.StatusConflict, "profile_unavailable", "This Codex onboarding step is no longer available.")
 		return
 	}
-	h.humanAuth.updateIdentity(binding.DisplayName, binding.Handle, binding.Revision)
+	if h.humanAuth.updateIdentity(binding.DisplayName, binding.Handle, binding.Revision) != nil {
+		h.writeError(w, rid, http.StatusServiceUnavailable, "unavailable", "could not persist trusted device sessions")
+		return
+	}
 	if h.config.OnHumanIdentityUpdated != nil {
 		h.config.OnHumanIdentityUpdated(binding.DisplayName, binding.Handle, binding.Revision)
 	}
@@ -749,8 +763,8 @@ func (h *handler) codexProfile(w http.ResponseWriter, r *http.Request, rid strin
 		h.writeError(w, rid, http.StatusServiceUnavailable, "unavailable", "Could not create a Commons session")
 		return
 	}
-	setHumanCookie(w, r, token, session.expiresAt, int(h.humanAuth.ttl/time.Second))
-	clearPairingCookie(w, r)
+	setHumanCookie(w, r, h.config.PublicOrigin, token, session.expiresAt, int(h.humanAuth.ttl/time.Second))
+	clearPairingCookie(w, r, h.config.PublicOrigin)
 	h.write(w, http.StatusOK, envelope{OK: true, Data: h.humanAuth.result(&session), Meta: responseMeta{RequestID: rid}})
 }
 
@@ -772,7 +786,7 @@ func (h *handler) codexCancel(w http.ResponseWriter, r *http.Request, rid string
 		h.writeError(w, rid, http.StatusServiceUnavailable, "codex_unavailable", "Codex authentication is unavailable")
 		return
 	}
-	if !sameOrigin(r) {
+	if !sameOrigin(r, h.config.PublicOrigin) {
 		h.writeError(w, rid, http.StatusForbidden, "origin_forbidden", "same-origin request required")
 		return
 	}
@@ -791,7 +805,7 @@ func (h *handler) codexCancel(w http.ResponseWriter, r *http.Request, rid string
 	}
 	attempt, found, _ := h.pairings.lookup(input.AttemptID, pairingHash(pairingValue))
 	if !found {
-		clearPairingCookie(w, r)
+		clearPairingCookie(w, r, h.config.PublicOrigin)
 		h.write(w, http.StatusOK, envelope{OK: true, Data: authSessionResult{Authenticated: false}, Meta: responseMeta{RequestID: rid}})
 		return
 	}
@@ -799,7 +813,7 @@ func (h *handler) codexCancel(w http.ResponseWriter, r *http.Request, rid string
 		_ = config.Client.CancelLogin(r.Context(), attempt.loginID)
 	}
 	h.pairings.remove(input.AttemptID)
-	clearPairingCookie(w, r)
+	clearPairingCookie(w, r, h.config.PublicOrigin)
 	h.write(w, http.StatusOK, envelope{OK: true, Data: authSessionResult{Authenticated: false}, Meta: responseMeta{RequestID: rid}})
 }
 
@@ -809,7 +823,7 @@ func (h *handler) updateProfile(w http.ResponseWriter, r *http.Request, rid stri
 		h.writeError(w, rid, http.StatusUnauthorized, "unauthorized", "authenticated human session required")
 		return
 	}
-	if !sameOrigin(r) {
+	if !sameOrigin(r, h.config.PublicOrigin) {
 		h.writeError(w, rid, http.StatusForbidden, "origin_forbidden", "same-origin request required")
 		return
 	}
@@ -850,7 +864,10 @@ func (h *handler) updateProfile(w http.ResponseWriter, r *http.Request, rid stri
 		}
 		return
 	}
-	h.humanAuth.updateIdentity(binding.DisplayName, binding.Handle, binding.Revision)
+	if h.humanAuth.updateIdentity(binding.DisplayName, binding.Handle, binding.Revision) != nil {
+		h.writeError(w, rid, http.StatusServiceUnavailable, "unavailable", "could not persist trusted device sessions")
+		return
+	}
 	if h.config.OnHumanIdentityUpdated != nil {
 		h.config.OnHumanIdentityUpdated(binding.DisplayName, binding.Handle, binding.Revision)
 	}

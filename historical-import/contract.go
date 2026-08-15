@@ -46,13 +46,14 @@ type ApplyTask struct {
 }
 
 type ApplyRequest struct {
-	SchemaVersion        int                       `json:"schema_version"`
-	BatchID              string                    `json:"batch_id"`
-	SourceDigest         string                    `json:"source_digest"`
-	ConfirmSourceDigest  string                    `json:"confirm_source_digest"`
-	CollisionPolicy      string                    `json:"collision_policy"`
-	ProjectThreadAliases []ApplyProjectThreadAlias `json:"project_thread_aliases"`
-	Tasks                []ApplyTask               `json:"tasks"`
+	SchemaVersion         int                       `json:"schema_version"`
+	BatchID               string                    `json:"batch_id"`
+	SourceDigest          string                    `json:"source_digest"`
+	ConfirmSourceDigest   string                    `json:"confirm_source_digest"`
+	ConfirmManifestDigest string                    `json:"confirm_manifest_digest"`
+	CollisionPolicy       string                    `json:"collision_policy"`
+	ProjectThreadAliases  []ApplyProjectThreadAlias `json:"project_thread_aliases"`
+	Tasks                 []ApplyTask               `json:"tasks"`
 }
 
 type TaskReceipt struct {
@@ -76,7 +77,7 @@ type ApplyReceipt struct {
 	Counts       ReceiptCounts `json:"counts"`
 }
 
-func BuildApplyRequest(manifest Manifest, report PreviewReport, confirmSourceDigest string) (ApplyRequest, error) {
+func BuildApplyRequest(manifest Manifest, report PreviewReport, confirmSourceDigest, confirmManifestDigest string) (ApplyRequest, error) {
 	if !report.ApplyEligible {
 		return ApplyRequest{}, errors.New("preview is not apply-eligible")
 	}
@@ -101,11 +102,15 @@ func BuildApplyRequest(manifest Manifest, report PreviewReport, confirmSourceDig
 	if confirmSourceDigest == "" || confirmSourceDigest != sourceDigest {
 		return ApplyRequest{}, errors.New("confirm_source_digest must exactly match the reviewed source digest")
 	}
+	if confirmManifestDigest == "" || confirmManifestDigest != manifestDigest {
+		return ApplyRequest{}, errors.New("confirm_manifest_digest must exactly match the reviewed manifest digest")
+	}
 	request := ApplyRequest{
 		SchemaVersion: manifest.SchemaVersion, BatchID: manifest.BatchID,
 		SourceDigest: sourceDigest, ConfirmSourceDigest: confirmSourceDigest,
-		CollisionPolicy:      manifest.CollisionPolicy,
-		ProjectThreadAliases: []ApplyProjectThreadAlias{}, Tasks: []ApplyTask{},
+		ConfirmManifestDigest: confirmManifestDigest,
+		CollisionPolicy:       manifest.CollisionPolicy,
+		ProjectThreadAliases:  []ApplyProjectThreadAlias{}, Tasks: []ApplyTask{},
 	}
 	for _, alias := range manifest.ProjectThreadAliases {
 		source, err := embeddedSource(manifest.Sources, alias.SourceRef, "")

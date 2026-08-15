@@ -44,11 +44,11 @@ type HistoricalTaskInput struct {
 }
 
 type HistoricalImportCommand struct {
-	ProjectID, BatchID, SourceDigest, CollisionPolicy, ConfirmSourceDigest string
-	SchemaVersion                                                          int
-	ProjectThreadAliases                                                   []HistoricalProjectThreadAliasInput
-	Tasks                                                                  []HistoricalTaskInput
-	Meta                                                                   CoreWriteMeta
+	ProjectID, BatchID, SourceDigest, CollisionPolicy, ConfirmSourceDigest, ConfirmManifestDigest string
+	SchemaVersion                                                                                 int
+	ProjectThreadAliases                                                                          []HistoricalProjectThreadAliasInput
+	Tasks                                                                                         []HistoricalTaskInput
+	Meta                                                                                          CoreWriteMeta
 }
 
 type HistoricalImportTaskReceipt struct {
@@ -65,6 +65,7 @@ type HistoricalImportReceipt struct {
 	RecordedAt                                                               time.Time
 	Tasks                                                                    []HistoricalImportTaskReceipt
 	Counts                                                                   HistoricalImportCounts
+	ProjectRevision                                                          int64
 }
 
 type SupersedeHistoricalImportCommand struct {

@@ -68,6 +68,7 @@ func TestHistoricalImportPreviewApplyReplayAndSupersede(t *testing.T) {
 	}
 
 	command.ConfirmSourceDigest = command.SourceDigest
+	command.ConfirmManifestDigest = preview.ManifestDigest
 	applied, err := store.ApplyHistoricalImport(ctx, command)
 	must(t, err)
 	if !applied.Applied || applied.State != "applied" || applied.Counts.Created != 1 ||
@@ -109,14 +110,14 @@ func TestHistoricalImportPreviewApplyReplayAndSupersede(t *testing.T) {
 
 	replayed, err := store.ApplyHistoricalImport(ctx, command)
 	must(t, err)
-	if replayed.Counts.Replayed != 1 || replayed.Tasks[0].Disposition != "replayed" {
+	if replayed.Counts.Created != applied.Counts.Created || replayed.Tasks[0].Disposition != applied.Tasks[0].Disposition || replayed.RecordedAt != applied.RecordedAt {
 		t.Fatalf("replayed=%+v", replayed)
 	}
 	changed := command
 	changed.Tasks = append([]domain.HistoricalTaskInput(nil), command.Tasks...)
 	changed.Tasks[0].Title = "Changed under reused key"
-	if _, err = store.ApplyHistoricalImport(ctx, changed); !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("changed replay err=%v", err)
+	if _, err = store.PreviewHistoricalImport(ctx, changed); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("changed preview err=%v", err)
 	}
 
 	superseded, err := store.SupersedeHistoricalImport(ctx, domain.SupersedeHistoricalImportCommand{
@@ -209,7 +210,10 @@ func TestHistoricalImportCurrentWinsWithoutAttributingCurrentTask(t *testing.T) 
 	must(t, store.CreateTask(ctx, domain.Task{
 		ID: currentID, ProjectID: "commons", State: "done", Title: "  VERIFIED   historical OUTCOME  ", Accept: "Keep current",
 	}))
+	preview, err := store.PreviewHistoricalImport(ctx, command)
+	must(t, err)
 	command.ConfirmSourceDigest = command.SourceDigest
+	command.ConfirmManifestDigest = preview.ManifestDigest
 	receipt, err := store.ApplyHistoricalImport(ctx, command)
 	must(t, err)
 	if receipt.Counts.SkippedCurrent != 1 || receipt.Counts.Created != 0 ||
@@ -243,6 +247,9 @@ func TestHistoricalImportStableKeyPrecedesAmbiguousTitleFallback(t *testing.T) {
 	mustCoreProject(t, store, "commons", "project")
 	first := historicalCommand("commons", "seed", "seed")
 	first.ConfirmSourceDigest = first.SourceDigest
+	firstPreview, err := store.PreviewHistoricalImport(ctx, first)
+	must(t, err)
+	first.ConfirmManifestDigest = firstPreview.ManifestDigest
 	applied, err := store.ApplyHistoricalImport(ctx, first)
 	must(t, err)
 	if len(applied.Tasks) != 1 || applied.Tasks[0].Disposition != "created" {
@@ -277,9 +284,13 @@ func TestHistoricalImportStableKeyPrecedesAmbiguousTitleFallback(t *testing.T) {
 
 func TestHistoricalImportConcurrentApplyIsSingleBatch(t *testing.T) {
 	store, _ := openTest(t)
+	ctx := context.Background()
 	mustCoreProject(t, store, "commons", "project")
 	command := historicalCommand("commons", "concurrent", "concurrent")
 	command.ConfirmSourceDigest = command.SourceDigest
+	preview, err := store.PreviewHistoricalImport(ctx, command)
+	must(t, err)
+	command.ConfirmManifestDigest = preview.ManifestDigest
 	start := make(chan struct{})
 	results := make(chan domain.HistoricalImportReceipt, 2)
 	errs := make(chan error, 2)
@@ -311,7 +322,7 @@ func TestHistoricalImportConcurrentApplyIsSingleBatch(t *testing.T) {
 	var batches, tasks int
 	must(t, store.DB().QueryRow("SELECT count(*) FROM historical_import_batches").Scan(&batches))
 	must(t, store.DB().QueryRow("SELECT count(*) FROM historical_import_tasks").Scan(&tasks))
-	if batches != 1 || tasks != 1 || created != 1 || replayed != 1 {
+	if batches != 1 || tasks != 1 || created != 2 || replayed != 0 {
 		t.Fatalf("batches=%d tasks=%d created=%d replayed=%d", batches, tasks, created, replayed)
 	}
 }
@@ -331,5 +342,83 @@ func TestHistoricalImportBoundsAndConfirmation(t *testing.T) {
 	command.ConfirmSourceDigest = historicalDigest("f")
 	if _, err := store.ApplyHistoricalImport(context.Background(), command); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("mismatched confirmation err=%v", err)
+	}
+}
+
+func TestGenericHistoricalImportCannotApplyNativeOutcome(t *testing.T) {
+	s, _ := openTest(t)
+	ctx := context.Background()
+	mustCoreProject(t, s, "commons", "Commons")
+	at := stamp(testNow)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO archaeology_sessions(id,principal,state,discovery_state,created_at,updated_at) VALUES('guard-s','human:local-admin','completed','ready',?,?);
+INSERT INTO archaeology_native_batches(id,session_id,request_key,request_digest,mode,state,max_concurrency,created_at,updated_at) VALUES('guard-b','guard-s','r',zeroblob(32),'app_server_dynamic_tools','completed',1,?,?);
+INSERT INTO archaeology_candidates(session_id,id,name,path_label,has_git,has_docs,has_codex_history,duration_min_seconds,duration_max_seconds,relative_cost,privacy_note,canonical_project_id) VALUES('guard-s','guard-c','Commons','commons',1,0,0,1,2,'low','','commons');
+INSERT INTO archaeology_native_jobs(id,batch_id,session_id,candidate_id,project_id,project_name,mode,state,created_at,updated_at) VALUES('guard-j','guard-b','guard-s','guard-c','commons','Commons','app_server_dynamic_tools','completed',?,?);
+INSERT INTO archaeology_native_outcomes(id,job_id,project_id,title,summary,source_count,proposal_json,created_at) VALUES('guard-o','guard-j','commons','Guard','',1,'{"batch_id":"native-batch"}',?);`, at, at, at, at, at, at, at)
+	must(t, err)
+	command := historicalCommand("commons", "native-batch", "generic-bypass")
+	if _, err = s.PreviewHistoricalImport(ctx, command); !errors.Is(err, domain.ErrUnavailable) {
+		t.Fatalf("preview err=%v", err)
+	}
+	command.ConfirmSourceDigest = command.SourceDigest
+	command.ConfirmManifestDigest = historicalDigest("f")
+	if _, err = s.ApplyHistoricalImport(ctx, command); !errors.Is(err, domain.ErrUnavailable) {
+		t.Fatalf("apply err=%v", err)
+	}
+	var tasks, audits int
+	must(t, s.db.QueryRow(`SELECT count(*) FROM tasks`).Scan(&tasks))
+	must(t, s.db.QueryRow(`SELECT count(*) FROM archaeology_selected_imports`).Scan(&audits))
+	if tasks != 0 || audits != 0 {
+		t.Fatalf("tasks=%d audits=%d", tasks, audits)
+	}
+}
+
+func TestGenericHistoricalImportSerializesNativeOutcomeRaceBeforeGuard(t *testing.T) {
+	s, _ := openTest(t)
+	ctx := context.Background()
+	mustCoreProject(t, s, "commons", "Commons")
+	command := historicalCommand("commons", "racing-native-batch", "generic-race")
+	preview, err := s.PreviewHistoricalImport(ctx, command)
+	must(t, err)
+	command.ConfirmSourceDigest = command.SourceDigest
+	command.ConfirmManifestDigest = preview.ManifestDigest
+
+	writer, err := s.db.Conn(ctx)
+	must(t, err)
+	defer writer.Close()
+	_, err = writer.ExecContext(ctx, `BEGIN IMMEDIATE`)
+	must(t, err)
+	result := make(chan error, 1)
+	go func() {
+		_, applyErr := s.ApplyHistoricalImport(context.Background(), command)
+		result <- applyErr
+	}()
+	select {
+	case applyErr := <-result:
+		t.Fatalf("generic Apply passed write reservation before native writer committed: %v", applyErr)
+	case <-time.After(100 * time.Millisecond):
+	}
+	at := stamp(testNow)
+	_, err = writer.ExecContext(ctx, `INSERT INTO archaeology_sessions(id,principal,state,discovery_state,created_at,updated_at) VALUES('race-s','human:local-admin','completed','ready',?,?);
+INSERT INTO archaeology_native_batches(id,session_id,request_key,request_digest,mode,state,max_concurrency,created_at,updated_at) VALUES('race-b','race-s','r',zeroblob(32),'app_server_dynamic_tools','completed',1,?,?);
+INSERT INTO archaeology_candidates(session_id,id,name,path_label,has_git,has_docs,has_codex_history,duration_min_seconds,duration_max_seconds,relative_cost,privacy_note,canonical_project_id) VALUES('race-s','race-c','Commons','commons',1,0,0,1,2,'low','','commons');
+INSERT INTO archaeology_native_jobs(id,batch_id,session_id,candidate_id,project_id,project_name,mode,state,created_at,updated_at) VALUES('race-j','race-b','race-s','race-c','commons','Commons','app_server_dynamic_tools','completed',?,?);
+INSERT INTO archaeology_native_outcomes(id,job_id,project_id,title,summary,source_count,proposal_json,created_at) VALUES('race-o','race-j','commons','Guard','',1,'{"batch_id":"racing-native-batch"}',?);`, at, at, at, at, at, at, at)
+	must(t, err)
+	_, err = writer.ExecContext(ctx, `COMMIT`)
+	must(t, err)
+	select {
+	case applyErr := <-result:
+		if !errors.Is(applyErr, domain.ErrUnavailable) {
+			t.Fatalf("generic Apply after native commit err=%v", applyErr)
+		}
+	case <-time.After(6 * time.Second):
+		t.Fatal("generic Apply did not resume after native writer committed")
+	}
+	var tasks, imports int
+	must(t, s.db.QueryRowContext(ctx, `SELECT count(*) FROM tasks`).Scan(&tasks))
+	must(t, s.db.QueryRowContext(ctx, `SELECT count(*) FROM historical_import_batches`).Scan(&imports))
+	if tasks != 0 || imports != 0 {
+		t.Fatalf("racing generic Apply mutated canonical state: tasks=%d imports=%d", tasks, imports)
 	}
 }
