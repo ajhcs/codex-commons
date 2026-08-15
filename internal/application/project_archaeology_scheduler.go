@@ -55,6 +55,24 @@ type ArchaeologyNativeIdentityReconciler interface {
 	RecoverNativeIdentity(context.Context, domain.ArchaeologyNativeJob, domain.ArchaeologyCandidate) (domain.ArchaeologyLaunchResult, bool, error)
 }
 
+// ArchaeologyNativePersistenceReconciler is the explicit, verified recovery
+// seam for a scheduler persistence fault. A successful call must establish
+// that the repository is readable and that any post-claim state is safe to
+// resume. It intentionally does not prescribe a durable retry queue.
+type ArchaeologyNativePersistenceReconciler interface {
+	ReconcileArchaeologyNativePersistence(context.Context) error
+}
+
+// ErrArchaeologySchedulerPersistenceFault is deliberately generic. The
+// scheduler retains the underlying error for process-local diagnostics but
+// never exposes database or transport details as a public status value.
+var ErrArchaeologySchedulerPersistenceFault = errors.New("archaeology scheduler persistence fault")
+
+type ArchaeologySchedulerStatus struct {
+	PersistenceFault bool   `json:"persistence_fault"`
+	Error            string `json:"error,omitempty"`
+}
+
 type ArchaeologyScheduler struct {
 	service    *Service
 	repository ArchaeologyNativeRepository
@@ -66,7 +84,13 @@ type ArchaeologyScheduler struct {
 	wg         sync.WaitGroup
 	callbackMu sync.Mutex
 	callbackWG sync.WaitGroup
-	closing    bool
+	drainMu    sync.Mutex
+	stateMu    sync.RWMutex
+	// persistenceFault is process-local by design. A restart must run the
+	// existing durable reconciliation before constructing a new scheduler.
+	persistenceFault error
+	persistenceSeq   uint64
+	closing          bool
 }
 
 func newArchaeologyScheduler(parent context.Context, service *Service, repository ArchaeologyNativeRepository, launcher ArchaeologyNativeLauncher, principal string) *ArchaeologyScheduler {
@@ -76,18 +100,130 @@ func newArchaeologyScheduler(parent context.Context, service *Service, repositor
 	go s.loop()
 	return s
 }
+
+func (s *ArchaeologyScheduler) persistenceBlocked() bool {
+	if s == nil {
+		return true
+	}
+	s.stateMu.RLock()
+	blocked := s.persistenceFault != nil
+	s.stateMu.RUnlock()
+	return blocked
+}
+
+// recordPersistenceFailure latches the first post-claim repository failure.
+// The underlying error is retained only in memory for diagnostics; callers
+// observe ErrArchaeologySchedulerPersistenceFault instead.
+func (s *ArchaeologyScheduler) recordPersistenceFailure(err error) error {
+	if s == nil || err == nil {
+		return err
+	}
+	s.stateMu.Lock()
+	if s.persistenceFault == nil {
+		s.persistenceFault = err
+	}
+	s.persistenceSeq++
+	s.stateMu.Unlock()
+	return err
+}
+
+func (s *ArchaeologyScheduler) PersistenceError() error {
+	if s == nil {
+		return ErrArchaeologySchedulerPersistenceFault
+	}
+	s.stateMu.RLock()
+	faulted := s.persistenceFault != nil
+	s.stateMu.RUnlock()
+	if faulted {
+		return ErrArchaeologySchedulerPersistenceFault
+	}
+	return nil
+}
+
+// PersistenceFault is an alias-shaped status accessor for callers that want
+// to treat the latch as an error rather than inspect Status.
+func (s *ArchaeologyScheduler) PersistenceFault() error {
+	return s.PersistenceError()
+}
+
+func (s *ArchaeologyScheduler) Status() ArchaeologySchedulerStatus {
+	if s == nil {
+		return ArchaeologySchedulerStatus{PersistenceFault: true, Error: ErrArchaeologySchedulerPersistenceFault.Error()}
+	}
+	if s.PersistenceError() != nil {
+		return ArchaeologySchedulerStatus{PersistenceFault: true, Error: ErrArchaeologySchedulerPersistenceFault.Error()}
+	}
+	return ArchaeologySchedulerStatus{}
+}
+
+// ClearPersistenceFault clears the in-memory latch only after the caller's
+// verified reconciliation function succeeds. A bare reset is intentionally
+// unavailable: the scheduler must not resume claiming against an unknown
+// repository state.
+func (s *ArchaeologyScheduler) ClearPersistenceFault(ctx context.Context, verify func(context.Context) error) error {
+	if s == nil || ctx == nil || verify == nil {
+		return domain.ErrInvalid
+	}
+	s.stateMu.RLock()
+	sequence := s.persistenceSeq
+	s.stateMu.RUnlock()
+	if err := verify(ctx); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if s.persistenceSeq != sequence {
+		return ErrArchaeologySchedulerPersistenceFault
+	}
+	s.persistenceFault = nil
+	s.Wake()
+	return nil
+}
+
+// ReconcilePersistence is the repository-backed clearing seam. Repositories
+// that can perform a verified, read-only reconciliation may opt into
+// ArchaeologyNativePersistenceReconciler; absent that capability, the safe
+// result is ErrUnavailable and the latch remains set.
+func (s *ArchaeologyScheduler) ReconcilePersistence(ctx context.Context) error {
+	if s == nil || s.repository == nil {
+		return domain.ErrUnavailable
+	}
+	reconciler, ok := s.repository.(ArchaeologyNativePersistenceReconciler)
+	if !ok {
+		return domain.ErrUnavailable
+	}
+	return s.ClearPersistenceFault(ctx, reconciler.ReconcileArchaeologyNativePersistence)
+}
+
 func (s *ArchaeologyScheduler) Available(ctx context.Context) error {
 	if s == nil || s.launcher == nil {
 		return domain.ErrUnavailable
+	}
+	if s.persistenceBlocked() {
+		return ErrArchaeologySchedulerPersistenceFault
 	}
 	return s.launcher.Available(ctx)
 }
 func (s *ArchaeologyScheduler) Launch(context.Context, domain.ArchaeologySession) error {
 	return domain.ErrUnavailable
 }
+
+// Wake is the bounded availability/recovery signal. Callers may invoke it
+// from a Codex process-recovery callback or after queueing a batch; it never
+// blocks and never performs a claim itself.
 func (s *ArchaeologyScheduler) Wake() {
-	if s == nil {
+	if s == nil || s.wake == nil {
 		return
+	}
+	if s.ctx != nil {
+		select {
+		case <-s.ctx.Done():
+			return
+		default:
+		}
 	}
 	select {
 	case s.wake <- struct{}{}:
@@ -98,7 +234,9 @@ func (s *ArchaeologyScheduler) Close() {
 	if s == nil {
 		return
 	}
-	s.cancel()
+	if s.cancel != nil {
+		s.cancel()
+	}
 	s.wg.Wait()
 	s.callbackMu.Lock()
 	s.closing = true
@@ -126,18 +264,48 @@ func (s *ArchaeologyScheduler) loop() {
 	}
 }
 func (s *ArchaeologyScheduler) drain() {
-	for s.ctx.Err() == nil {
+	if s == nil {
+		return
+	}
+	s.drainMu.Lock()
+	defer s.drainMu.Unlock()
+	for s.ctx == nil || s.ctx.Err() == nil {
+		if s.persistenceBlocked() {
+			return
+		}
+		// Availability is deliberately checked for every individual claim. A
+		// recovery attempt may be in progress or exhausted even when a prior
+		// wake observed a usable launcher; queued rows must remain queued until
+		// the next explicit availability wake.
+		if err := s.Available(s.ctx); err != nil {
+			return
+		}
 		job, err := s.repository.ClaimArchaeologyNativeJob(s.ctx)
 		if err != nil {
+			// ErrConflict is the store's bounded "nothing claimable" result,
+			// including the durable uncertainty gate. Any other claim error may
+			// leave the transaction or connection state unknown and must stop the
+			// scheduler behind the same persistence fault latch as later writes.
+			if !errors.Is(err, domain.ErrConflict) {
+				s.recordPersistenceFailure(err)
+			}
 			return
 		}
 		s.launch(job)
 	}
 }
+
+func (s *ArchaeologyScheduler) failStart(ctx context.Context, jobID string, result domain.ArchaeologyLaunchResult, uncertain bool) error {
+	if s == nil || s.repository == nil {
+		return s.recordPersistenceFailure(domain.ErrUnavailable)
+	}
+	return s.recordPersistenceFailure(s.repository.FailArchaeologyNativeStart(ctx, jobID, result, uncertain))
+}
+
 func (s *ArchaeologyScheduler) launch(job domain.ArchaeologyNativeJob) {
 	session, err := s.repository.ArchaeologySession(s.ctx, s.principal)
 	if err != nil {
-		_ = s.repository.FailArchaeologyNativeStart(s.ctx, job.ID, domain.ArchaeologyLaunchResult{}, false)
+		_ = s.failStart(s.ctx, job.ID, domain.ArchaeologyLaunchResult{}, false)
 		return
 	}
 	var candidate domain.ArchaeologyCandidate
@@ -150,10 +318,12 @@ func (s *ArchaeologyScheduler) launch(job domain.ArchaeologyNativeJob) {
 		}
 	}
 	if !found {
-		_ = s.repository.FailArchaeologyNativeStart(s.ctx, job.ID, domain.ArchaeologyLaunchResult{}, false)
+		_ = s.failStart(s.ctx, job.ID, domain.ArchaeologyLaunchResult{}, false)
 		return
 	}
 	bound := make(chan struct{})
+	var boundOnce sync.Once
+	closeBound := func() { boundOnce.Do(func() { close(bound) }) }
 	var bindErr error
 	onTool := func(ctx context.Context, call ArchaeologyNativeToolCall) ArchaeologyNativeToolResponse {
 		select {
@@ -178,12 +348,15 @@ func (s *ArchaeologyScheduler) launch(job domain.ArchaeologyNativeJob) {
 				return
 			case <-bound:
 			}
+			// A prior persistence fault blocks new claims, but it must not
+			// suppress a best-effort terminal write for this already-claimed job.
+			// Attempt it and keep the fault latched if the repository still fails.
 			if bindErr == nil {
 				terminal.JobID = job.ID
 				if terminal.Status == "unavailable" {
-					_ = s.repository.LoseArchaeologyNativeTurn(s.ctx, job.ID, terminal.ThreadID, terminal.TurnID)
+					_ = s.recordPersistenceFailure(s.repository.LoseArchaeologyNativeTurn(s.ctx, job.ID, terminal.ThreadID, terminal.TurnID))
 				} else {
-					_ = s.repository.CompleteArchaeologyNativeTurn(s.ctx, terminal)
+					_ = s.recordPersistenceFailure(s.repository.CompleteArchaeologyNativeTurn(s.ctx, terminal))
 				}
 				s.Wake()
 			}
@@ -194,8 +367,8 @@ func (s *ArchaeologyScheduler) launch(job domain.ArchaeologyNativeJob) {
 		bindErr = launchErr
 		markCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = s.repository.FailArchaeologyNativeStart(markCtx, job.ID, result, result.State == "uncertain" || result.ThreadID != "")
-		close(bound)
+		_ = s.failStart(markCtx, job.ID, result, result.State == "uncertain" || result.ThreadID != "")
+		closeBound()
 		// Once an exact turn exists, any later protocol/visibility failure is
 		// post-acceptance. Persist uncertainty first, then interrupt that exact
 		// turn once. Never retry the non-idempotent launch boundary.
@@ -205,11 +378,12 @@ func (s *ArchaeologyScheduler) launch(job domain.ArchaeologyNativeJob) {
 		return
 	}
 	bindErr = s.repository.BindArchaeologyNativeIdentity(s.ctx, job.ID, result.ThreadID, result.CodexSessionID, result.TurnID)
+	bindErr = s.recordPersistenceFailure(bindErr)
 	if bindErr != nil {
-		close(bound)
+		closeBound()
 		markCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = s.repository.FailArchaeologyNativeStart(markCtx, job.ID, result, true)
+		_ = s.failStart(markCtx, job.ID, result, true)
 		// A task accepted by Codex but not durably bound must never become an
 		// invisible orphan. Persist its exact identity above, then make one
 		// best-effort interrupt of the known turn. The durable state remains
@@ -226,23 +400,24 @@ func (s *ArchaeologyScheduler) launch(job domain.ArchaeologyNativeJob) {
 	}
 	bindErr = s.launcher.FinalizeNative(s.ctx, job, candidate, result)
 	if bindErr != nil {
-		close(bound)
+		closeBound()
 		markCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = s.repository.FailArchaeologyNativeStart(markCtx, job.ID, result, true)
+		_ = s.failStart(markCtx, job.ID, result, true)
 		_ = s.launcher.InterruptNative(markCtx, domain.ArchaeologyNativeJob{ID: job.ID, ThreadID: result.ThreadID, CodexSessionID: result.CodexSessionID, TurnID: result.TurnID})
 		return
 	}
 	bindErr = s.repository.ActivateArchaeologyNativeJob(s.ctx, job.ID, result.ThreadID, result.TurnID)
+	bindErr = s.recordPersistenceFailure(bindErr)
 	if bindErr != nil {
-		close(bound)
+		closeBound()
 		markCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = s.repository.FailArchaeologyNativeStart(markCtx, job.ID, result, true)
+		_ = s.failStart(markCtx, job.ID, result, true)
 		_ = s.launcher.InterruptNative(markCtx, domain.ArchaeologyNativeJob{ID: job.ID, ThreadID: result.ThreadID, CodexSessionID: result.CodexSessionID, TurnID: result.TurnID})
 		return
 	}
-	close(bound)
+	closeBound()
 }
 func decodeStrictOne(body []byte, target any) error {
 	return decodeStrictOneLimit(body, target, 64<<10)
@@ -282,7 +457,7 @@ func (s *ArchaeologyScheduler) handleTool(ctx context.Context, job domain.Archae
 		if label == "" {
 			return ArchaeologyNativeToolResponse{}
 		}
-		if s.repository.UpdateArchaeologyNativeProgress(ctx, domain.ArchaeologyNativeProgress{JobID: job.ID, ThreadID: call.ThreadID, TurnID: call.TurnID, PhaseLabel: label, SourcesExamined: input.SourcesExamined}) != nil {
+		if s.recordPersistenceFailure(s.repository.UpdateArchaeologyNativeProgress(ctx, domain.ArchaeologyNativeProgress{JobID: job.ID, ThreadID: call.ThreadID, TurnID: call.TurnID, PhaseLabel: label, SourcesExamined: input.SourcesExamined})) != nil {
 			return ArchaeologyNativeToolResponse{}
 		}
 		return ArchaeologyNativeToolResponse{Success: true, Message: `{"accepted":true}`}
@@ -326,7 +501,7 @@ func (s *ArchaeologyScheduler) handleTool(ctx context.Context, job domain.Archae
 			}
 		}
 		digest := sha256.Sum256(call.Arguments)
-		if err = s.repository.ReportArchaeologyNativeJob(ctx, domain.ArchaeologyNativeReport{JobID: job.ID, ThreadID: call.ThreadID, TurnID: call.TurnID, Digest: digest, Outcomes: outcomes}); err != nil {
+		if err = s.recordPersistenceFailure(s.repository.ReportArchaeologyNativeJob(ctx, domain.ArchaeologyNativeReport{JobID: job.ID, ThreadID: call.ThreadID, TurnID: call.TurnID, Digest: digest, Outcomes: outcomes})); err != nil {
 			return ArchaeologyNativeToolResponse{}
 		}
 		return ArchaeologyNativeToolResponse{Success: true, Message: `{"accepted":true,"canonical_apply":false}`}
@@ -488,6 +663,35 @@ func (s *Service) CloseProjectArchaeology() {
 		s.archaeologyScheduler.Close()
 	}
 }
+
+// NativeProjectArchaeologySchedulerStatus exposes only the scheduler's safe
+// process-local status. It intentionally omits the underlying persistence
+// error text.
+func (s *Service) NativeProjectArchaeologySchedulerStatus() ArchaeologySchedulerStatus {
+	if s == nil || s.archaeologyScheduler == nil {
+		return ArchaeologySchedulerStatus{}
+	}
+	return s.archaeologyScheduler.Status()
+}
+
+// WakeNativeProjectArchaeologyScheduler forwards the bounded, nonblocking
+// availability/recovery signal without exposing the scheduler instance.
+func (s *Service) WakeNativeProjectArchaeologyScheduler() {
+	if s == nil || s.archaeologyScheduler == nil {
+		return
+	}
+	s.archaeologyScheduler.Wake()
+}
+
+// ReconcileNativeProjectArchaeologyPersistence delegates to the explicit
+// repository reconciliation seam before allowing queued work to resume.
+func (s *Service) ReconcileNativeProjectArchaeologyPersistence(ctx context.Context) error {
+	if s == nil || s.archaeologyScheduler == nil {
+		return domain.ErrUnavailable
+	}
+	return s.archaeologyScheduler.ReconcilePersistence(ctx)
+}
+
 func (s *Service) queueNativeProjectArchaeology(ctx context.Context, principal, requestID string, baseRevision int64, acknowledgeLargeBatch bool) (domain.ArchaeologySession, error) {
 	repository, ok := s.repository.(ArchaeologyNativeRepository)
 	if !ok || s.archaeologyScheduler == nil {
@@ -514,8 +718,15 @@ func (s *Service) ResolveProjectArchaeologyUncertainty(ctx context.Context, prin
 }
 
 func (s *ArchaeologyScheduler) Cancel(ctx context.Context, principal, requestID string, baseRevision int64) (domain.ArchaeologySession, error) {
+	if s == nil || s.repository == nil || s.launcher == nil {
+		return domain.ArchaeologySession{}, domain.ErrUnavailable
+	}
+	if s.persistenceBlocked() {
+		return domain.ArchaeologySession{}, ErrArchaeologySchedulerPersistenceFault
+	}
 	jobs, value, err := s.repository.CancelArchaeologyNativeBatch(ctx, principal, requestID, baseRevision)
 	if err != nil {
+		s.recordPersistenceFailure(err)
 		return value, err
 	}
 	for _, job := range jobs {
@@ -523,7 +734,7 @@ func (s *ArchaeologyScheduler) Cancel(ctx context.Context, principal, requestID 
 			continue
 		}
 		if interruptErr := s.launcher.InterruptNative(ctx, job); interruptErr != nil {
-			_ = s.repository.LoseArchaeologyNativeTurn(ctx, job.ID, job.ThreadID, job.TurnID)
+			_ = s.recordPersistenceFailure(s.repository.LoseArchaeologyNativeTurn(ctx, job.ID, job.ThreadID, job.TurnID))
 		}
 	}
 	s.Wake()
