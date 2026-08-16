@@ -362,6 +362,14 @@ func TestPhase2DisposableAcceptanceManagedRecoveryAndExhaustion(t *testing.T) {
 		return app.store.DB().QueryRowContext(ctx, `SELECT count(*),sum(state='active') FROM archaeology_native_jobs`).Scan(&jobs, &active) == nil && jobs == 1 && active == 1
 	}
 	phase2AcceptanceWait(t, time.Second, nativeJobActive, "accepted scheduler launch did not become active")
+	// Phase 3 exposes pending, leased, and blocked durable intents as
+	// persistence attention. Let the launch's bind/activate ledger writes settle
+	// before inducing Codex recovery so this assertion isolates notifier recovery
+	// rather than racing the scheduler's persistence drain.
+	phase2AcceptanceWait(t, time.Second, func() bool {
+		status, statusErr := app.store.ArchaeologyNativePersistenceStatus(ctx)
+		return statusErr == nil && status.Healthy()
+	}, "accepted scheduler launch persistence ledger did not settle")
 	assertSingleActiveAcceptanceJob()
 
 	// Hold the replacement factory in recovery long enough for the required

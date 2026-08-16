@@ -33,6 +33,8 @@ import (
 
 var zeroTime time.Time
 
+const startupFailureRecordTimeout = 2 * time.Second
+
 type SeedFunc func(context.Context, *commonsstore.Store, *presence.Registry, time.Time) error
 
 type App struct {
@@ -75,19 +77,44 @@ func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
 			_ = store.Close()
 		}
 	}()
+	recordStartupFailure := func() {
+		// Failure recording must not inherit a canceled caller, and it must not
+		// turn startup error handling into an unbounded database operation.
+		recordCtx, cancel := context.WithTimeout(context.Background(), startupFailureRecordTimeout)
+		defer cancel()
+		_ = store.RecordReconciliationStatus(recordCtx, "failed", time.Now().UTC())
+	}
 	if err := store.ReconcileArchaeology(ctx); err != nil {
-		_ = store.RecordReconciliationStatus(ctx, "failed", time.Now().UTC())
+		recordStartupFailure()
 		return nil, fmt.Errorf("reconcile project archaeology: %w", err)
 	}
-	uncertain, err := store.ArchaeologyUncertaintyCount(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("read reconciliation status: %w", err)
+	nativePersistenceErr := store.ReconcileArchaeologyNativePersistence(ctx)
+	nativePersistence, persistenceStatusErr := store.ArchaeologyNativePersistenceStatus(ctx)
+	uncertain, uncertaintyErr := store.ArchaeologyUncertaintyCount(ctx)
+	if persistenceStatusErr != nil {
+		recordStartupFailure()
+		return nil, fmt.Errorf("read native persistence status: %w", persistenceStatusErr)
+	}
+	if uncertaintyErr != nil {
+		recordStartupFailure()
+		return nil, fmt.Errorf("read reconciliation status: %w", uncertaintyErr)
+	}
+	// ReconcileArchaeologyNativePersistence returns the exact sentinel when a
+	// durable row is intentionally left for a later wake (future due time,
+	// live lease, or blocked state).  Any wrapped/unexpected error is a startup
+	// failure; an exact sentinel with a clean re-read is also inconsistent and
+	// must not be allowed to start a scheduler.
+	safeNativeBacklog := safeNativePersistenceBacklog(nativePersistenceErr, nativePersistence)
+	if nativePersistenceErr != nil && !safeNativeBacklog {
+		recordStartupFailure()
+		return nil, fmt.Errorf("reconcile native persistence: %w", nativePersistenceErr)
 	}
 	reconciliation := "healthy"
-	if uncertain > 0 {
+	if uncertain > 0 || !nativePersistence.Healthy() || safeNativeBacklog {
 		reconciliation = "attention"
 	}
 	if err := store.RecordReconciliationStatus(ctx, reconciliation, time.Now().UTC()); err != nil {
+		recordStartupFailure()
 		return nil, fmt.Errorf("record reconciliation status: %w", err)
 	}
 	var codexClient codexauth.Client = config.CodexClient
@@ -186,7 +213,9 @@ func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
 		probe.Persistence = func(probeCtx context.Context) (runtimePersistenceResult, error) {
 			value, probeErr := basePersistence(probeCtx)
 			if probeErr == nil {
-				value.PersistenceFault = service.NativeProjectArchaeologySchedulerStatus().PersistenceFault
+				schedulerStatus := service.NativeProjectArchaeologySchedulerStatus()
+				value.PersistenceFault = schedulerStatus.PersistenceFault
+				value.PersistenceAttention = value.PersistenceAttention || schedulerStatus.PersistenceAttention
 			}
 			return value, probeErr
 		}
@@ -269,6 +298,13 @@ func New(ctx context.Context, config Config, seed SeedFunc) (*App, error) {
 	failed = false
 	runtime.Start()
 	return &App{config: config, handler: handler, store: store, presence: live, codex: codexClient, service: service, runtime: runtime}, nil
+}
+
+// safeNativePersistenceBacklog intentionally requires the exact sentinel.
+// Store maps database-busy errors to a wrapped ErrUnavailable; those are
+// unexpected startup failures, not evidence of a safely deferred ledger row.
+func safeNativePersistenceBacklog(err error, status domain.ArchaeologyNativePersistenceStatus) bool {
+	return err == domain.ErrUnavailable && !status.Healthy()
 }
 
 func (a *App) Handler() http.Handler { return a.handler }

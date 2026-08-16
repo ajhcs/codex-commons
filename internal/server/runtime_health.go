@@ -41,10 +41,15 @@ type runtimeHealthProbe struct {
 }
 
 type runtimePersistenceResult struct {
-	Healthy          bool
-	Reconciliation   string
-	Uncertain        int
-	PersistenceFault bool
+	Healthy        bool
+	Reconciliation string
+	Uncertain      int
+	// PersistenceAttention is a readable durable-ledger warning. It is
+	// deliberately separate from PersistenceFault: pending, leased, and
+	// blocked rows are safe to report as attention/degraded, while a probe or
+	// process fault remains failed.
+	PersistenceAttention bool
+	PersistenceFault     bool
 }
 
 type runtimeSupervisorResult struct {
@@ -502,10 +507,15 @@ func (m *runtimeHealthMonitor) probe(ctx context.Context, previous runtimehealth
 			persistence.Status = runtimehealth.HealthFailed
 			reconciliation.Status = runtimehealth.HealthFailed
 		} else {
-			if value.Healthy && !value.PersistenceFault {
-				persistence.Status = runtimehealth.HealthHealthy
-			} else {
+			switch {
+			case value.PersistenceFault:
 				persistence.Status = runtimehealth.HealthFailed
+			case value.PersistenceAttention:
+				persistence.Status = runtimehealth.HealthAttention
+			case value.Healthy:
+				persistence.Status = runtimehealth.HealthHealthy
+			default:
+				persistence.Status = runtimehealth.HealthUnknown
 			}
 			switch value.Reconciliation {
 			case "healthy":
@@ -696,18 +706,47 @@ func runtimeHealthProbeForStore(store *commonsstore.Store) runtimeHealthProbe {
 	}
 	probe.DB = func(ctx context.Context) error { return store.DB().PingContext(ctx) }
 	probe.Persistence = func(ctx context.Context) (runtimePersistenceResult, error) {
-		var reconciliation string
-		if err := store.DB().QueryRowContext(ctx, `SELECT reconciliation_status FROM installation_status WHERE id=1`).Scan(&reconciliation); err != nil {
+		// Keep all durable health facts in one SQLite statement. Separate
+		// QueryRow calls could observe a writer between reconciliation, job, and
+		// persistence-ledger reads and briefly publish a mixed green snapshot.
+		var (
+			reconciliation                      string
+			uncertain, pending, leased, blocked int
+		)
+		if err := store.DB().QueryRowContext(ctx, `
+SELECT
+  (SELECT reconciliation_status FROM installation_status WHERE id=1),
+  (SELECT count(*) FROM archaeology_native_jobs WHERE state='uncertain'),
+  (SELECT count(*) FROM archaeology_native_persistence_intents WHERE state='pending'),
+  (SELECT count(*) FROM archaeology_native_persistence_intents WHERE state='leased'),
+  (SELECT count(*) FROM archaeology_native_persistence_intents WHERE state='blocked')`).Scan(
+			&reconciliation, &uncertain, &pending, &leased, &blocked,
+		); err != nil {
 			return runtimePersistenceResult{}, err
 		}
-		var uncertain int
-		if err := store.DB().QueryRowContext(ctx, `SELECT count(*) FROM archaeology_native_jobs WHERE state='uncertain'`).Scan(&uncertain); err != nil {
-			return runtimePersistenceResult{}, err
+		persistenceAttention := pending > 0 || leased > 0 || blocked > 0
+		persistenceHealthy := !persistenceAttention
+		// Startup intentionally persists attention while durable work is
+		// deferred. Once that exact condition has cleared, derive a healthy
+		// runtime reconciliation observation without turning the periodic probe
+		// into an unbounded writer. Never rewrite a failed marker here.
+		if reconciliation == "attention" && uncertain == 0 && persistenceHealthy {
+			reconciliation = "healthy"
 		}
 		if reconciliation == "" || reconciliation == "unknown" {
-			return runtimePersistenceResult{Healthy: false, Reconciliation: reconciliation, Uncertain: uncertain}, nil
+			return runtimePersistenceResult{
+				Healthy:              false,
+				Reconciliation:       reconciliation,
+				Uncertain:            uncertain,
+				PersistenceAttention: persistenceAttention,
+			}, nil
 		}
-		return runtimePersistenceResult{Healthy: true, Reconciliation: reconciliation, Uncertain: uncertain}, nil
+		return runtimePersistenceResult{
+			Healthy:              persistenceHealthy,
+			Reconciliation:       reconciliation,
+			Uncertain:            uncertain,
+			PersistenceAttention: persistenceAttention,
+		}, nil
 	}
 	return probe
 }
