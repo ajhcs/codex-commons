@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"codex-commons/internal/domain"
 )
@@ -73,14 +75,45 @@ func sameSelectedIDs(left, right []string) bool {
 	return true
 }
 
-func (s *Store) ReplayArchaeologySelectedImports(ctx context.Context, query domain.ArchaeologySelectedApplyReplayQuery) (domain.ArchaeologySelectedApplyReceipt, bool, error) {
+// The boundary hook is test-only. Its setup/read path is synchronized so the
+// focused tests remain race-safe; tests that install it are intentionally
+// logically sequential and restore it after all Apply callers have returned.
+var archaeologySelectedApplyTestBoundary struct {
+	mu sync.RWMutex
+	fn func(string)
+}
+
+func setArchaeologySelectedApplyTestBoundary(fn func(string)) func() {
+	archaeologySelectedApplyTestBoundary.mu.Lock()
+	previous := archaeologySelectedApplyTestBoundary.fn
+	archaeologySelectedApplyTestBoundary.fn = fn
+	archaeologySelectedApplyTestBoundary.mu.Unlock()
+	return func() {
+		archaeologySelectedApplyTestBoundary.mu.Lock()
+		archaeologySelectedApplyTestBoundary.fn = previous
+		archaeologySelectedApplyTestBoundary.mu.Unlock()
+	}
+}
+
+func invokeArchaeologySelectedApplyTestBoundary(stage string) {
+	archaeologySelectedApplyTestBoundary.mu.RLock()
+	fn := archaeologySelectedApplyTestBoundary.fn
+	archaeologySelectedApplyTestBoundary.mu.RUnlock()
+	// Never hold the hook mutex while invoking a callback: tests deliberately
+	// block here to release concurrent callers deterministically.
+	if fn != nil {
+		fn(stage)
+	}
+}
+
+func readSelectedApplyReplay(ctx context.Context, q historicalQuerier, query domain.ArchaeologySelectedApplyReplayQuery) (domain.ArchaeologySelectedApplyReceipt, bool, error) {
 	ids, err := canonicalSelectedOutcomeIDs(query.OutcomeIDs)
 	if err != nil || !boundedCoreText(query.BatchID, 120, true) || !boundedCoreText(query.Principal, 200, true) || !boundedCoreText(query.RequestID, 200, true) {
 		return domain.ArchaeologySelectedApplyReceipt{}, false, domain.ErrInvalid
 	}
-	var auditID, batchID, selection, manifest, idsJSON, resultJSON string
-	err = s.db.QueryRowContext(ctx, `SELECT id,batch_id,selection_digest,manifest_digest,outcome_ids_json,result_json
-FROM archaeology_selected_imports WHERE principal=? AND request_key=?`, query.Principal, query.RequestID).Scan(&auditID, &batchID, &selection, &manifest, &idsJSON, &resultJSON)
+	var storedPrincipal, storedRequest, auditID, batchID, selection, manifest, idsJSON, resultJSON string
+	err = q.QueryRowContext(ctx, `SELECT principal,request_key,id,batch_id,selection_digest,manifest_digest,outcome_ids_json,result_json
+FROM archaeology_selected_imports WHERE principal=? AND request_key=?`, query.Principal, query.RequestID).Scan(&storedPrincipal, &storedRequest, &auditID, &batchID, &selection, &manifest, &idsJSON, &resultJSON)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.ArchaeologySelectedApplyReceipt{}, false, nil
 	}
@@ -92,12 +125,59 @@ FROM archaeology_selected_imports WHERE principal=? AND request_key=?`, query.Pr
 	if json.Unmarshal([]byte(idsJSON), &storedIDs) != nil || json.Unmarshal([]byte(resultJSON), &receipt) != nil {
 		return domain.ArchaeologySelectedApplyReceipt{}, false, domain.ErrConflict
 	}
-	if batchID != query.BatchID || selection != query.SelectionDigest || manifest != query.ManifestDigest || !sameSelectedIDs(storedIDs, ids) ||
-		receipt.AuditID != auditID || receipt.BatchID != batchID || receipt.SelectionDigest != selection || receipt.ManifestDigest != manifest ||
+	if storedPrincipal != query.Principal || storedRequest != query.RequestID || batchID != query.BatchID || selection != query.SelectionDigest || manifest != query.ManifestDigest || !sameSelectedIDs(storedIDs, ids) ||
+		receipt.AuditID == "" || receipt.AuditID != auditID || receipt.BatchID != batchID || receipt.SelectionDigest != selection || receipt.ManifestDigest != manifest ||
 		!sameSelectedIDs(receipt.OutcomeIDs, storedIDs) || len(receipt.Imports) != len(storedIDs) {
 		return domain.ArchaeologySelectedApplyReceipt{}, false, domain.ErrConflict
 	}
 	return receipt, true, nil
+}
+
+func (s *Store) ReplayArchaeologySelectedImports(ctx context.Context, query domain.ArchaeologySelectedApplyReplayQuery) (domain.ArchaeologySelectedApplyReceipt, bool, error) {
+	// Keep the immutable audit tuple and its current eligibility in one
+	// read-only SQLite snapshot; replay itself performs no writes.
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return domain.ArchaeologySelectedApplyReceipt{}, false, mapErr(err)
+	}
+	defer tx.Rollback()
+	receipt, found, err := readSelectedApplyReplay(ctx, tx, query)
+	if err != nil {
+		return receipt, false, mapErr(err)
+	}
+	if !found {
+		if err = tx.Commit(); err != nil {
+			return domain.ArchaeologySelectedApplyReceipt{}, false, mapErr(err)
+		}
+		return receipt, false, nil
+	}
+	// The receipt is immutable, but replay is still a selected mutation fast
+	// path for callers that will immediately use it as proof of applicability.
+	// Recheck the store-owned predicate so a stale batch/job/report cannot be
+	// replayed after the original transaction committed.
+	if _, err = readArchaeologyEligibleSelectedOutcomes(ctx, tx, query.Principal, query.BatchID, query.OutcomeIDs); err != nil {
+		return domain.ArchaeologySelectedApplyReceipt{}, false, mapErr(err)
+	}
+	if err = tx.Commit(); err != nil {
+		return domain.ArchaeologySelectedApplyReceipt{}, false, mapErr(err)
+	}
+	return receipt, true, nil
+}
+
+func (s *Store) recoverSelectedApplyReceipt(query domain.ArchaeologySelectedApplyReplayQuery, original error) (domain.ArchaeologySelectedApplyReceipt, error) {
+	// The caller's context may have been canceled by an uncertain commit or
+	// insert. Recovery is a bounded, independent read of the immutable receipt
+	// so cancellation does not turn a committed Apply into an ambiguous error.
+	recoveryCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	receipt, found, err := readSelectedApplyReplay(recoveryCtx, s.db, query)
+	if err == nil && found {
+		return receipt, nil
+	}
+	if errors.Is(err, domain.ErrConflict) {
+		return domain.ArchaeologySelectedApplyReceipt{}, err
+	}
+	return domain.ArchaeologySelectedApplyReceipt{}, original
 }
 func selectedManifestDigest(batchID, selection string, before []int64, receipts []domain.HistoricalImportReceipt) string {
 	type task struct{ Key, TaskID, Disposition string }
@@ -217,29 +297,44 @@ func (s *Store) ApplyArchaeologySelectedImports(ctx context.Context, command dom
 	if err = validateSelectedImportSources(command.Imports); err != nil {
 		return domain.ArchaeologySelectedApplyReceipt{}, err
 	}
-	prior, found, err := s.ReplayArchaeologySelectedImports(ctx, domain.ArchaeologySelectedApplyReplayQuery{BatchID: command.BatchID, Principal: command.Principal, RequestID: command.RequestID, SelectionDigest: command.SelectionDigest, ManifestDigest: command.ManifestDigest, OutcomeIDs: ids})
-	if err != nil || found {
+	replayQuery := domain.ArchaeologySelectedApplyReplayQuery{BatchID: command.BatchID, Principal: command.Principal, RequestID: command.RequestID, SelectionDigest: command.SelectionDigest, ManifestDigest: command.ManifestDigest, OutcomeIDs: ids}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.ArchaeologySelectedApplyReceipt{}, mapErr(err)
+	}
+	defer tx.Rollback()
+	// BeginTx intentionally uses SQLite's default DEFERRED transaction. The
+	// pre-reserve hook is test-only; production performs no work or read in this
+	// gap. This no-op UPDATE is therefore the first SQL and acquires RESERVED
+	// before replay, eligibility, or any canonical-state read, so concurrent
+	// Apply calls serialize at the writer boundary.
+	invokeArchaeologySelectedApplyTestBoundary("before_reserve")
+	if _, err = tx.ExecContext(ctx, `UPDATE installation_status SET updated_at=updated_at WHERE id=1`); err != nil {
+		return domain.ArchaeologySelectedApplyReceipt{}, mapErr(err)
+	}
+	prior, found, err := readSelectedApplyReplay(ctx, tx, replayQuery)
+	if err != nil {
 		return prior, err
 	}
-	proposals := map[string]string{}
-	projects := map[string]string{}
-	marks, args := selectedOutcomeQuery(ids)
-	queryArgs := []any{command.BatchID, command.Principal}
-	queryArgs = append(queryArgs, args...)
-	rows, err := s.db.QueryContext(ctx, `SELECT o.id,o.project_id,o.proposal_json FROM archaeology_native_outcomes o JOIN archaeology_native_jobs j ON j.id=o.job_id JOIN archaeology_native_batches b ON b.id=j.batch_id JOIN archaeology_sessions s ON s.id=b.session_id WHERE b.id=? AND s.principal=? AND o.id IN (`+marks+`)`, queryArgs...)
+	if found {
+		// The immutable request-key receipt is authoritative for an exact
+		// replay, but native eligibility is still revalidated so a replay
+		// cannot proceed against a changed batch/job/report state. Review
+		// consumption is intentionally not rechecked: this receipt already
+		// represents the successful consumption committed by the first call.
+		if _, err = readArchaeologyEligibleSelectedOutcomes(ctx, tx, command.Principal, command.BatchID, ids); err != nil {
+			return domain.ArchaeologySelectedApplyReceipt{}, err
+		}
+		return prior, nil
+	}
+	selected, err := readArchaeologyEligibleSelectedOutcomes(ctx, tx, command.Principal, command.BatchID, ids)
 	if err != nil {
 		return domain.ArchaeologySelectedApplyReceipt{}, err
 	}
-	for rows.Next() {
-		var id, project, proposal string
-		if err = rows.Scan(&id, &project, &proposal); err != nil {
-			rows.Close()
-			return domain.ArchaeologySelectedApplyReceipt{}, err
-		}
-		proposals[id], projects[id] = proposal, project
-	}
-	if err = rows.Close(); err != nil {
-		return domain.ArchaeologySelectedApplyReceipt{}, err
+	proposals := map[string]string{}
+	projects := map[string]string{}
+	for _, outcome := range selected {
+		proposals[outcome.ID], projects[outcome.ID] = outcome.ProposalJSON, outcome.ProjectID
 	}
 	for _, id := range ids {
 		if proposals[id] == "" {
@@ -270,12 +365,6 @@ func (s *Store) ApplyArchaeologySelectedImports(ctx context.Context, command dom
 		}
 		ordered = append(ordered, item)
 	}
-	now := s.now().UTC()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return domain.ArchaeologySelectedApplyReceipt{}, err
-	}
-	defer tx.Rollback()
 	simulation, err := s.simulateSelectedImports(ctx, tx, command.BatchID, selection, command.RequestID, ordered)
 	if err != nil {
 		return domain.ArchaeologySelectedApplyReceipt{}, err
@@ -284,7 +373,8 @@ func (s *Store) ApplyArchaeologySelectedImports(ctx context.Context, command dom
 	if manifest != command.ManifestDigest {
 		return domain.ArchaeologySelectedApplyReceipt{}, domain.ErrConflict
 	}
-	if err := consumeSelectedReview(ctx, tx, command, ids, now); err != nil {
+	reviewNow := s.now().UTC()
+	if err := consumeSelectedReview(ctx, tx, command, ids, reviewNow); err != nil {
 		return domain.ArchaeologySelectedApplyReceipt{}, err
 	}
 	receipt := domain.ArchaeologySelectedApplyReceipt{AuditID: deterministicHistoricalID("ASI-", command.BatchID, selection), BatchID: command.BatchID, SelectionDigest: selection, ManifestDigest: manifest, OutcomeIDs: ids}
@@ -316,11 +406,15 @@ func (s *Store) ApplyArchaeologySelectedImports(ctx context.Context, command dom
 	}
 	result, _ := json.Marshal(receipt)
 	idsJSON, _ := json.Marshal(ids)
-	if _, err = tx.ExecContext(ctx, `INSERT INTO archaeology_selected_imports(id,batch_id,principal,request_key,selection_digest,manifest_digest,outcome_ids_json,result_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)`, receipt.AuditID, command.BatchID, command.Principal, command.RequestID, selection, manifest, string(idsJSON), string(result), stamp(now)); err != nil {
-		return domain.ArchaeologySelectedApplyReceipt{}, mapErr(err)
+	if _, err = tx.ExecContext(ctx, `INSERT INTO archaeology_selected_imports(id,batch_id,principal,request_key,selection_digest,manifest_digest,outcome_ids_json,result_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)`, receipt.AuditID, command.BatchID, command.Principal, command.RequestID, selection, manifest, string(idsJSON), string(result), stamp(reviewNow)); err != nil {
+		mapped := mapErr(err)
+		_ = tx.Rollback()
+		return s.recoverSelectedApplyReceipt(replayQuery, mapped)
 	}
 	if err = tx.Commit(); err != nil {
-		return domain.ArchaeologySelectedApplyReceipt{}, mapErr(err)
+		mapped := mapErr(err)
+		_ = tx.Rollback()
+		return s.recoverSelectedApplyReceipt(replayQuery, mapped)
 	}
 	return receipt, nil
 }
