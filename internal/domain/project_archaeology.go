@@ -170,6 +170,81 @@ type ArchaeologyNativeTerminal struct {
 	DurationMS                      *int64
 }
 
+// ArchaeologyNativePersistenceOperation identifies a repository mutation that
+// may be retried after a process crash.  External Codex calls deliberately do
+// not have persistence-intent values: their result is represented only by the
+// repository write that records it.
+type ArchaeologyNativePersistenceOperation string
+
+const (
+	ArchaeologyNativePersistenceFailStart    ArchaeologyNativePersistenceOperation = "fail_start"
+	ArchaeologyNativePersistenceBindIdentity ArchaeologyNativePersistenceOperation = "bind_identity"
+	ArchaeologyNativePersistenceActivate     ArchaeologyNativePersistenceOperation = "activate"
+	ArchaeologyNativePersistenceLoseTurn     ArchaeologyNativePersistenceOperation = "lose_turn"
+	ArchaeologyNativePersistenceCompleteTurn ArchaeologyNativePersistenceOperation = "complete_turn"
+)
+
+// ArchaeologyNativePersistenceIntent is the typed input to the durable
+// repository-write ledger.  Only the fields relevant to Operation are
+// serialized by the Store; keeping the union here makes callers explicit
+// without exposing a generic JSON or map payload.
+type ArchaeologyNativePersistenceIntent struct {
+	JobID string
+
+	Operation ArchaeologyNativePersistenceOperation
+
+	// FailStart uses Launch and Uncertain.
+	Launch    ArchaeologyLaunchResult
+	Uncertain bool
+
+	// BindIdentity, Activate, and LoseTurn use the identity fields.
+	ThreadID       string
+	CodexSessionID string
+	TurnID         string
+
+	// CompleteTurn uses Status and DurationMS.
+	Status     string
+	DurationMS *int64
+}
+
+type ArchaeologyNativePersistenceIntentRecord struct {
+	ID             string
+	JobID          string
+	Operation      ArchaeologyNativePersistenceOperation
+	PayloadDigest  [32]byte
+	State          string
+	Attempts       int
+	NextAttemptAt  *time.Time
+	LeaseOwner     string
+	LeaseExpiresAt *time.Time
+	LastErrorCode  string
+	AppliedAt      *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type ArchaeologyNativePersistenceStatus struct {
+	Pending       int
+	Leased        int
+	Blocked       int
+	Applied       int
+	Superseded    int
+	NextAttemptAt *time.Time
+}
+
+func (s ArchaeologyNativePersistenceStatus) Healthy() bool {
+	return s.Pending == 0 && s.Leased == 0 && s.Blocked == 0
+}
+
+type ArchaeologyNativePersistenceRetryReport struct {
+	Leased     int
+	Processed  int
+	Applied    int
+	Superseded int
+	Retried    int
+	Blocked    int
+}
+
 type ArchaeologyHandoff struct {
 	ID, State, ClaimedBy, Failure, PackJSON string
 	CreatedAt, UpdatedAt, ClaimedAt         time.Time
