@@ -154,9 +154,9 @@ func TestSelectedArchaeologyApplyHTTPReplaysExactAuditAfterReopen(t *testing.T) 
 	stamp := now.Format(time.RFC3339Nano)
 	_, err = repository.DB().ExecContext(ctx, `
 INSERT INTO archaeology_sessions(id,principal,state,discovery_state,created_at,updated_at) VALUES('replay-session','human:local-admin','completed','ready',?,?);
-INSERT INTO archaeology_native_batches(id,session_id,request_key,request_digest,mode,state,max_concurrency,created_at,updated_at) VALUES('replay-batch','replay-session','replay-run',zeroblob(32),'app_server_dynamic_tools','completed',2,?,?);
+INSERT INTO archaeology_native_batches(id,session_id,request_key,request_digest,mode,state,max_concurrency,created_at,updated_at,policy_attested) VALUES('replay-batch','replay-session','replay-run',zeroblob(32),'app_server_dynamic_tools','completed',2,?,?,1);
 INSERT INTO archaeology_candidates(session_id,id,name,path_label,has_git,has_docs,has_codex_history,duration_min_seconds,duration_max_seconds,relative_cost,privacy_note,canonical_project_id) VALUES('replay-session','replay-candidate','Replay','Replay',1,1,0,1,2,'low','','replay-project');
-INSERT INTO archaeology_native_jobs(id,batch_id,session_id,candidate_id,project_id,project_name,mode,state,created_at,updated_at) VALUES('replay-job','replay-batch','replay-session','replay-candidate','replay-project','Replay','app_server_dynamic_tools','completed',?,?);`, stamp, stamp, stamp, stamp, stamp, stamp)
+INSERT INTO archaeology_native_jobs(id,batch_id,session_id,candidate_id,project_id,project_name,mode,state,report_digest,created_at,updated_at) VALUES('replay-job','replay-batch','replay-session','replay-candidate','replay-project','Replay','app_server_dynamic_tools','completed',zeroblob(32),?,?);`, stamp, stamp, stamp, stamp, stamp, stamp)
 	if err == nil {
 		_, err = repository.DB().ExecContext(ctx, `INSERT INTO archaeology_native_outcomes(id,job_id,project_id,title,summary,source_count,proposal_json,created_at) VALUES('replay-outcome','replay-job','replay-project','Replay outcome','Exact source-backed proposal',1,?,?)`, string(proposalJSON), stamp)
 	}

@@ -179,23 +179,12 @@ func (s *Store) PreviewArchaeologySelectedImports(ctx context.Context, command d
 	}
 	defer tx.Rollback()
 	proposals, projects := map[string]string{}, map[string]string{}
-	marks, args := selectedOutcomeQuery(ids)
-	queryArgs := []any{command.BatchID, command.Principal}
-	queryArgs = append(queryArgs, args...)
-	rows, err := tx.QueryContext(ctx, `SELECT o.id,o.project_id,o.proposal_json FROM archaeology_native_outcomes o JOIN archaeology_native_jobs j ON j.id=o.job_id JOIN archaeology_native_batches b ON b.id=j.batch_id JOIN archaeology_sessions s ON s.id=b.session_id WHERE b.id=? AND s.principal=? AND o.id IN (`+marks+`)`, queryArgs...)
+	selected, err := readArchaeologyEligibleSelectedOutcomes(ctx, tx, command.Principal, command.BatchID, ids)
 	if err != nil {
 		return domain.ArchaeologySelectedPreviewReceipt{}, err
 	}
-	for rows.Next() {
-		var id, project, proposal string
-		if err = rows.Scan(&id, &project, &proposal); err != nil {
-			rows.Close()
-			return domain.ArchaeologySelectedPreviewReceipt{}, err
-		}
-		proposals[id], projects[id] = proposal, project
-	}
-	if err = rows.Close(); err != nil {
-		return domain.ArchaeologySelectedPreviewReceipt{}, err
+	for _, outcome := range selected {
+		proposals[outcome.ID], projects[outcome.ID] = outcome.ProposalJSON, outcome.ProjectID
 	}
 	for index, id := range ids {
 		var wire struct {

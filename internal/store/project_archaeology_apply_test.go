@@ -27,11 +27,11 @@ func TestSelectedApplyRealClockReceiptStable(t *testing.T) {
 	at := stamp(testNow)
 	_, err := s.DB().ExecContext(ctx, `
 INSERT INTO archaeology_sessions(id,principal,state,discovery_state,created_at,updated_at) VALUES('sel-session','human:local-admin','completed','ready',?,?);
-INSERT INTO archaeology_native_batches(id,session_id,request_key,request_digest,mode,state,max_concurrency,created_at,updated_at) VALUES('sel-batch','sel-session','request',zeroblob(32),'app_server_dynamic_tools','completed',2,?,?);
+INSERT INTO archaeology_native_batches(id,session_id,request_key,request_digest,mode,state,max_concurrency,created_at,updated_at,policy_attested) VALUES('sel-batch','sel-session','request',zeroblob(32),'app_server_dynamic_tools','completed',2,?,?,1);
 INSERT INTO archaeology_candidates(session_id,id,name,path_label,has_git,has_docs,has_codex_history,duration_min_seconds,duration_max_seconds,relative_cost,privacy_note,canonical_project_id) VALUES
 ('sel-session','ca','Alpha','alpha',1,0,0,1,2,'low','','alpha'),('sel-session','cb','Beta','beta',1,0,0,1,2,'low','','beta');
-INSERT INTO archaeology_native_jobs(id,batch_id,session_id,candidate_id,project_id,mode,state,created_at,updated_at) VALUES
-('ja','sel-batch','sel-session','ca','alpha','app_server_dynamic_tools','completed',?,?),('jb','sel-batch','sel-session','cb','beta','app_server_dynamic_tools','completed',?,?);
+INSERT INTO archaeology_native_jobs(id,batch_id,session_id,candidate_id,project_id,mode,state,report_digest,created_at,updated_at) VALUES
+('ja','sel-batch','sel-session','ca','alpha','app_server_dynamic_tools','completed',zeroblob(32),?,?),('jb','sel-batch','sel-session','cb','beta','app_server_dynamic_tools','completed',zeroblob(32),?,?);
 INSERT INTO archaeology_native_outcomes(id,job_id,project_id,title,summary,source_count,proposal_json,created_at) VALUES
 ('oa','ja','alpha','Alpha','',1,'{"batch_id":"ha"}',?),('ob','jb','beta','Beta','',1,'{"batch_id":"hb"}',?);`, at, at, at, at, at, at, at, at, at, at)
 	must(t, err)
@@ -115,9 +115,9 @@ func selectedApplyFailureFixture(t *testing.T) (*Store, domain.ArchaeologySelect
 	at := stamp(testNow)
 	_, err := s.DB().Exec(`
 INSERT INTO archaeology_sessions(id,principal,state,discovery_state,created_at,updated_at) VALUES('fail-s','human:local-admin','completed','ready',?,?);
-INSERT INTO archaeology_native_batches(id,session_id,request_key,request_digest,mode,state,max_concurrency,created_at,updated_at) VALUES('fail-b','fail-s','r',zeroblob(32),'app_server_dynamic_tools','completed',2,?,?);
+INSERT INTO archaeology_native_batches(id,session_id,request_key,request_digest,mode,state,max_concurrency,created_at,updated_at,policy_attested) VALUES('fail-b','fail-s','r',zeroblob(32),'app_server_dynamic_tools','completed',2,?,?,1);
 INSERT INTO archaeology_candidates(session_id,id,name,path_label,has_git,has_docs,has_codex_history,duration_min_seconds,duration_max_seconds,relative_cost,privacy_note,canonical_project_id) VALUES('fail-s','ca','Alpha','alpha',1,0,0,1,2,'low','','alpha'),('fail-s','cb','Beta','beta',1,0,0,1,2,'low','','beta');
-INSERT INTO archaeology_native_jobs(id,batch_id,session_id,candidate_id,project_id,mode,state,created_at,updated_at) VALUES('fail-ja','fail-b','fail-s','ca','alpha','app_server_dynamic_tools','completed',?,?),('fail-jb','fail-b','fail-s','cb','beta','app_server_dynamic_tools','completed',?,?);
+INSERT INTO archaeology_native_jobs(id,batch_id,session_id,candidate_id,project_id,mode,state,report_digest,created_at,updated_at) VALUES('fail-ja','fail-b','fail-s','ca','alpha','app_server_dynamic_tools','completed',zeroblob(32),?,?),('fail-jb','fail-b','fail-s','cb','beta','app_server_dynamic_tools','completed',zeroblob(32),?,?);
 INSERT INTO archaeology_native_outcomes(id,job_id,project_id,title,summary,source_count,proposal_json,created_at) VALUES('fail-oa','fail-ja','alpha','Alpha','',1,'{"batch_id":"fail-ha"}',?),('fail-ob','fail-jb','beta','Beta','',1,'{"batch_id":"fail-hb"}',?);`, at, at, at, at, at, at, at, at, at, at)
 	must(t, err)
 	imports := []domain.HistoricalImportCommand{historicalCommand("alpha", "fail-ha", "fail-a"), historicalCommand("beta", "fail-hb", "fail-b")}
@@ -201,9 +201,9 @@ func TestSelectedApplySameProjectUsesOrderedReviewedDispositions(t *testing.T) {
 	at := stamp(testNow)
 	_, err := s.DB().ExecContext(ctx, `
 INSERT INTO archaeology_sessions(id,principal,state,discovery_state,created_at,updated_at) VALUES('same-s','human:local-admin','completed','ready',?,?);
-INSERT INTO archaeology_native_batches(id,session_id,request_key,request_digest,mode,state,max_concurrency,created_at,updated_at) VALUES('same-b','same-s','r',zeroblob(32),'app_server_dynamic_tools','completed',1,?,?);
+INSERT INTO archaeology_native_batches(id,session_id,request_key,request_digest,mode,state,max_concurrency,created_at,updated_at,policy_attested) VALUES('same-b','same-s','r',zeroblob(32),'app_server_dynamic_tools','completed',1,?,?,1);
 INSERT INTO archaeology_candidates(session_id,id,name,path_label,has_git,has_docs,has_codex_history,duration_min_seconds,duration_max_seconds,relative_cost,privacy_note,canonical_project_id) VALUES('same-s','ca','Alpha','alpha',1,0,0,1,2,'low','','alpha');
-INSERT INTO archaeology_native_jobs(id,batch_id,session_id,candidate_id,project_id,mode,state,created_at,updated_at) VALUES('same-j','same-b','same-s','ca','alpha','app_server_dynamic_tools','completed',?,?);
+INSERT INTO archaeology_native_jobs(id,batch_id,session_id,candidate_id,project_id,mode,state,report_digest,created_at,updated_at) VALUES('same-j','same-b','same-s','ca','alpha','app_server_dynamic_tools','completed',zeroblob(32),?,?);
 INSERT INTO archaeology_native_outcomes(id,job_id,project_id,title,summary,source_count,proposal_json,created_at) VALUES('same-o1','same-j','alpha','One','',1,'{"batch_id":"same-h1"}',?),('same-o2','same-j','alpha','Two','',1,'{"batch_id":"same-h2"}',?);`, at, at, at, at, at, at, at, at)
 	must(t, err)
 	one, two := historicalCommand("alpha", "same-h1", "one"), historicalCommand("alpha", "same-h2", "two")

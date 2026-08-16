@@ -195,41 +195,10 @@ func (s *Store) ArchaeologyBatchOutcomes(ctx context.Context, principal, batchID
 }
 
 func (s *Store) ArchaeologySelectedOutcomes(ctx context.Context, principal, batchID string, ids []string) ([]domain.ArchaeologyOutcome, error) {
-	if !boundedCoreText(principal, 200, true) || !boundedCoreText(batchID, 120, true) || len(ids) < 1 || len(ids) > domain.ArchaeologyNativeMaxProjects*2 {
+	if !boundedCoreText(principal, 200, true) || !boundedCoreText(batchID, 120, true) {
 		return nil, domain.ErrInvalid
 	}
-	marks := make([]string, len(ids))
-	args := make([]any, 0, len(ids)+2)
-	args = append(args, principal, batchID)
-	seen := map[string]bool{}
-	for i, id := range ids {
-		if !boundedCoreText(id, 120, true) || seen[id] {
-			return nil, domain.ErrInvalid
-		}
-		seen[id] = true
-		marks[i] = "?"
-		args = append(args, id)
-	}
-	rows, err := s.db.QueryContext(ctx, `SELECT o.id,o.project_id,o.title,o.summary,o.source_count,o.proposal_json FROM archaeology_native_outcomes o JOIN archaeology_native_jobs j ON j.id=o.job_id JOIN archaeology_native_batches b ON b.id=j.batch_id JOIN archaeology_sessions s ON s.id=b.session_id WHERE s.principal=? AND b.id=? AND o.id IN (`+strings.Join(marks, ",")+`) ORDER BY o.id`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]domain.ArchaeologyOutcome, 0, len(ids))
-	for rows.Next() {
-		var v domain.ArchaeologyOutcome
-		if err = rows.Scan(&v.ID, &v.ProjectID, &v.Title, &v.Summary, &v.SourceCount, &v.ProposalJSON); err != nil {
-			return nil, err
-		}
-		out = append(out, v)
-	}
-	if err = rows.Err(); err != nil {
-		return nil, err
-	}
-	if len(out) != len(ids) {
-		return nil, domain.ErrNotFound
-	}
-	return out, nil
+	return readArchaeologyEligibleSelectedOutcomes(ctx, s.db, principal, batchID, ids)
 }
 
 func (s *Store) loadArchaeologyOutcomesForBatch(ctx context.Context, batchID string) ([]domain.ArchaeologyOutcome, error) {
