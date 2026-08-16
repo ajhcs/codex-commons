@@ -155,6 +155,106 @@ func TestArchaeologyNativePersistenceAllRepositoryOperationsAndReplay(t *testing
 	_ = now
 }
 
+func TestArchaeologyNativePersistenceLoseTurnSurvivesStartupReconcile(t *testing.T) {
+	ctx := context.Background()
+	_, clock := persistenceTestClock()
+	s, _ := nativeTestSession(t, 1, 1)
+	s.now = clock
+	job, err := s.ClaimArchaeologyNativeJob(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.BindArchaeologyNativeJob(ctx, job.ID, "lose-thread", "lose-session", "lose-turn"); err != nil {
+		t.Fatal(err)
+	}
+	intent := domain.ArchaeologyNativePersistenceIntent{
+		JobID: job.ID, Operation: domain.ArchaeologyNativePersistenceLoseTurn,
+		ThreadID: "lose-thread", TurnID: "lose-turn",
+	}
+	record, err := s.EnsureArchaeologyNativePersistenceIntent(ctx, intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Startup reconciliation runs before the persistence ledger. It must not
+	// discard the stronger exact unavailable evidence merely because the generic
+	// restart pass has latched this active job as uncertain.
+	if err = s.ReconcileArchaeology(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var state, errorCode string
+	if err = s.DB().QueryRowContext(ctx, `SELECT state,error_code FROM archaeology_native_jobs WHERE id=?`, job.ID).Scan(&state, &errorCode); err != nil {
+		t.Fatal(err)
+	}
+	if state != "uncertain" || errorCode != "server_restarted_during_active_task" {
+		t.Fatalf("generic restart state=%q error=%q", state, errorCode)
+	}
+	outcome, err := s.classifyArchaeologyPersistenceReadback(ctx, intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != persistenceReadbackRetry {
+		t.Fatalf("generic restart lose readback outcome=%d, want retry", outcome)
+	}
+	if err = s.ReconcileArchaeologyNativePersistence(ctx); err != nil {
+		t.Fatalf("native persistence startup reconcile: %v", err)
+	}
+
+	read, err := s.ArchaeologyNativePersistenceIntent(ctx, record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read.State != "applied" {
+		t.Fatalf("lose intent after startup reconcile=%+v", read)
+	}
+	if err = s.DB().QueryRowContext(ctx, `SELECT state,error_code FROM archaeology_native_jobs WHERE id=?`, job.ID).Scan(&state, &errorCode); err != nil {
+		t.Fatal(err)
+	}
+	if state != "uncertain" || errorCode != "codex_process_unavailable" {
+		t.Fatalf("normalized loss state=%q error=%q", state, errorCode)
+	}
+	status, err := s.ArchaeologyNativePersistenceStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Healthy() || status.Pending != 0 || status.Leased != 0 || status.Blocked != 0 || status.Applied != 1 {
+		t.Fatalf("lose startup status=%+v", status)
+	}
+}
+
+func TestArchaeologyNativePersistenceLoseTurnIdentityMismatchBlocks(t *testing.T) {
+	ctx := context.Background()
+	s, _ := nativeTestSession(t, 1, 1)
+	job, err := s.ClaimArchaeologyNativeJob(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.BindArchaeologyNativeJob(ctx, job.ID, "expected-thread", "expected-session", "expected-turn"); err != nil {
+		t.Fatal(err)
+	}
+	intent := domain.ArchaeologyNativePersistenceIntent{
+		JobID: job.ID, Operation: domain.ArchaeologyNativePersistenceLoseTurn,
+		ThreadID: "expected-thread", TurnID: "expected-turn",
+	}
+	record, err := s.EnsureArchaeologyNativePersistenceIntent(ctx, intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.DB().ExecContext(ctx, `UPDATE archaeology_native_jobs SET thread_id='other-thread',turn_id='other-turn' WHERE id=?`, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.RetryArchaeologyNativePersistence(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	read, err := s.ArchaeologyNativePersistenceIntent(ctx, record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read.State != "blocked" {
+		t.Fatalf("mismatched lose intent=%+v, want blocked", read)
+	}
+}
+
 func TestArchaeologyNativePersistenceAppliedBeforeAcknowledgementAndExpiredLease(t *testing.T) {
 	ctx := context.Background()
 	now, clock := persistenceTestClock()

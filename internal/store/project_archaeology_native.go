@@ -841,7 +841,15 @@ func (s *Store) LoseArchaeologyNativeTurn(ctx context.Context, jobID, threadID, 
 		// Exact loss replay is already represented by the uncertainty latch.
 		return tx.Commit()
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE archaeology_native_jobs SET state='uncertain',error_code='codex_process_unavailable',terminal_at=?,updated_at=? WHERE id=? AND thread_id=? AND turn_id=? AND state IN ('active','report_ready','cancel_requested')`, now, now, jobID, threadID, turnID)
+	var result sql.Result
+	if state == "uncertain" && storedThread == threadID && storedTurn == turnID {
+		// Generic startup reconciliation may have already latched this exact job
+		// as uncertain for a server restart. A durable lose intent is stronger
+		// evidence: normalize the reason without reopening or replaying the turn.
+		result, err = tx.ExecContext(ctx, `UPDATE archaeology_native_jobs SET error_code='codex_process_unavailable',updated_at=? WHERE id=? AND thread_id=? AND turn_id=? AND state='uncertain'`, now, jobID, threadID, turnID)
+	} else {
+		result, err = tx.ExecContext(ctx, `UPDATE archaeology_native_jobs SET state='uncertain',error_code='codex_process_unavailable',terminal_at=?,updated_at=? WHERE id=? AND thread_id=? AND turn_id=? AND state IN ('active','report_ready','cancel_requested')`, now, now, jobID, threadID, turnID)
+	}
 	if err != nil {
 		return mapErr(err)
 	}

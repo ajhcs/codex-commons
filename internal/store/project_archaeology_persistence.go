@@ -608,6 +608,12 @@ func (s *Store) classifyArchaeologyPersistenceReadback(ctx context.Context, inte
 		if state == "uncertain" && errorCode == "codex_process_unavailable" && persistenceIdentityExact(threadID, intent.ThreadID) && persistenceIdentityExact(turnID, intent.TurnID) {
 			return persistenceReadbackApplied, nil
 		}
+		if state == "uncertain" && errorCode == "server_restarted_during_active_task" && persistenceIdentityExact(threadID, intent.ThreadID) && persistenceIdentityExact(turnID, intent.TurnID) {
+			// Generic startup reconciliation is weaker than an exact durable
+			// lose intent. Keep the row retryable until LoseTurn can normalize
+			// the reason to codex_process_unavailable.
+			return persistenceReadbackRetry, nil
+		}
 		if state == "active" || state == "report_ready" || state == "cancel_requested" {
 			return persistenceReadbackRetry, nil
 		}
