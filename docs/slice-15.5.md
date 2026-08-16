@@ -19,8 +19,20 @@ Queued cancellation is final without waiting for a callback. Active cancellation
 
 Native review never mutates Tasks, Wiki, Posts, or canonical historical-import tables. The feature-flagged selected Apply route is the only native import path; generic historical Apply rejects native proposals. The separate legacy bridge may apply eligible non-native proposals after complete diff review and exact digest confirmation. Current records win collisions.
 
+## Phase 3 durability extension
+
+Phase 3 keeps authority at the Store boundary. A native batch is eligible for preview, review, Apply, or exact replay only when the principal owns it, the batch is completed and policy-attested, every job is completed, and every outcome is attached to a report-bearing job with matching batch, session, and project identity. `can_apply` is a read-side explanation of that predicate, not a write capability.
+
+Selected Apply is one SQLite writer transaction. It revalidates eligibility, canonicalizes the sorted outcome IDs, recomputes the selection and manifest digests, consumes the completed review token, applies every selected historical import, and inserts the append-only receipt. The replay tuple is the principal, idempotency key, batch, sorted outcome IDs, selection digest, and manifest digest. An exact tuple may return the immutable receipt after eligibility is rechecked; any changed field conflicts.
+
+The scheduler also records a durable intent before each of five replay-safe Store mutations: `fail_start`, `bind_identity`, `activate`, `lose_turn`, and `complete_turn`. It applies the mutation and reads the row back; only `applied` permits the dependent lifecycle step. `pending`, `leased`, or `blocked` work raises persistence attention, degrades readiness, and closes the claim gate. Due work receives bounded leases and exponential retries from scheduler wakes and a one-second ticker. This persistence retry is not a historian-task retry.
+
+On startup, Commons runs generic `ReconcileArchaeology` before `ReconcileArchaeologyNativePersistence`. Generic reconciliation first makes in-flight work uncertain; the second pass may then apply stronger exact completion or turn-loss evidence. Exact completion preserves its recorded state and duration. Exact loss remains uncertain with `codex_process_unavailable`. The ledger deliberately excludes external `Launch`, `Finalize`, and `Interrupt`, so startup recovery cannot replay any of them.
+
+Repository acceptance uses disposable SQLite databases and a real Store plus scheduler. Tests force terminal persistence failures, close and reopen the database, drain the durable intent, verify the complete/lose evidence and healthy ledger, and assert zero external lifecycle replay after restart. This is local/offline evidence only. Candidate packaging, deployment, live restart/restore/rollback, and paired-App-Server acceptance are not proven here; they remain deferred through Phase 5 and to the Phase 9 live-acceptance gate.
+
 ## Deliberate exclusions
 
-No automatic apply, arbitrary filesystem discovery, write-capable historian, hidden task launch, invented identity, multi-human/RBAC, team/profile semantics, messaging, agent wake, deployment, or live multi-host pilot is part of this slice. Catalog discovery is revision-bound and paginated at 100 projects per page across 10,000 task records. Batch/outcome history is durably paginated and keeps immutable project-name snapshots.
+No automatic apply, arbitrary filesystem discovery, write-capable historian, hidden task launch, invented identity, multi-human/RBAC, team/profile semantics, messaging, agent wake, deployment, or live multi-host pilot is part of this slice. Store-write retries do not change those exclusions: they replay only deterministic local mutations and never create a second external control plane. Catalog discovery is revision-bound and paginated at 100 projects per page across 10,000 task records. Batch/outcome history is durably paginated and keeps immutable project-name snapshots.
 
 Codex 0.147.0 sends preview bytes as part of inventory JSONL. Commons receives those protocol-mandated bytes under a 16 MiB line cap but never represents, persists, projects, or logs them. The private loopback/HTTPS bootstrap, immutable release, backup, restore, and rollback sequence is defined in `deploy/CONTINUOUS_DOGFOOD_RUNBOOK.md`.

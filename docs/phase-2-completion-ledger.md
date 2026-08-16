@@ -8,6 +8,12 @@ deployment decision remains **NO-GO**. This ledger deliberately records those
 as separate facts. A passing test, a healthy disposable rehearsal, or a
 read-only live check is not approval to activate a release.
 
+This file preserves the Phase 2 checklist and evidence exactly as a historical
+baseline. Phase 3 adds a durable native-persistence ledger, so the Phase 2
+statements in Increments 09 and 10 that say there is no durable retry queue do
+not describe the current source. See the Phase 3 addendum after the Phase 2
+handoff for the current source behavior and its still-open release gates.
+
 ## How to use this ledger
 
 Complete one increment at a time. For every increment, fill the evidence slots
@@ -352,3 +358,68 @@ those evidence slots remain open and the deployment decision remains
 **NO-GO**. Do not mark a row `deployment approved` merely because a local or
 historical runtime was healthy. The next operator must start from a clean,
 reviewed candidate and a new read-only readiness capture.
+
+## Phase 3 source/offline completion addendum
+
+**Verified source boundary:** `fe6cdba` on the Phase 3 verified branch. This is
+source and disposable-test evidence only. It is not a packaged candidate,
+release manifest, deployment approval, live database result, or live historian
+result.
+
+The Phase 3 change sequence is intentionally small and ordered:
+
+| Commit | Source/offline result |
+| --- | --- |
+| `0761ab1` | Centralizes repository-owned batch and outcome eligibility used by capability projection and final enforcement. |
+| `56ccd97` | Adds migration 016 and the durable native-persistence intent schema. |
+| `1c353c1` | Applies the centralized eligibility gate to selected preview and review without weakening store enforcement. |
+| `702c0a1` | Adds the Store intent ledger and replay-safe persistence operations. |
+| `3cfe26b` | Serializes selected Apply at the SQLite writer boundary and makes exact concurrent replays return one immutable receipt. |
+| `f082b28` | Makes the scheduler ensure, apply, and read back durable intents; adds bounded retry, a periodic wake, and a claim gate while persistence needs attention. |
+| `7e09420` | Runs generic archaeology reconciliation before native-persistence reconciliation during startup and exposes unresolved ledger work as non-green attention. |
+| `fe6cdba` | Proves complete-turn and lose-turn persistence across Store close/reopen, including exact terminal evidence and no replay of external launch, finalize, or interrupt calls. |
+
+`cafa666` is retained prerequisite evidence aligning the sandboxed operations
+test with the documented Go toolchain. It is not a Phase 3 product-behavior
+change.
+
+### What the durable ledger does
+
+The ledger is deliberately narrow. It records only five replay-safe repository
+transitions: fail start, bind identity, activate, lose turn, and complete turn.
+For each transition, the scheduler commits the intent first, applies the Store
+mutation, reads the durable row back, and advances lifecycle state only after
+the row is `applied`. Pending, leased, or blocked work keeps persistence in an
+attention state and prevents a new historian claim.
+
+The ledger never replays external `LaunchNative`, `FinalizeNative`, or
+`InterruptNative` calls. Those remain acceptance-sensitive boundaries. The
+restart tests use a real Store, inject a terminal persistence failure, close
+and reopen the database, run generic reconciliation followed by native
+persistence reconciliation, and verify the exact complete/lose result without
+any external call replay.
+
+### Evidence and remaining operational gates
+
+- Eligibility and Apply evidence is source-grounded in
+  `internal/store/project_archaeology_eligibility_test.go`,
+  `internal/store/project_archaeology_selected_gating_test.go`, and
+  `internal/store/project_archaeology_apply_test.go`.
+- Durable scheduler and startup evidence is source-grounded in
+  `internal/store/project_archaeology_persistence_test.go`,
+  `internal/application/project_archaeology_scheduler_phase3_test.go`,
+  `internal/application/project_archaeology_scheduler_restart_test.go`,
+  `internal/server/server_startup_persistence_test.go`, and
+  `internal/server/startup_reconciliation_test.go`.
+- Source/offline Phase 3 completion: **PASS** at the verified source boundary.
+- Candidate build, manifest, AppArmor/runtime preflight, backup/restore packet,
+  and disposable production-composition acceptance: **unrecorded**.
+- Deployment, candidate activation, live database mutation, live Apply, and
+  live historian execution: **not performed**.
+- Deployment approval: **NO-GO**.
+
+Per the current delivery direction, finish through Phase 5 before beginning
+live tests. Phase 9's disposable gates, new-candidate construction, explicit
+live approval, and live recovery/evidence work also remain outstanding. No
+source or offline result in this addendum may be promoted into those evidence
+slots.
