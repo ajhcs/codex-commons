@@ -280,6 +280,19 @@ maintenance plan and authorization.
 The following is the gate sequence for a separately authorized rehearsal. It
 does not authorize live activation:
 
+Before any candidate or cutover work, run the Phase 4 source-only deployment
+gate from the reviewed tree:
+
+```sh
+sh ops/test-deploy-release.sh
+```
+
+This test uses only disposable release directories and fake systemctl,
+readiness, and verification scripts. It proves the canonical release-root
+lock domain, contention fail-closed behavior, and atomic forward/rollback
+pointer cleanup; it does not restart a service, switch a live `current`, or
+mutate a live database.
+
 1. Confirm the working tree is clean and the source commit is recorded. Stop
    any temporary process only under its task owner and verify the chosen
    loopback port is free.
@@ -340,9 +353,10 @@ service, and do not delete the last known-good release or backup.
 
 ## 9. Release gates and approval boundary
 
-Source edits, static checks, Go tests, browser tests, and a disposable
-acceptance run prove the candidate contract only. They do not approve a live
-deployment. Live activation is prohibited until the applicable Phase 0–5
+Source edits, static checks, Go tests, browser tests, the Phase 4
+`sh ops/test-deploy-release.sh` gate, and a disposable acceptance run prove the
+candidate contract only. They do not approve a live deployment. Live
+activation is prohibited until the applicable Phase 0–5
 release gates are complete, the candidate is built from an explicitly reviewed
 commit, its manifest/AppArmor/runtime/backup/restore evidence is recorded, and
 an authorized operator approves the exact release ID, database boundary,

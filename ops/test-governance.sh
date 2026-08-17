@@ -7,6 +7,10 @@ ledger="$root/docs/phase-0-remediation-baseline.md"
 test -f "$root/AGENTS.md"
 test -f "$root/web/AGENTS.md"
 test -f "$ledger"
+test -f "$root/.codex/release-gate.toml"
+
+grep -Fq 'name = "ops-and-deployment"' "$root/.codex/release-gate.toml"
+grep -Fq 'command = ["sh", "ops/test-ops.sh"]' "$root/.codex/release-gate.toml"
 
 for phrase in \
 	"Preserve every pre-existing tracked and untracked change" \
@@ -21,6 +25,7 @@ done
 # These are release inputs, not secrets or generated output. They must remain
 # discoverable by normal Git review and must not be hidden by an ignore rule.
 for path in \
+	.codex/release-gate.toml \
 	ops/backup.sh \
 	ops/build-release.sh \
 	ops/check-readiness.sh \
@@ -28,6 +33,7 @@ for path in \
 	ops/record-evidence.sh \
 	ops/seal-archive.sh \
 	ops/stage-release.sh \
+	ops/test-deploy-release.sh \
 	ops/test-governance.sh \
 	ops/test-ops.sh \
 	ops/verify-release.sh \

@@ -8,9 +8,16 @@ repo_root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 stage_script=$repo_root/ops/stage-release.sh
 verify_script=$repo_root/ops/verify-release.sh
 readiness_script=$repo_root/ops/check-readiness.sh
+deploy_test=$repo_root/ops/test-deploy-release.sh
 test -f "$stage_script"
 test -f "$verify_script"
 test -f "$readiness_script"
+test -f "$deploy_test"
+
+# Phase 4 deploy locking and current-pointer transactions are exercised only
+# against disposable release roots and fake systemctl/readiness scripts. This
+# never activates a candidate or touches a live database/service.
+sh "$deploy_test"
 
 # Keep the Phase 2 deployment contract reviewable without turning this suite
 # into a live systemd or runtime test. These assertions cover only source

@@ -1,0 +1,34 @@
+version = 1
+authority = "local-exact-tree"
+changed_from = "origin/codex/phase-3-durable-apply-verified"
+
+[[stages]]
+name = "go-bootstrap"
+kind = "bootstrap"
+command = ["go", "mod", "download"]
+failure_class = "environment_blocked"
+
+[[stages]]
+name = "go-vet"
+kind = "static_diagnostics"
+command = ["go", "vet", "./..."]
+
+[[stages]]
+name = "go-test"
+kind = "unit_tests"
+command = ["go", "test", "./..."]
+
+[[stages]]
+name = "governance"
+kind = "integration_tests"
+command = ["sh", "ops/test-governance.sh"]
+
+[[stages]]
+name = "ops-and-deployment"
+kind = "integration_tests"
+command = ["sh", "ops/test-ops.sh"]
+
+[[stages]]
+name = "go-build"
+kind = "build"
+command = ["go", "build", "./..."]
