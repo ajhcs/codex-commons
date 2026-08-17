@@ -86,7 +86,15 @@ Never infer either state from a single `/v1/health` 200 response.
 
 For an approved disposable rehearsal, the expected order is:
 
-1. Verify the exact immutable release directory and its `SHA256SUMS` manifest.
+1. The stable host launcher resolves `current` once, requires the canonical
+   result to be a direct child of the release root, and exports the exact
+   release identity, Codex binary, and web paths. It verifies that one pinned
+   directory, changes into it, and executes its `commons-server`; a concurrent
+   pointer change cannot select a different executable after verification.
+   This guarantee relies on the deployment lock serializing pointer updates and
+   on immutable release directories never being replaced at the same canonical
+   path. The launcher is not a defense against a privileged actor replacing a
+   pinned directory inode between verification and execution.
 2. Open the database and run migrations. Run generic archaeology reconciliation
    first, then native-persistence reconciliation, then re-read the persistence
    and uncertainty status before constructing or waking the scheduler.
@@ -310,9 +318,22 @@ mutate a live database.
 6. Bootstrap through direct loopback HTTP with no public origin and first-LAN
    bind disabled. Verify one durable human account binding, then stop the
    disposable process.
-7. Install the environment/key with mode 0600 and units/templates with mode
-   0644. Enable user linger, the service, and backup timer only in the approved
-   maintenance window; keep the app listener on loopback.
+7. Review `deploy/bin/codex-commons-launch`, then use
+   `sh ops/install-launcher.sh "$HOME/.local/libexec/codex-commons-launch"` to
+   install it outside the mutable release root with mode 0555 through a
+   same-directory temporary file and atomic rename. The launcher and installer
+   are source/host inputs and are deliberately not packaged in a release.
+   Install the environment/key with mode 0600 and units/templates with mode
+   0644. The environment supplies `COMMONS_RELEASE_ROOT` but must not set
+   `COMMONS_RELEASE_DIR`, `COMMONS_RELEASE_IDENTITY_FILE`, `COMMONS_CODEX_BIN`,
+   or `COMMONS_WEB_DIR`; the launcher derives those exact paths. Enable user
+   linger, the service, and backup timer only in the approved maintenance
+   window; keep the app listener on loopback.
+
+The pinned launcher in this increment applies to the main
+`codex-commons.service`. The separately scheduled backup unit still invokes the
+backup operation through `current`; changing that unit requires its own review
+and is outside this increment.
 8. Verify Type=notify `READY=1` timing (a local listener may exist before it),
    watchdog grace/fatal behavior, the runtime-only readiness payload, exact
    release identity, schema/digests, compatibility, Host/origin/CSRF rules,

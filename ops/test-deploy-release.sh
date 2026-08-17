@@ -43,6 +43,9 @@ EOF
 	cat > "$release_dir/ops/check-readiness.sh" <<'EOF'
 #!/bin/sh
 set -eu
+test "$COMMONS_RELEASE_IDENTITY_FILE" = "$COMMONS_RELEASE_DIR/VERSION"
+test "$COMMONS_CODEX_BIN" = "$COMMONS_RELEASE_DIR/bin/codex"
+test "$COMMONS_WEB_DIR" = "$COMMONS_RELEASE_DIR/web"
 if [ "${FAKE_READINESS_RESULT:-0}" -ne 0 ]; then
 	exit "$FAKE_READINESS_RESULT"
 fi

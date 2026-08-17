@@ -1,0 +1,42 @@
+#!/bin/sh
+set -eu
+PATH=/usr/bin:/bin
+export PATH
+
+: "${COMMONS_RELEASE_ROOT:?COMMONS_RELEASE_ROOT is required}"
+case "$COMMONS_RELEASE_ROOT" in
+/*) ;;
+*) exit 64 ;;
+esac
+
+test -d "$COMMONS_RELEASE_ROOT"
+release_root=$(readlink -f -- "$COMMONS_RELEASE_ROOT")
+test -n "$release_root"
+test -d "$release_root"
+test ! -L "$release_root"
+
+# Resolve the mutable pointer once. Every verification and runtime path below
+# is derived from this immutable, canonical direct child, so a concurrent
+# pointer switch cannot make verification and execution select different
+# releases. This depends on the deployment lock serializing pointer changes and
+# on canonical release directories remaining immutable at the same path; the
+# launcher cannot defend a privileged actor replacing a pinned directory inode.
+current="$release_root/current"
+test -L "$current"
+release_dir=$(readlink -f -- "$current")
+test -n "$release_dir"
+test -d "$release_dir"
+test ! -L "$release_dir"
+test "$(dirname -- "$release_dir")" = "$release_root"
+
+COMMONS_RELEASE_ROOT=$release_root
+COMMONS_RELEASE_DIR=$release_dir
+COMMONS_RELEASE_IDENTITY_FILE=$release_dir/VERSION
+COMMONS_CODEX_BIN=$release_dir/bin/codex
+COMMONS_WEB_DIR=$release_dir/web
+export COMMONS_RELEASE_ROOT COMMONS_RELEASE_DIR COMMONS_RELEASE_IDENTITY_FILE
+export COMMONS_CODEX_BIN COMMONS_WEB_DIR
+
+/bin/sh "$release_dir/ops/verify-release.sh"
+CDPATH= cd -- "$release_dir"
+exec "$release_dir/commons-server" "$@"

@@ -9,15 +9,18 @@ stage_script=$repo_root/ops/stage-release.sh
 verify_script=$repo_root/ops/verify-release.sh
 readiness_script=$repo_root/ops/check-readiness.sh
 deploy_test=$repo_root/ops/test-deploy-release.sh
+launcher_test=$repo_root/ops/test-launcher.sh
 test -f "$stage_script"
 test -f "$verify_script"
 test -f "$readiness_script"
 test -f "$deploy_test"
+test -f "$launcher_test"
 
 # Phase 4 deploy locking and current-pointer transactions are exercised only
 # against disposable release roots and fake systemctl/readiness scripts. This
 # never activates a candidate or touches a live database/service.
 sh "$deploy_test"
+sh "$launcher_test"
 
 # Keep the Phase 2 deployment contract reviewable without turning this suite
 # into a live systemd or runtime test. These assertions cover only source
@@ -26,16 +29,34 @@ sh "$deploy_test"
 service_unit=$repo_root/deploy/systemd/codex-commons.service
 env_example=$repo_root/deploy/systemd/dogfood.env.example
 runbook=$repo_root/deploy/CONTINUOUS_DOGFOOD_RUNBOOK.md
+launcher=$repo_root/deploy/bin/codex-commons-launch
+launcher_installer=$repo_root/ops/install-launcher.sh
 phase2_ledger=$repo_root/docs/phase-2-completion-ledger.md
-for source_artifact in "$service_unit" "$env_example" "$runbook" "$phase2_ledger"; do
+for source_artifact in "$service_unit" "$env_example" "$runbook" "$launcher" "$launcher_installer" "$phase2_ledger"; do
 	test -f "$source_artifact"
 done
 grep -Fq 'Type=notify' "$service_unit"
 grep -Fq 'NotifyAccess=main' "$service_unit"
 grep -Eq '^TimeoutStartSec=180$' "$service_unit"
 grep -Fq 'WatchdogSec=60' "$service_unit"
-grep -Fq 'WorkingDirectory=%h/.local/lib/codex-commons/current' "$service_unit"
-grep -Fq 'ExecStartPre=/bin/sh %h/.local/lib/codex-commons/current/ops/verify-release.sh' "$service_unit"
+grep -Fq 'ExecStart=%h/.local/libexec/codex-commons-launch' "$service_unit"
+test "$(grep -c '^ExecStart=' "$service_unit")" -eq 1
+! grep -Eq '^(WorkingDirectory|ExecStartPre)=' "$service_unit"
+! grep -Fq '/current/' "$service_unit"
+grep -Fq 'NoNewPrivileges=true' "$service_unit"
+grep -Fq 'PrivateTmp=true' "$service_unit"
+grep -Fq 'ProtectSystem=full' "$service_unit"
+grep -Fq 'ProtectHome=read-only' "$service_unit"
+grep -Fq 'ReadWritePaths=%h/.local/state/codex-commons %h/.codex' "$service_unit"
+grep -Fq 'release_dir=$(readlink -f -- "$current")' "$launcher"
+grep -Fq 'test "$(dirname -- "$release_dir")" = "$release_root"' "$launcher"
+grep -Fq '/bin/sh "$release_dir/ops/verify-release.sh"' "$launcher"
+grep -Fq 'exec "$release_dir/commons-server" "$@"' "$launcher"
+grep -Fq 'PATH=/usr/bin:/bin' "$launcher"
+grep -Fq 'install_temp=$(mktemp "$install_dir/.codex-commons-launch.XXXXXX")' "$launcher_installer"
+grep -Fq 'mv -Tf -- "$install_temp" "$target"' "$launcher_installer"
+grep -Fq 'COMMONS_RELEASE_ROOT=/home/USER/.local/lib/codex-commons' "$env_example"
+! grep -Eq '^COMMONS_(RELEASE_IDENTITY_FILE|RELEASE_DIR|WEB_DIR|CODEX_BIN)=' "$env_example"
 grep -Fq 'COMMONS_REQUIRE_CODEX_READY=false' "$env_example"
 grep -Fqi 'optional-safe default' "$env_example"
 grep -Fq 'runtime_policy_ready' "$readiness_script"
@@ -301,6 +322,10 @@ rg_sha=$(sha256sum "$root/codex-bundle/codex-path/rg" | awk '{print $1}')
 package_sha=$(sha256sum "$root/codex-bundle/codex-package.json" | awk '{print $1}')
 stage_release release-test "$root/commons-server" "$release_root" "$root/source-web" "$root/codex-bundle"
 release_dir=$release_root/release-test
+# The stable launcher is a separately governed host input, not mutable release
+# content. Its installer is likewise unavailable from an activated candidate.
+test ! -e "$release_dir/bin/codex-commons-launch"
+test ! -e "$release_dir/ops/install-launcher.sh"
 manifest=$release_dir/SHA256SUMS
 valid_manifest=$root/valid-SHA256SUMS
 cp "$manifest" "$valid_manifest"

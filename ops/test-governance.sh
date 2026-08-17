@@ -26,14 +26,17 @@ done
 # discoverable by normal Git review and must not be hidden by an ignore rule.
 for path in \
 	.codex/release-gate.toml \
+	deploy/bin/codex-commons-launch \
 	ops/backup.sh \
 	ops/build-release.sh \
 	ops/check-readiness.sh \
 	ops/deploy-release.sh \
+	ops/install-launcher.sh \
 	ops/record-evidence.sh \
 	ops/seal-archive.sh \
 	ops/stage-release.sh \
 	ops/test-deploy-release.sh \
+	ops/test-launcher.sh \
 	ops/test-governance.sh \
 	ops/test-ops.sh \
 	ops/verify-release.sh \

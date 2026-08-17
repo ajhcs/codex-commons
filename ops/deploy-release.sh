@@ -98,7 +98,13 @@ switch_current() {
 }
 
 switch_current "$staged"
-if ! "$systemctl_cmd" --user restart codex-commons.service || ! COMMONS_RELEASE_DIR="$staged" COMMONS_SYSTEMCTL="$systemctl_cmd" /bin/sh "$staged/ops/check-readiness.sh"; then
+if ! "$systemctl_cmd" --user restart codex-commons.service || ! \
+	COMMONS_RELEASE_DIR="$staged" \
+	COMMONS_RELEASE_IDENTITY_FILE="$staged/VERSION" \
+	COMMONS_CODEX_BIN="$staged/bin/codex" \
+	COMMONS_WEB_DIR="$staged/web" \
+	COMMONS_SYSTEMCTL="$systemctl_cmd" \
+	/bin/sh "$staged/ops/check-readiness.sh"; then
 	"$systemctl_cmd" --user stop codex-commons.service || true
 	if [ -n "$prebackup" ]; then
 		/bin/sh "$staged/ops/verify-restore.sh" "$prebackup" >/dev/null
@@ -110,7 +116,12 @@ if ! "$systemctl_cmd" --user restart codex-commons.service || ! COMMONS_RELEASE_
 	if [ -n "$previous" ]; then
 		switch_current "$previous"
 		"$systemctl_cmd" --user restart codex-commons.service || true
-		COMMONS_RELEASE_DIR="$previous" COMMONS_SYSTEMCTL="$systemctl_cmd" /bin/sh "$previous/ops/check-readiness.sh" || true
+		COMMONS_RELEASE_DIR="$previous" \
+		COMMONS_RELEASE_IDENTITY_FILE="$previous/VERSION" \
+		COMMONS_CODEX_BIN="$previous/bin/codex" \
+		COMMONS_WEB_DIR="$previous/web" \
+		COMMONS_SYSTEMCTL="$systemctl_cmd" \
+		/bin/sh "$previous/ops/check-readiness.sh" || true
 	else
 		rm -f -- "$current"
 	fi
