@@ -33,10 +33,12 @@ func TestWritePublishAndRetentionSafety(t *testing.T) {
 	if err := tmp.WriteExclusive("leaf.sqlite3", []byte("payload")); err != nil {
 		t.Fatal(err)
 	}
-	if err := dir.PublishNoReplace(tmp, "leaf.sqlite3", "leaf.sqlite3"); err != nil {
+	if id, err := dir.PublishNoReplace(tmp, "leaf.sqlite3", "leaf.sqlite3"); err != nil {
 		t.Fatal(err)
+	} else if !id.Proven() || id.Name != "leaf.sqlite3" {
+		t.Fatalf("published identity = %+v", id)
 	}
-	if err := dir.PublishNoReplace(tmp, "leaf.sqlite3", "leaf.sqlite3"); err == nil {
+	if _, err := dir.PublishNoReplace(tmp, "leaf.sqlite3", "leaf.sqlite3"); err == nil {
 		t.Fatal("replaced existing leaf")
 	}
 	fd, st, err := dir.OpenValidatedRegular("leaf.sqlite3")
@@ -157,7 +159,8 @@ func TestPublishNoReplaceDetectsSourceReplacement(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- dir.PublishNoReplace(tmp, "leaf.sqlite3", "leaf.sqlite3")
+		_, err := dir.PublishNoReplace(tmp, "leaf.sqlite3", "leaf.sqlite3")
+		errCh <- err
 	}()
 	deadline := time.Now().Add(2 * time.Second)
 	for {

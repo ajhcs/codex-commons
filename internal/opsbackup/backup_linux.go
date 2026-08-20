@@ -5,6 +5,7 @@ package opsbackup
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -192,7 +193,7 @@ func Backup(ctx context.Context, dbPath, backupDir string) (published string, er
 		return fail(err)
 	}
 
-	if err := daily.PublishNoReplace(tmp, leaf, leaf); err != nil {
+	if _, err := daily.PublishNoReplace(tmp, leaf, leaf); err != nil {
 		return fail(err)
 	}
 	publishedLeaves[leaf] = struct{}{}
@@ -203,11 +204,11 @@ func Backup(ctx context.Context, dbPath, backupDir string) (published string, er
 	if err := revalidateLocked(ctx, src, root, daily, tmp); err != nil {
 		return failAfter(err)
 	}
-	if err := daily.PublishNoReplace(tmp, leaf+".sha256", leaf+".sha256"); err != nil {
+	if _, err := daily.PublishNoReplace(tmp, leaf+".sha256", leaf+".sha256"); err != nil {
 		return failAfter(err)
 	}
 	publishedLeaves[leaf+".sha256"] = struct{}{}
-	if err := daily.PublishNoReplace(tmp, leaf+".receipt.json", leaf+".receipt.json"); err != nil {
+	if _, err := daily.PublishNoReplace(tmp, leaf+".receipt.json", leaf+".receipt.json"); err != nil {
 		return failAfter(err)
 	}
 	publishedLeaves[leaf+".receipt.json"] = struct{}{}
@@ -223,7 +224,7 @@ func Backup(ctx context.Context, dbPath, backupDir string) (published string, er
 	}
 
 	monthLeaf := "commons-" + nowUTC().Format("2006-01") + ".sqlite3"
-	if err := publishMonthly(daily, monthly, leaf, monthLeaf, stamp, digest, meta); err != nil {
+	if err := publishMonthly(ctx, daily, monthly, leaf, monthLeaf, stamp, digest, meta); err != nil {
 		return failAfter(err)
 	}
 	if err := opsfs.WaitHold(ctx, opsfs.HoldAfterMonthlyPublications); err != nil {
@@ -269,7 +270,7 @@ func revalidateLocked(ctx context.Context, src *opsfs.PinnedDB, dirs ...*opsfs.D
 	return nil
 }
 
-func publishMonthly(daily, monthly *opsfs.Dir, dailyLeaf, monthLeaf, stamp, digest string, meta backupMeta) error {
+func publishMonthly(ctx context.Context, daily, monthly *opsfs.Dir, dailyLeaf, monthLeaf, stamp, digest string, meta backupMeta) error {
 	if err := daily.ValidateExact(opsfs.DirMode); err != nil {
 		return err
 	}
@@ -337,19 +338,71 @@ func publishMonthly(daily, monthly *opsfs.Dir, dailyLeaf, monthLeaf, stamp, dige
 	if err := tmp.WriteExclusive(monthLeaf+".receipt.json", receiptBody); err != nil {
 		return err
 	}
-	if err := monthly.PublishNoReplace(tmp, monthLeaf, monthLeaf); err != nil {
-		return err
+
+	// Track only leaves proven published by this invocation. On later failure,
+	// roll those back in reverse order using trusted (dev,ino) identity so a
+	// preexisting/planted occupant is never unlinked.
+	var published []opsfs.PublishedIdentity
+	failPublished := func(err error) error {
+		return errors.Join(err, rollbackThisInvocationMonthly(ctx, monthly, published))
 	}
-	if err := monthly.PublishNoReplace(tmp, monthLeaf+".sha256", monthLeaf+".sha256"); err != nil {
-		return err
+	record := func(id opsfs.PublishedIdentity) {
+		if id.Proven() {
+			published = append(published, id)
+		}
 	}
-	if err := monthly.PublishNoReplace(tmp, monthLeaf+".receipt.json", monthLeaf+".receipt.json"); err != nil {
-		return err
+
+	id, err := monthly.PublishNoReplace(tmp, monthLeaf, monthLeaf)
+	record(id)
+	if err != nil {
+		return failPublished(err)
+	}
+	if err := opsfs.WaitHold(ctx, opsfs.HoldBetweenMonthlyPublications); err != nil {
+		return failPublished(err)
 	}
 	if err := monthly.ValidateExact(opsfs.DirMode); err != nil {
-		return err
+		return failPublished(err)
 	}
-	return validatePublishedSet(monthly, monthLeaf)
+	id, err = monthly.PublishNoReplace(tmp, monthLeaf+".sha256", monthLeaf+".sha256")
+	record(id)
+	if err != nil {
+		return failPublished(err)
+	}
+	if err := opsfs.WaitHold(ctx, opsfs.HoldBetweenMonthlyPublications); err != nil {
+		return failPublished(err)
+	}
+	if err := monthly.ValidateExact(opsfs.DirMode); err != nil {
+		return failPublished(err)
+	}
+	id, err = monthly.PublishNoReplace(tmp, monthLeaf+".receipt.json", monthLeaf+".receipt.json")
+	record(id)
+	if err != nil {
+		return failPublished(err)
+	}
+	if err := monthly.ValidateExact(opsfs.DirMode); err != nil {
+		return failPublished(err)
+	}
+	if err := validatePublishedSet(monthly, monthLeaf); err != nil {
+		return failPublished(err)
+	}
+	return nil
+}
+
+// rollbackThisInvocationMonthly removes only leaves proven published by this
+// monthly publication attempt, in reverse order. Each unlink revalidates the
+// trusted (dev,ino) before the name-based unlinkat(2). A same-uid actor can
+// still replace the name after the last check; that residual race is not
+// claimed closed. Preexisting or planted occupants with a different identity
+// are skipped, never removed.
+func rollbackThisInvocationMonthly(ctx context.Context, dir *opsfs.Dir, published []opsfs.PublishedIdentity) error {
+	var errs []error
+	for i := len(published) - 1; i >= 0; i-- {
+		id := published[i]
+		if err := unlinkValidated(ctx, dir, id.Name, id.Dev, id.Ino); err != nil {
+			errs = append(errs, fmt.Errorf("rollback %s: %w", id.Name, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func backupTo(ctx context.Context, src *sql.DB, destURI string) error {

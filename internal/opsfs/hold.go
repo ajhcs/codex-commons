@@ -7,13 +7,14 @@ import (
 )
 
 const (
-	HoldPreOpen                  = "pre-open"
-	HoldPrePublish               = "pre-publish"
-	HoldPrePublishRename         = "pre-publish-rename"
-	HoldBetweenPublications      = "between-publications"
-	HoldAfterPublications        = "after-publications"
-	HoldAfterMonthlyPublications = "after-monthly-publications"
-	HoldPreUnlink                = "pre-unlink"
+	HoldPreOpen                    = "pre-open"
+	HoldPrePublish                 = "pre-publish"
+	HoldPrePublishRename           = "pre-publish-rename"
+	HoldBetweenPublications        = "between-publications"
+	HoldBetweenMonthlyPublications = "between-monthly-publications"
+	HoldAfterPublications          = "after-publications"
+	HoldAfterMonthlyPublications   = "after-monthly-publications"
+	HoldPreUnlink                  = "pre-unlink"
 )
 
 // WaitHold is a disposable-test seam. It is inert unless both

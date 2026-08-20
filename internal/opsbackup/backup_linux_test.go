@@ -834,6 +834,157 @@ func TestBackupSidecarCollision(t *testing.T) {
 		if err != nil || string(got) != "planted-monthly\n" {
 			t.Fatalf("monthly checksum mutated: %q %v", got, err)
 		}
+		leaf := filepath.Join(monthly, "commons-2026-08.sqlite3")
+		if _, err := os.Lstat(leaf); !os.IsNotExist(err) {
+			t.Fatalf("this-invocation monthly leaf should be rolled back: %v", err)
+		}
+		if _, err := os.Lstat(filepath.Join(monthly, "commons-2026-08.sqlite3.receipt.json")); !os.IsNotExist(err) {
+			t.Fatal("unexpected monthly receipt after rollback")
+		}
+		dailyLeaf := filepath.Join(backupDir, "daily", "commons-20260820T170000Z.sqlite3")
+		if _, err := os.Lstat(dailyLeaf); err != nil {
+			t.Fatal("daily publication must remain unchanged after monthly rollback")
+		}
+	})
+}
+
+func TestBackupMonthlyPartialPublishRollback(t *testing.T) {
+	nowUTC = func() time.Time { return time.Date(2026, 8, 20, 17, 30, 0, 0, time.UTC) }
+	t.Cleanup(func() { nowUTC = func() time.Time { return time.Now().UTC() } })
+
+	t.Run("between-monthly-publications-cancel", func(t *testing.T) {
+		dbPath, backupDir := setupBackupTree(t)
+		hold := filepath.Join(filepath.Dir(backupDir), "hold")
+		status := filepath.Join(filepath.Dir(backupDir), "status")
+		if err := os.WriteFile(hold, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("COMMONS_OPS_HOLD", hold)
+		t.Setenv("COMMONS_OPS_HOLD_POINT", opsfs.HoldBetweenMonthlyPublications)
+		t.Setenv("COMMONS_OPS_HOLD_STATUS", status)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		errCh := make(chan error, 1)
+		go func() {
+			_, err := Backup(ctx, dbPath, backupDir)
+			errCh <- err
+		}()
+		waitHoldReady(t, status)
+		monthLeaf := filepath.Join(backupDir, "monthly", "commons-2026-08.sqlite3")
+		if _, err := os.Lstat(monthLeaf); err != nil {
+			t.Fatal("expected this-invocation monthly leaf before cancel")
+		}
+		cancel()
+		if err := <-errCh; err == nil {
+			t.Fatal("backup succeeded after between-monthly cancel")
+		}
+		for _, name := range []string{
+			"commons-2026-08.sqlite3",
+			"commons-2026-08.sqlite3.sha256",
+			"commons-2026-08.sqlite3.receipt.json",
+		} {
+			if _, err := os.Lstat(filepath.Join(backupDir, "monthly", name)); !os.IsNotExist(err) {
+				t.Fatalf("this-invocation monthly leaf %s should be rolled back: %v", name, err)
+			}
+		}
+		dailyLeaf := filepath.Join(backupDir, "daily", "commons-20260820T173000Z.sqlite3")
+		if _, err := os.Lstat(dailyLeaf); err != nil {
+			t.Fatal("daily publication must remain after monthly cancel rollback")
+		}
+
+		// Retry/liveness: clear hold seam, advance stamp, complete a full backup.
+		t.Setenv("COMMONS_OPS_HOLD", "")
+		t.Setenv("COMMONS_OPS_HOLD_POINT", "")
+		t.Setenv("COMMONS_OPS_HOLD_STATUS", "")
+		nowUTC = func() time.Time { return time.Date(2026, 8, 21, 17, 30, 0, 0, time.UTC) }
+		if _, err := Backup(context.Background(), dbPath, backupDir); err != nil {
+			t.Fatalf("retry after monthly rollback failed: %v", err)
+		}
+		if _, err := os.Lstat(filepath.Join(backupDir, "monthly", "commons-2026-08.sqlite3")); err != nil {
+			t.Fatal("retry did not publish monthly set")
+		}
+		if _, err := os.Lstat(filepath.Join(backupDir, "monthly", "commons-2026-08.sqlite3.sha256")); err != nil {
+			t.Fatal("retry missing monthly checksum")
+		}
+		if _, err := os.Lstat(filepath.Join(backupDir, "monthly", "commons-2026-08.sqlite3.receipt.json")); err != nil {
+			t.Fatal("retry missing monthly receipt")
+		}
+	})
+
+	t.Run("planted-receipt-rolls-back-this-invocation-leaves", func(t *testing.T) {
+		dbPath, backupDir := setupBackupTree(t)
+		monthly := filepath.Join(backupDir, "monthly")
+		if err := os.Mkdir(monthly, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		planted := filepath.Join(monthly, "commons-2026-08.sqlite3.receipt.json")
+		if err := os.WriteFile(planted, []byte("planted-receipt\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Backup(context.Background(), dbPath, backupDir); err == nil {
+			t.Fatal("replaced planted monthly receipt")
+		}
+		got, err := os.ReadFile(planted)
+		if err != nil || string(got) != "planted-receipt\n" {
+			t.Fatalf("planted receipt mutated: %q %v", got, err)
+		}
+		for _, name := range []string{"commons-2026-08.sqlite3", "commons-2026-08.sqlite3.sha256"} {
+			if _, err := os.Lstat(filepath.Join(monthly, name)); !os.IsNotExist(err) {
+				t.Fatalf("this-invocation monthly leaf %s should be rolled back", name)
+			}
+		}
+	})
+
+	t.Run("no-unsafe-unlink-after-replacement", func(t *testing.T) {
+		dbPath, backupDir := setupBackupTree(t)
+		monthly := filepath.Join(backupDir, "monthly")
+		if err := os.Mkdir(monthly, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		sidecar := filepath.Join(monthly, "commons-2026-08.sqlite3.sha256")
+		if err := os.WriteFile(sidecar, []byte("planted-monthly\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		repl := filepath.Join(monthly, "planted-repl")
+		if err := os.WriteFile(repl, []byte("replacement-monthly"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		hold := filepath.Join(filepath.Dir(backupDir), "hold")
+		status := filepath.Join(filepath.Dir(backupDir), "status")
+		if err := os.WriteFile(hold, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("COMMONS_OPS_HOLD", hold)
+		t.Setenv("COMMONS_OPS_HOLD_POINT", opsfs.HoldPreUnlink)
+		t.Setenv("COMMONS_OPS_HOLD_STATUS", status)
+
+		errCh := make(chan error, 1)
+		go func() {
+			_, err := Backup(context.Background(), dbPath, backupDir)
+			errCh <- err
+		}()
+		waitHoldReady(t, status)
+		leaf := filepath.Join(monthly, "commons-2026-08.sqlite3")
+		if err := os.Remove(leaf); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(repl, leaf); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(hold); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-errCh; err == nil {
+			t.Fatal("backup succeeded despite planted monthly sidecar")
+		}
+		got, err := os.ReadFile(leaf)
+		if err != nil || string(got) != "replacement-monthly" {
+			t.Fatalf("rollback unlinked a replaced same-uid monthly leaf: %q %v", got, err)
+		}
+		planted, err := os.ReadFile(sidecar)
+		if err != nil || string(planted) != "planted-monthly\n" {
+			t.Fatalf("planted monthly checksum mutated: %q %v", planted, err)
+		}
 	})
 }
 

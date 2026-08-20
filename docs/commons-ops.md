@@ -81,8 +81,17 @@ backup, GNU `sha256sum` sidecar, and sanitized receipt must each be validated
 regular files, the checksum must name that absolute monthly path, and the
 receipt `file`/`sha256` must match the file digest. Malformed or mismatched
 sidecars fail closed. A symlink, FIFO, directory, hard link, or other occupant
-of the monthly name fails closed. Successfully published leaves are not
-unlinked on a later failure or signal.
+of the monthly name fails closed. Daily leaves successfully published by this
+invocation are not unlinked on a later failure or signal. Monthly publication
+is different: if a later monthly publish step fails, only leaves proven published
+by this invocation are rolled back in reverse order using the trusted
+`(dev,ino)` identity from the validated source/publication, revalidated before
+the name-based unlink. A preexisting or planted occupant with a different
+identity is never removed. A same-uid actor can still replace the name after
+the last rollback check; that residual unlink race is not claimed closed.
+Preexisting incoherent monthly sets (partial or corrupted names not owned by
+this invocation's rollback) require manual cleanup; automatic rollback does not
+weaken fail-closed rejection of those sets.
 
 Backup receipts contain only deterministic metadata (`file`, `sha256`,
 `verified_at`, `schema`, `schema_digest`, `counts`, `selected_digest`,

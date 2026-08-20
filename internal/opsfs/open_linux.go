@@ -841,6 +841,20 @@ func (d *Dir) ReadValidatedRegular(name string, limit int) ([]byte, error) {
 	return readFD(fd, limit)
 }
 
+// PublishedIdentity is the trusted (dev,ino) of a leaf after renameat2
+// succeeded. Callers may use it to roll back only that proven publication.
+// The zero value means no publication was proven for the destination name.
+type PublishedIdentity struct {
+	Name string
+	Dev  uint64
+	Ino  uint64
+}
+
+// Proven reports whether this identity names a leaf that renameat2 placed.
+func (p PublishedIdentity) Proven() bool {
+	return p.Name != "" && (p.Dev != 0 || p.Ino != 0)
+}
+
 // PublishNoReplace renameat2(RENAME_NOREPLACE)s fromName in from onto toName
 // in d, then fsyncs the published leaf and destination directory. The private
 // source leaf is revalidated immediately before the rename. Its descriptor
@@ -849,69 +863,82 @@ func (d *Dir) ReadValidatedRegular(name string, limit int) ([]byte, error) {
 // published destination must still be that same regular inode or the publish
 // fails closed.
 //
+// When renameat2 succeeds, the returned identity is the validated source
+// (dev,ino) even if a later destination-open or fsync step fails, so callers
+// can roll back that proven publication. If the destination name is no longer
+// that inode, the identity is zero so callers do not unlink a replacement.
+//
 // A same-uid actor can still replace the source name between validation and
 // renameat2, or retarget the destination name after rename. Those pre-rename
 // / post-rename name races are detected by the post-publication identity
 // check; they are not atomically prevented.
-func (d *Dir) PublishNoReplace(from *Dir, fromName, toName string) error {
+func (d *Dir) PublishNoReplace(from *Dir, fromName, toName string) (PublishedIdentity, error) {
+	var zero PublishedIdentity
 	if d == nil || d.FD < 0 || from == nil || from.FD < 0 {
-		return fmt.Errorf("closed directory")
+		return zero, fmt.Errorf("closed directory")
 	}
 	if err := validComponent(fromName); err != nil {
-		return err
+		return zero, err
 	}
 	if err := validComponent(toName); err != nil {
-		return err
+		return zero, err
 	}
 	if err := from.ValidateExact(DirMode); err != nil {
-		return err
+		return zero, err
 	}
 	if err := d.ValidateExact(DirMode); err != nil {
-		return err
+		return zero, err
 	}
 	src, srcStat, err := from.OpenValidatedRegular(fromName)
 	if err != nil {
-		return err
+		return zero, err
 	}
 	defer unix.Close(src)
 	if err := WaitHold(context.Background(), HoldPrePublishRename); err != nil {
-		return err
+		return zero, err
 	}
 	err = unix.Renameat2(from.FD, fromName, d.FD, toName, unix.RENAME_NOREPLACE)
 	if isEEXIST(err) {
-		return fmt.Errorf("destination exists")
+		return zero, fmt.Errorf("destination exists")
 	}
 	if err != nil {
-		return err
+		return zero, err
 	}
+	// renameat2 moved the validated source inode; keep that identity even when
+	// destination open/fsync fails so callers can roll it back safely.
+	pub := PublishedIdentity{Name: toName, Dev: srcStat.Dev, Ino: srcStat.Ino}
 	fd, err := d.openChild(toName, unix.O_RDONLY, 0)
 	if err != nil {
-		return err
+		return pub, err
 	}
 	var dstStat unix.Stat_t
 	if err := unix.Fstat(fd, &dstStat); err != nil {
 		_ = unix.Close(fd)
-		return err
+		return pub, err
 	}
 	uid, gid, err := currentIDs()
 	if err != nil {
 		_ = unix.Close(fd)
-		return err
+		return pub, err
 	}
 	if err := validateFileStat(&dstStat, uid, gid, FileMode); err != nil {
 		_ = unix.Close(fd)
-		return err
+		return pub, err
 	}
 	if !sameFile(&srcStat, &dstStat) {
 		_ = unix.Close(fd)
-		return fmt.Errorf("published inode changed")
+		// Destination name is no longer our inode; do not authorize unlink.
+		return zero, fmt.Errorf("published inode changed")
 	}
 	syncErr := unix.Fsync(fd)
 	_ = unix.Close(fd)
 	if syncErr != nil {
-		return syncErr
+		return pub, syncErr
 	}
-	return unix.Fsync(d.FD)
+	if err := unix.Fsync(d.FD); err != nil {
+		return pub, err
+	}
+	return pub, nil
 }
 
 // CopyExclusive copies a validated regular child into dest as destName.
