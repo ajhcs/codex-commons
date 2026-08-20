@@ -1606,6 +1606,7 @@ grep -Fq 'refusing WAL symlink' "$root/first-wal.err"
 assert_rollback_receipt first_deploy_cleanup_failed stopped uncertain first-fail validated previous
 assert_systemctl_counts 1 1 1
 rm -f -- "$db-wal"
+printf 'DEPLOY_FIRST_DEPLOY_WAL_SYMLINK_REJECT_CHILD_EXIT=%s\n' "$first_wal_status"
 printf 'DEPLOY_FIRST_DEPLOY_WAL_SYMLINK_REJECT=pass\n'
 
 /bin/sh "$repo_root/ops/test-restore.sh"
