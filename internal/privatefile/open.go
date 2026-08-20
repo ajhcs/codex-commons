@@ -1,16 +1,14 @@
 //go:build linux
 
-// Package privatefile opens Linux private configuration files without
-// check/use races. Callers read bounded bytes from the opened descriptor.
 package privatefile
 
 import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"runtime"
-	"strings"
 
 	"golang.org/x/sys/unix"
 )
@@ -43,10 +41,10 @@ func Open(path, label string, maxSize int64) (*os.File, error) {
 }
 
 // Read opens path with Open, reads at most maxSize+1 bytes from that
-// descriptor, and closes it. The file is rejected if it contains more than
-// maxSize bytes, including when the already-open inode grows after fstat.
-// The returned slice never includes bytes from a replaced path and is never
-// a silently truncated prefix.
+// descriptor (saturating at math.MaxInt64), and closes it. The file is
+// rejected if it contains more than maxSize bytes, including when the
+// already-open inode grows after fstat. The returned slice never includes
+// bytes from a replaced path and is never a silently truncated prefix.
 func Read(path, label string, maxSize int64) ([]byte, error) {
 	file, err := Open(path, label, maxSize)
 	if err != nil {
@@ -64,10 +62,11 @@ func Read(path, label string, maxSize int64) ([]byte, error) {
 }
 
 // readFromOpened reads at most maxSize+1 bytes from an already-open private
-// descriptor and rejects the read if the inode now contains more than maxSize
-// bytes. Callers that decode JSON must decode from these bounded bytes.
+// descriptor, saturating the probe length at math.MaxInt64, and rejects the
+// read if the inode now contains more than maxSize bytes. Callers that decode
+// JSON must decode from these bounded bytes.
 func readFromOpened(file *os.File, label string, maxSize int64) ([]byte, error) {
-	body, err := io.ReadAll(io.LimitReader(file, maxSize+1))
+	body, err := io.ReadAll(io.LimitReader(file, saturatedReadLimit(maxSize)))
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", label, err)
 	}
@@ -75,6 +74,17 @@ func readFromOpened(file *os.File, label string, maxSize int64) ([]byte, error) 
 		return nil, fmt.Errorf("%s exceeds %d bytes", label, maxSize)
 	}
 	return body, nil
+}
+
+// saturatedReadLimit is maxSize+1 unless that addition would overflow
+// int64. At math.MaxInt64 the extra probe byte cannot be represented, so
+// the limit saturates; a later len(body) > maxSize check is then
+// impossible, and Read still returns the contents that fit in a slice.
+func saturatedReadLimit(maxSize int64) int64 {
+	if maxSize < math.MaxInt64 {
+		return maxSize + 1
+	}
+	return math.MaxInt64
 }
 
 func validate(file *os.File, label string, maxSize int64) error {
@@ -107,12 +117,4 @@ func openError(label string, err error) error {
 		return fmt.Errorf("%s must be a regular file", label)
 	}
 	return fmt.Errorf("%s: %w", label, err)
-}
-
-func normalizeLabel(label string) string {
-	label = strings.TrimSpace(label)
-	if label == "" {
-		return "private configuration file"
-	}
-	return label
 }

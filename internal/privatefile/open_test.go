@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -120,6 +121,21 @@ func TestReadAcceptsExactMaxSize(t *testing.T) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatal("exact maxSize read failed")
+	}
+}
+
+func TestReadReturnsContentsWhenMaxSizeIsMaxInt64(t *testing.T) {
+	want := []byte("maxint64-private-contents")
+	path := writePrivate(t, t.TempDir(), "maxint", want, 0o600)
+	if saturatedReadLimit(math.MaxInt64) != math.MaxInt64 {
+		t.Fatal("maxSize+1 was not saturated at math.MaxInt64")
+	}
+	got, err := Read(path, testLabel, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("MaxInt64 maxSize dropped contents: got %q want %q", got, want)
 	}
 }
 
