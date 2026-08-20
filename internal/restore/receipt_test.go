@@ -2,6 +2,8 @@ package restore
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"strconv"
@@ -15,7 +17,10 @@ const (
 	testRecordedAt = "2026-08-20T00:00:00Z"
 	testReleaseID  = "continuous-dogfood-test"
 	testDrillID    = "drill-1"
-	goldenDigest   = "5582f18b296b59b6889d058a1605f7d0b683608a922597e7ce513b4c82892f4b"
+	// Independent SHA-256 of the v1 preimage: length-prefixed domain, version,
+	// hash algorithm "sha256", then the typed receipt fields. Recomputed below
+	// without calling Fingerprint or writeFramed.
+	goldenDigest = "509513eca6cad375cbbbd9586196ec12ade857c1c56c5307e85f805393c34368"
 )
 
 func testInstallationID() [16]byte {
@@ -72,6 +77,51 @@ func TestParseValidCanonicalReceipt(t *testing.T) {
 	reordered := []byte(`{"restored_backup_digest":"` + testBackupHex() + `","installation_id":"` + testInstallationHex() + `","recorded_at":"` + testRecordedAt + `","drill_id":"` + testDrillID + `","release_id":"` + testReleaseID + `","schema_version":17}` + "\n")
 	if mustParse(t, reordered).Fingerprint() != receipt.Fingerprint() {
 		t.Fatal("key order or trailing newline changed the fingerprint")
+	}
+}
+
+func TestParseTrailingBytesAllowOnlyRFC8259JSONWhitespace(t *testing.T) {
+	base := canonicalInput()
+	accept := []struct {
+		name string
+		tail []byte
+	}{
+		{name: "none", tail: nil},
+		{name: "space", tail: []byte(" ")},
+		{name: "tab", tail: []byte("\t")},
+		{name: "lf", tail: []byte("\n")},
+		{name: "cr", tail: []byte("\r")},
+		{name: "mixed rfc8259", tail: []byte(" \t\r\n")},
+	}
+	for _, test := range accept {
+		t.Run("accept/"+test.name, func(t *testing.T) {
+			input := append(append([]byte{}, base...), test.tail...)
+			if mustParse(t, input).Fingerprint() != goldenDigest {
+				t.Fatalf("accepted trailing %q changed the fingerprint", test.tail)
+			}
+		})
+	}
+	reject := []struct {
+		name string
+		tail []byte
+	}{
+		{name: "nbsp u+00a0", tail: []byte("\u00a0")},
+		{name: "nel u+0085", tail: []byte("\u0085")},
+		{name: "line separator u+2028", tail: []byte("\u2028")},
+		{name: "paragraph separator u+2029", tail: []byte("\u2029")},
+		{name: "ideographic space u+3000", tail: []byte("\u3000")},
+		{name: "nbsp after rfc whitespace", tail: []byte(" \u00a0")},
+		{name: "nel after lf", tail: []byte("\n\u0085")},
+		{name: "letter", tail: []byte("x")},
+	}
+	for _, test := range reject {
+		t.Run("reject/"+test.name, func(t *testing.T) {
+			input := append(append([]byte{}, base...), test.tail...)
+			_, err := Parse(input)
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("Parse trailing %s err=%v", test.name, err)
+			}
+		})
 	}
 }
 
@@ -156,8 +206,9 @@ func TestParseAcceptsReorderedKeysAndFractionalTimestamp(t *testing.T) {
 func TestFingerprintIsDeterministicAndInstallationBound(t *testing.T) {
 	first := mustParse(t, canonicalInput())
 	second := mustParse(t, canonicalInput())
-	if first.Fingerprint() != goldenDigest || second.Fingerprint() != goldenDigest {
-		t.Fatalf("fingerprint=%q want %q", first.Fingerprint(), goldenDigest)
+	independent := independentFingerprintV1(first)
+	if first.Fingerprint() != goldenDigest || second.Fingerprint() != goldenDigest || independent != goldenDigest {
+		t.Fatalf("fingerprint=%q independent=%q want %q", first.Fingerprint(), independent, goldenDigest)
 	}
 	id := testInstallationID()
 	if err := first.Bind(id[:]); err != nil {
@@ -167,6 +218,34 @@ func TestFingerprintIsDeterministicAndInstallationBound(t *testing.T) {
 	if err := first.Bind(foreign); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("bind foreign identity err=%v", err)
 	}
+}
+
+func independentFingerprintV1(r Receipt) string {
+	var buf bytes.Buffer
+	frame := func(name string, value []byte) {
+		var header [8]byte
+		binary.BigEndian.PutUint64(header[:], uint64(len(name)))
+		_, _ = buf.Write(header[:])
+		_, _ = buf.WriteString(name)
+		binary.BigEndian.PutUint64(header[:], uint64(len(value)))
+		_, _ = buf.Write(header[:])
+		_, _ = buf.Write(value)
+	}
+	frame("domain", []byte("codex-commons.installation.restore-evidence"))
+	var version [4]byte
+	binary.BigEndian.PutUint32(version[:], 1)
+	frame("version", version[:])
+	frame("hash_algorithm", []byte("sha256"))
+	frame("installation_id", r.InstallationID[:])
+	frame("drill_id", []byte(r.DrillID))
+	frame("recorded_at", []byte(r.RecordedAt))
+	frame("restored_backup_digest", r.RestoredBackupDigest[:])
+	var schema [4]byte
+	binary.BigEndian.PutUint32(schema[:], uint32(r.SchemaVersion))
+	frame("schema_version", schema[:])
+	frame("release_id", []byte(r.ReleaseID))
+	sum := sha256.Sum256(buf.Bytes())
+	return hex.EncodeToString(sum[:])
 }
 
 func TestFingerprintResistsFramingAmbiguity(t *testing.T) {
@@ -187,9 +266,69 @@ func TestFingerprintResistsFramingAmbiguity(t *testing.T) {
 	if schemaLeft.Fingerprint() == schemaRight.Fingerprint() {
 		t.Fatal("schema_version integer framing collapsed")
 	}
+
+	// Swap the 16-byte identity with the digest prefix so the 48-byte
+	// identity||digest concatenation is a redistribution of the same bytes.
 	swapped := base
 	copy(swapped.InstallationID[:], base.RestoredBackupDigest[:16])
-	if swapped.Fingerprint() == base.Fingerprint() {
-		t.Fatal("field-name framing collapsed installation_id and backup digest prefix")
+	copy(swapped.RestoredBackupDigest[:16], base.InstallationID[:])
+	var baseConcat, swappedConcat [48]byte
+	copy(baseConcat[:16], base.InstallationID[:])
+	copy(baseConcat[16:], base.RestoredBackupDigest[:])
+	copy(swappedConcat[:16], swapped.InstallationID[:])
+	copy(swappedConcat[16:], swapped.RestoredBackupDigest[:])
+	if bytes.Equal(baseConcat[:], swappedConcat[:]) {
+		t.Fatal("redistributed identity/digest concatenation was unchanged")
 	}
+	if !bytesEqualAsSet(baseConcat[:], swappedConcat[:]) {
+		t.Fatal("redistributed identity/digest did not preserve the 48-byte multiset")
+	}
+	if swapped.Fingerprint() == base.Fingerprint() {
+		t.Fatal("field-name framing collapsed redistributed installation_id and restored_backup_digest")
+	}
+
+	for _, test := range []struct {
+		name                     string
+		delimiter                string
+		leftDrill, leftRelease   string
+		rightDrill, rightRelease string
+	}{
+		{name: "pipe delimiter", delimiter: "|", leftDrill: "a|b", leftRelease: "c", rightDrill: "a", rightRelease: "b|c"},
+		{name: "quote", delimiter: "\"", leftDrill: "a\"b", leftRelease: "c", rightDrill: "a", rightRelease: "b\"c"},
+		{name: "newline", delimiter: "\n", leftDrill: "a\nb", leftRelease: "c", rightDrill: "a", rightRelease: "b\nc"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if test.leftDrill+test.delimiter+test.leftRelease != test.rightDrill+test.delimiter+test.rightRelease {
+				t.Fatalf("delimiter case %s is not a join-preserving split", test.name)
+			}
+			left := base
+			left.DrillID = test.leftDrill
+			left.ReleaseID = test.leftRelease
+			right := base
+			right.DrillID = test.rightDrill
+			right.ReleaseID = test.rightRelease
+			if left.Fingerprint() == right.Fingerprint() {
+				t.Fatalf("length-prefix framing collapsed %s field split", test.name)
+			}
+		})
+	}
+}
+
+func bytesEqualAsSet(left, right []byte) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	counts := make([]int, 256)
+	for _, b := range left {
+		counts[b]++
+	}
+	for _, b := range right {
+		counts[b]--
+	}
+	for _, n := range counts {
+		if n != 0 {
+			return false
+		}
+	}
+	return true
 }

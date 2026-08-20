@@ -166,3 +166,83 @@ func TestRecordRestoreEvidenceConcurrentExactReplay(t *testing.T) {
 		t.Fatalf("concurrent evidence count=%d", countRestoreEvidence(t, store))
 	}
 }
+
+func TestRecordRestoreEvidenceConcurrentConflictingPayloads(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "conflict-race.sqlite3"))
+	must(t, err)
+	defer store.Close()
+	const n = 8
+	payloads := make([][]byte, n)
+	for i := 0; i < n; i++ {
+		payloads[i] = restoreReceiptJSON(t, store, "drill-1", "continuous-dogfood-test", "2026-08-20T00:00:00Z", testBackupHex(byte(0xbb+i)), 17)
+	}
+	type outcome struct {
+		got RestoreEvidence
+		err error
+	}
+	results := make([]outcome, n)
+	var ready, done sync.WaitGroup
+	ready.Add(n)
+	done.Add(n)
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
+		i := i
+		go func() {
+			defer done.Done()
+			ready.Done()
+			<-start
+			got, err := store.RecordRestoreEvidence(ctx, payloads[i])
+			results[i] = outcome{got: got, err: err}
+		}()
+	}
+	ready.Wait()
+	close(start)
+	done.Wait()
+
+	var winners []int
+	for i, result := range results {
+		if result.err == nil {
+			winners = append(winners, i)
+			continue
+		}
+		if !errors.Is(result.err, domain.ErrConflict) {
+			t.Fatalf("payload %d err=%v", i, result.err)
+		}
+	}
+	if len(winners) != 1 {
+		t.Fatalf("winners=%v want exactly one", winners)
+	}
+	winner := results[winners[0]]
+	if countRestoreEvidence(t, store) != 1 {
+		t.Fatalf("conflicting race count=%d", countRestoreEvidence(t, store))
+	}
+
+	replay, err := store.RecordRestoreEvidence(ctx, payloads[winners[0]])
+	must(t, err)
+	if replay.RestoreReceiptDigest != winner.got.RestoreReceiptDigest || !restoreEvidenceEqual(replay, winner.got) {
+		t.Fatalf("winner replay digest=%q stored=%q", replay.RestoreReceiptDigest, winner.got.RestoreReceiptDigest)
+	}
+	if countRestoreEvidence(t, store) != 1 {
+		t.Fatalf("winner replay count=%d", countRestoreEvidence(t, store))
+	}
+
+	for i, payload := range payloads {
+		if i == winners[0] {
+			continue
+		}
+		if _, err := store.RecordRestoreEvidence(ctx, payload); !errors.Is(err, domain.ErrConflict) {
+			t.Fatalf("losing payload %d replay err=%v", i, err)
+		}
+	}
+	if countRestoreEvidence(t, store) != 1 {
+		t.Fatalf("loser replay count=%d", countRestoreEvidence(t, store))
+	}
+
+	var stored RestoreEvidence
+	must(t, store.DB().QueryRowContext(ctx, `SELECT drill_id,installation_id,recorded_at,restore_receipt_digest,restored_backup_digest,schema_version,release_id FROM installation_restore_evidence`).Scan(
+		&stored.DrillID, &stored.InstallationID, &stored.RecordedAt, &stored.RestoreReceiptDigest, &stored.RestoredBackupDigest, &stored.SchemaVersion, &stored.ReleaseID))
+	if !restoreEvidenceEqual(stored, winner.got) {
+		t.Fatalf("stored row=%+v winner=%+v", stored, winner.got)
+	}
+}

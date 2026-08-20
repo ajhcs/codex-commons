@@ -23,15 +23,16 @@ import (
 )
 
 const (
-	MaxBytes            = 4096
-	maxStableIDBytes    = 200
-	maxTimestampBytes   = 100
-	minSchemaVersion    = 1
-	maxSchemaVersion    = 10000
-	fingerprintDomain   = "codex-commons.installation.restore-evidence"
-	fingerprintVersion  = uint32(1)
-	installationIDBytes = 16
-	digestBytes         = 32
+	MaxBytes                 = 4096
+	maxStableIDBytes         = 200
+	maxTimestampBytes        = 100
+	minSchemaVersion         = 1
+	maxSchemaVersion         = 10000
+	fingerprintDomain        = "codex-commons.installation.restore-evidence"
+	fingerprintVersion       = uint32(1)
+	fingerprintHashAlgorithm = "sha256"
+	installationIDBytes      = 16
+	digestBytes              = 32
 )
 
 var (
@@ -59,6 +60,8 @@ func invalid(reason string) error {
 
 // Parse strictly decodes one JSON object. Duplicate keys, unknown fields,
 // trailing data, control characters, wrong types, and oversized input fail closed.
+// Trailing bytes after the object may be only RFC 8259 JSON whitespace
+// (SP, HT, LF, CR).
 func Parse(input []byte) (Receipt, error) {
 	var out Receipt
 	if err := precheck(input); err != nil {
@@ -115,7 +118,7 @@ func Parse(input []byte) (Receipt, error) {
 	if err != nil || end != json.Delim('}') {
 		return Receipt{}, invalid("malformed JSON")
 	}
-	if rest := bytes.TrimSpace(input[dec.InputOffset():]); len(rest) != 0 {
+	if rest := input[dec.InputOffset():]; !onlyRFC8259JSONWhitespace(rest) {
 		return Receipt{}, invalid("trailing data")
 	}
 	for _, field := range requiredReceiptFields {
@@ -142,6 +145,17 @@ func precheck(input []byte) error {
 		}
 	}
 	return nil
+}
+
+func onlyRFC8259JSONWhitespace(rest []byte) bool {
+	for _, b := range rest {
+		switch b {
+		case ' ', '\t', '\n', '\r':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func parseSchemaVersion(raw json.RawMessage) (int, error) {
@@ -257,15 +271,17 @@ func (r Receipt) Bind(installationID []byte) error {
 	return nil
 }
 
-// Fingerprint is a domain-separated SHA-256 over versioned length-prefixed
-// fields. It does not hash JSON text, review_secret, paths, prompts, or payloads.
+// Fingerprint is a domain-separated SHA-256 over a versioned length-prefixed
+// preimage. v1 explicitly frames domain, version, and hash algorithm "sha256"
+// before the typed receipt fields. It does not hash JSON text, review_secret,
+// paths, prompts, or payloads.
 func (r Receipt) Fingerprint() string {
 	h := sha256.New()
-	_, _ = io.WriteString(h, fingerprintDomain)
-	_, _ = h.Write([]byte{0})
+	writeFramed(h, "domain", []byte(fingerprintDomain))
 	var version [4]byte
 	binary.BigEndian.PutUint32(version[:], fingerprintVersion)
-	_, _ = h.Write(version[:])
+	writeFramed(h, "version", version[:])
+	writeFramed(h, "hash_algorithm", []byte(fingerprintHashAlgorithm))
 	writeFramed(h, "installation_id", r.InstallationID[:])
 	writeFramed(h, "drill_id", []byte(r.DrillID))
 	writeFramed(h, "recorded_at", []byte(r.RecordedAt))

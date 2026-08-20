@@ -26,8 +26,9 @@ uppercase or non-hex SHA-256 digests, and invalid schema, release, drill, or
 timestamp values. A validated receipt must match the live `installation_id`;
 cross-installation identities are rejected. The store then derives a
 deterministic domain-separated fingerprint (`codex-commons.installation.restore-evidence`
-v1) with explicit length-prefixed field framing over the bound identity, drill,
-timestamp, backup digest, schema version, and release id. Exact replay is
+v1) that explicitly frames hash algorithm `sha256` with the domain and version,
+then length-prefixed field framing over the bound identity, drill, timestamp,
+backup digest, schema version, and release id. Exact replay is
 idempotent; drill or digest collisions fail closed. Recording a valid receipt
 does not set `restore_status` and does not make Beta prerequisites true.
 Backup/restore CLI commands remain later work.
