@@ -67,42 +67,44 @@ func invokeBackup(stdout, stderr io.Writer, dbPath, backupDir string) int {
 	signal.Notify(sigCh, unix.SIGHUP, unix.SIGINT, unix.SIGTERM)
 	defer signal.Stop(sigCh)
 
-	errCh := make(chan error, 1)
-	var published string
+	type outcome struct {
+		path string
+		err  error
+	}
+	outCh := make(chan outcome, 1)
 	go func() {
 		path, err := opsbackup.Backup(ctx, dbPath, backupDir)
-		published = path
-		errCh <- err
+		outCh <- outcome{path: path, err: err}
 	}()
 
 	select {
-	case err := <-errCh:
+	case out := <-outCh:
 		select {
 		case sig := <-sigCh:
-			if err == nil {
-				_, _ = fmt.Fprintln(stdout, published)
+			if out.err == nil {
+				_, _ = fmt.Fprintln(stdout, out.path)
 				return 0
 			}
 			return signalCode(sig)
 		default:
-			if err != nil {
-				if errors.Is(err, opsbackup.ErrBusy) {
+			if out.err != nil {
+				if errors.Is(out.err, opsbackup.ErrBusy) {
 					_, _ = fmt.Fprintln(stderr, "commons-ops: backup directory busy")
 					return 75
 				}
-				_, _ = fmt.Fprintf(stderr, "commons-ops: rejected: %v\n", err)
-				if errors.Is(err, context.Canceled) {
+				_, _ = fmt.Fprintf(stderr, "commons-ops: rejected: %v\n", out.err)
+				if errors.Is(out.err, context.Canceled) {
 					return 64
 				}
 				return 64
 			}
-			_, _ = fmt.Fprintln(stdout, published)
+			_, _ = fmt.Fprintln(stdout, out.path)
 			return 0
 		}
 	case sig := <-sigCh:
 		cancel()
 		select {
-		case <-errCh:
+		case <-outCh:
 		case <-time.After(30 * time.Second):
 		}
 		return signalCode(sig)

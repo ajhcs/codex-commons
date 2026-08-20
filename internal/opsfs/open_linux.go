@@ -188,7 +188,8 @@ func OpenDirNoFollow(path string) (*Dir, error) {
 }
 
 // OpenBackupDir opens path as a canonical, operator-owned, mode-0700
-// non-symlink directory. Intermediate aliases fail closed.
+// non-symlink directory. The directory must already exist; this does not
+// create it. Intermediate aliases fail closed.
 func OpenBackupDir(path string) (*Dir, error) {
 	d, err := OpenDirNoFollow(path)
 	if err != nil {
@@ -828,8 +829,20 @@ func (d *Dir) SHA256(name string) (string, error) {
 	}
 }
 
+// ReadValidatedRegular reads a direct child that is a regular nlink=1
+// mode-0600 operator-owned file, up to limit bytes.
+func (d *Dir) ReadValidatedRegular(name string, limit int) ([]byte, error) {
+	fd, _, err := d.OpenValidatedRegular(name)
+	if err != nil {
+		return nil, err
+	}
+	defer unix.Close(fd)
+	return readFD(fd, limit)
+}
+
 // PublishNoReplace renameat2(RENAME_NOREPLACE)s fromName in from onto toName
-// in d, then fsyncs the published leaf and destination directory.
+// in d, then fsyncs the published leaf and destination directory. The private
+// source leaf is revalidated immediately before the rename.
 func (d *Dir) PublishNoReplace(from *Dir, fromName, toName string) error {
 	if d == nil || d.FD < 0 || from == nil || from.FD < 0 {
 		return fmt.Errorf("closed directory")
@@ -840,7 +853,18 @@ func (d *Dir) PublishNoReplace(from *Dir, fromName, toName string) error {
 	if err := validComponent(toName); err != nil {
 		return err
 	}
-	err := unix.Renameat2(from.FD, fromName, d.FD, toName, unix.RENAME_NOREPLACE)
+	if err := from.ValidateExact(DirMode); err != nil {
+		return err
+	}
+	if err := d.ValidateExact(DirMode); err != nil {
+		return err
+	}
+	src, _, err := from.OpenValidatedRegular(fromName)
+	if err != nil {
+		return err
+	}
+	_ = unix.Close(src)
+	err = unix.Renameat2(from.FD, fromName, d.FD, toName, unix.RENAME_NOREPLACE)
 	if isEEXIST(err) {
 		return fmt.Errorf("destination exists")
 	}
@@ -860,7 +884,17 @@ func (d *Dir) PublishNoReplace(from *Dir, fromName, toName string) error {
 }
 
 // CopyExclusive copies a validated regular child into dest as destName.
+// The source directory and leaf are revalidated immediately before the copy.
 func (d *Dir) CopyExclusive(name string, dest *Dir, destName string) error {
+	if dest == nil || dest.FD < 0 {
+		return fmt.Errorf("closed directory")
+	}
+	if err := d.ValidateExact(DirMode); err != nil {
+		return err
+	}
+	if err := dest.ValidateExact(DirMode); err != nil {
+		return err
+	}
 	src, err := d.openChild(name, unix.O_RDONLY, 0)
 	if err != nil {
 		return err

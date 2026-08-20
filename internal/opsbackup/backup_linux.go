@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"codex-commons/internal/opsfs"
-	"golang.org/x/sys/unix"
 	sqlite "modernc.org/sqlite"
 )
 
@@ -54,7 +53,7 @@ func Backup(ctx context.Context, dbPath, backupDir string) (published string, er
 
 	root, err := opsfs.OpenBackupDir(backupDir)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("backup root must be an existing owned 0700 directory: %w", err)
 	}
 	defer root.Close()
 	if err := root.FlockExclusiveNonblock(); err != nil {
@@ -189,10 +188,7 @@ func Backup(ctx context.Context, dbPath, backupDir string) (published string, er
 	if err := opsfs.WaitHold(ctx, opsfs.HoldPrePublish); err != nil {
 		return fail(err)
 	}
-	if err := ctx.Err(); err != nil {
-		return fail(err)
-	}
-	if err := root.ValidateExact(opsfs.DirMode); err != nil {
+	if err := revalidateLocked(ctx, src, root, daily, tmp); err != nil {
 		return fail(err)
 	}
 
@@ -204,7 +200,7 @@ func Backup(ctx context.Context, dbPath, backupDir string) (published string, er
 	if err := opsfs.WaitHold(ctx, opsfs.HoldBetweenPublications); err != nil {
 		return failAfter(err)
 	}
-	if err := ctx.Err(); err != nil {
+	if err := revalidateLocked(ctx, src, root, daily, tmp); err != nil {
 		return failAfter(err)
 	}
 	if err := daily.PublishNoReplace(tmp, leaf+".sha256", leaf+".sha256"); err != nil {
@@ -219,7 +215,10 @@ func Backup(ctx context.Context, dbPath, backupDir string) (published string, er
 	if err := opsfs.WaitHold(ctx, opsfs.HoldAfterPublications); err != nil {
 		return failAfter(err)
 	}
-	if err := ctx.Err(); err != nil {
+	if err := revalidateLocked(ctx, src, root, daily, monthly); err != nil {
+		return failAfter(err)
+	}
+	if err := validatePublishedSet(daily, leaf); err != nil {
 		return failAfter(err)
 	}
 
@@ -227,10 +226,10 @@ func Backup(ctx context.Context, dbPath, backupDir string) (published string, er
 	if err := publishMonthly(daily, monthly, leaf, monthLeaf, stamp, digest, meta); err != nil {
 		return failAfter(err)
 	}
-	if err := retainValidated(daily, dailyKeep); err != nil {
+	if err := retainValidated(ctx, daily, dailyKeep); err != nil {
 		return failAfter(err)
 	}
-	if err := retainValidated(monthly, monthlyKeep); err != nil {
+	if err := retainValidated(ctx, monthly, monthlyKeep); err != nil {
 		return failAfter(err)
 	}
 
@@ -241,18 +240,45 @@ func Backup(ctx context.Context, dbPath, backupDir string) (published string, er
 	return dailyPath, nil
 }
 
+func revalidateLocked(ctx context.Context, src *opsfs.PinnedDB, dirs ...*opsfs.Dir) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if src != nil {
+		if err := src.Revalidate(); err != nil {
+			return err
+		}
+	}
+	for _, dir := range dirs {
+		if dir == nil {
+			continue
+		}
+		if err := dir.ValidateExact(opsfs.DirMode); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func publishMonthly(daily, monthly *opsfs.Dir, dailyLeaf, monthLeaf, stamp, digest string, meta backupMeta) error {
+	if err := daily.ValidateExact(opsfs.DirMode); err != nil {
+		return err
+	}
+	if err := monthly.ValidateExact(opsfs.DirMode); err != nil {
+		return err
+	}
 	absent, err := monthly.Absent(monthLeaf)
 	if err != nil {
 		return err
 	}
 	if !absent {
-		fd, _, err := monthly.OpenValidatedRegular(monthLeaf)
-		if err != nil {
+		if err := validatePublishedSet(monthly, monthLeaf); err != nil {
 			return fmt.Errorf("monthly destination exists: %w", err)
 		}
-		_ = unix.Close(fd)
 		return nil
+	}
+	if err := validatePublishedSet(daily, dailyLeaf); err != nil {
+		return err
 	}
 
 	tmp, tmpName, err := monthly.MkdirPrivate("monthly")

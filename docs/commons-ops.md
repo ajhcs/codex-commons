@@ -42,8 +42,13 @@ does not set `restore_status` and does not make Beta prerequisites true.
 Operator paths are absolute, slash-separated, and limited to `[A-Za-z0-9._-]`
 components. Traversal, controls, whitespace, and SQL/shell punctuation fail
 closed. Linux `openat(2)` with `O_NOFOLLOW` walks every component. The backup
-root, `daily/`, and `monthly/` directories must be canonical, contained,
-non-symlink directories owned by the effective uid/gid with exact mode 0700.
+root must already exist as a canonical, non-symlink directory owned by the
+effective uid/gid with exact mode 0700; backup does not create
+`COMMONS_BACKUP_DIR`. `daily/` and `monthly/` may be created as contained
+mode-0700 children of that existing root. All three must remain canonical,
+contained, non-symlink directories owned by the effective uid/gid with exact
+mode 0700.
+
 The live database must be a regular nlink=1 mode-0600 file whose parent is an
 operator-owned directory that is not group or world writable. FIFOs, dangling
 symlinks, hard links, and foreign owner/mode objects fail closed.
@@ -55,11 +60,16 @@ A second cooperating invocation exits `75` (busy). Creators set umask 077.
 Publication prepares the SQLite copy plus checksum and sanitized receipt
 sidecars in a random private mode-0700 directory inside the verified
 destination, fsyncs file data and directories, then publishes each leaf with
-`renameat2(RENAME_NOREPLACE)`. Parent directories are fsynced after each public
-rename. Monthly publication uses the same no-follow/no-replace policy: an
-already-valid monthly file is left in place; a symlink, FIFO, directory, or
-other occupant of the monthly name fails closed. Successfully published leaves
-are not unlinked on a later failure or signal.
+`renameat2(RENAME_NOREPLACE)`. The private source leaf and destination
+directory are revalidated immediately before each publish or copy. Parent
+directories are fsynced after each public rename. Monthly publication uses the
+same no-follow/no-replace policy. An already-present monthly name is accepted
+only as one coherent set: the sqlite backup, GNU `sha256sum` sidecar, and
+sanitized receipt must each be validated regular files, the checksum must name
+that absolute monthly path, and the receipt `file`/`sha256` must match the
+file digest. Malformed or mismatched sidecars fail closed. A symlink, FIFO,
+directory, hard link, or other occupant of the monthly name fails closed.
+Successfully published leaves are not unlinked on a later failure or signal.
 
 Backup receipts contain only deterministic metadata (`file`, `sha256`,
 `verified_at`, `schema`, `schema_digest`, `counts`, `selected_digest`,
@@ -70,7 +80,12 @@ or selected-import payloads. Checksums are one canonical GNU text-mode
 Retention inspects only direct children of the verified daily or monthly
 directory. It may delete only validated regular files with expected owner,
 mode 0600, and nlink=1. It never follows or deletes symlinks, directories, or
-foreign owner/mode/hard-linked entries.
+foreign owner/mode/hard-linked entries. The delete path validates a candidate
+through an fd-relative regular-file check, closes that descriptor, revalidates
+the same inode, then unlinks by name. If the name is no longer the inspected
+inode or is no longer a validated regular file, the unlink is skipped. A
+same-uid actor can still replace the name after the last check; `unlinkat(2)`
+is name-based and that remaining race is not claimed closed.
 
 SQLite is opened through a pinned directory-fd URI
 (`/proc/self/fd/<dirfd>/<leaf>`) so WAL/SHM sidecars are created next to the

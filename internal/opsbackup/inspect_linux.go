@@ -27,18 +27,80 @@ func marshalReceipt(doc receipt) ([]byte, error) {
 		return nil, err
 	}
 	payload = append(payload, '\n')
-	if len(payload) > opsfs.MaxReceiptBytes {
-		return nil, fmt.Errorf("receipt exceeds %d bytes", opsfs.MaxReceiptBytes)
-	}
-	if !utf8.Valid(payload) {
-		return nil, fmt.Errorf("receipt is not valid UTF-8")
-	}
-	for _, b := range payload {
-		if b == 0x7f || (b < 0x20 && b != '\n') {
-			return nil, fmt.Errorf("receipt contains a control character")
-		}
+	if _, err := parseReceipt(payload); err != nil {
+		return nil, err
 	}
 	return payload, nil
+}
+
+func parseReceipt(body []byte) (receipt, error) {
+	var doc receipt
+	if len(body) == 0 || len(body) > opsfs.MaxReceiptBytes {
+		return doc, fmt.Errorf("receipt size")
+	}
+	if !utf8.Valid(body) {
+		return doc, fmt.Errorf("receipt is not valid UTF-8")
+	}
+	if bytes.Count(body, []byte{'\n'}) != 1 || body[len(body)-1] != '\n' {
+		return doc, fmt.Errorf("receipt line count")
+	}
+	for _, b := range body {
+		if b == 0x7f || (b < 0x20 && b != '\n') {
+			return doc, fmt.Errorf("receipt contains a control character")
+		}
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&doc); err != nil {
+		return receipt{}, fmt.Errorf("receipt json: %w", err)
+	}
+	if dec.More() {
+		return receipt{}, fmt.Errorf("receipt trailing data")
+	}
+	if err := validateReceipt(doc); err != nil {
+		return receipt{}, err
+	}
+	return doc, nil
+}
+
+// validatePublishedSet requires leaf, leaf.sha256, and leaf.receipt.json to be
+// one coherent published set: each is a validated regular file, the checksum
+// names this absolute path, and the receipt File/SHA256 match the file digest.
+func validatePublishedSet(dir *opsfs.Dir, leaf string) error {
+	if dir == nil {
+		return fmt.Errorf("closed directory")
+	}
+	path := dir.Path + "/" + leaf
+	if err := opsfs.ValidAbsPath(path); err != nil {
+		return err
+	}
+	digest, err := dir.SHA256(leaf)
+	if err != nil {
+		return fmt.Errorf("backup: %w", err)
+	}
+	sumBody, err := dir.ReadValidatedRegular(leaf+".sha256", opsfs.MaxChecksumBytes)
+	if err != nil {
+		return fmt.Errorf("checksum: %w", err)
+	}
+	sumDigest, err := opsfs.ParseSHA256Sum(sumBody, path)
+	if err != nil {
+		return fmt.Errorf("checksum: %w", err)
+	}
+	if sumDigest != digest {
+		return fmt.Errorf("checksum digest mismatch")
+	}
+	recBody, err := dir.ReadValidatedRegular(leaf+".receipt.json", opsfs.MaxReceiptBytes)
+	if err != nil {
+		return fmt.Errorf("receipt: %w", err)
+	}
+	doc, err := parseReceipt(recBody)
+	if err != nil {
+		return fmt.Errorf("receipt: %w", err)
+	}
+	if doc.File != leaf || doc.SHA256 != digest {
+		return fmt.Errorf("receipt does not match backup")
+	}
+	return nil
 }
 
 func validateReceipt(doc receipt) error {

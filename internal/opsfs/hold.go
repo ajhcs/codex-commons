@@ -11,6 +11,7 @@ const (
 	HoldPrePublish          = "pre-publish"
 	HoldBetweenPublications = "between-publications"
 	HoldAfterPublications   = "after-publications"
+	HoldPreUnlink           = "pre-unlink"
 )
 
 // WaitHold is a disposable-test seam. It is inert unless both
