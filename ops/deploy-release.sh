@@ -702,21 +702,69 @@ recorded_attempt_receipt_body() {
 		"previous_id=$previous_id" \
 		"previous_digest=$previous_digest"
 }
-service_is_active() {
-	without_lock_fd "$systemctl_cmd" --user is-active --quiet codex-commons.service
-}
-prove_service_stopped() {
-	if service_is_active; then
-		echo "codex-commons.service is not stopped" >&2
+# Query ActiveState exactly and losslessly. Do not infer active or stopped
+# from a generic command exit. Only inactive or failed proves stopped.
+# active/reloading/activating/deactivating are not stopped. Query failure,
+# empty, multiline, control, or unknown output is unknown and fails closed.
+query_unit_active_state() {
+	unit_active_state=
+	unit_active_state_class=unknown
+	if ! capture "$systemctl_cmd" --user show --property=ActiveState --value codex-commons.service; then
 		return 1
 	fi
-	return 0
+	case "$captured" in
+	*[[:cntrl:]]*|'')
+		return 1
+		;;
+	esac
+	case "$captured" in
+	inactive|failed)
+		unit_active_state=$captured
+		unit_active_state_class=stopped
+		return 0
+		;;
+	active|reloading|activating|deactivating)
+		unit_active_state=$captured
+		unit_active_state_class=active
+		return 0
+		;;
+	esac
+	return 1
 }
-active_or_unknown_service_state() {
-	if service_is_active; then
+prove_service_stopped() {
+	if query_unit_active_state && [ "$unit_active_state_class" = stopped ]; then
+		return 0
+	fi
+	echo "codex-commons.service is not proven stopped" >&2
+	return 1
+}
+recorded_service_state() {
+	case "${unit_active_state_class:-unknown}" in
+	stopped)
+		printf '%s\n' stopped
+		;;
+	active)
 		printf '%s\n' active
-	else
+		;;
+	*)
 		printf '%s\n' unknown
+		;;
+	esac
+}
+# One stop attempt and the same exact ActiveState proof. If that final stop
+# or proof fails, record previous_stop_failed with active/unknown and never
+# retry. Do not leave a known active previous service.
+stop_and_prove_previous() {
+	context=$1
+	if ! without_lock_fd "$systemctl_cmd" --user stop codex-commons.service; then
+		echo "failed to stop codex-commons.service" >&2
+		query_unit_active_state || true
+		finish_rollback previous_stop_failed "$(recorded_service_state)" "$rollback_database_state" \
+			"$context; final stop failed"
+	fi
+	if ! prove_service_stopped; then
+		finish_rollback previous_stop_failed "$(recorded_service_state)" "$rollback_database_state" \
+			"$context; service remained unproven after stop"
 	fi
 }
 publish_rollback_outcome() {
@@ -775,7 +823,10 @@ finish_rollback() {
 	fi
 	exit 1
 }
-revalidate_attempt_receipt() {
+# Publishing a rollback outcome is safe only when the state directory and the
+# receipt path are a regular non-symlink file, owned by the effective uid/gid,
+# mode 0600. Unsafe shape must be left untouched.
+receipt_is_publish_safe() {
 	if [ -z "${state_dir:-}" ] || [ -z "${state_parent:-}" ] || [ -z "${state_leaf:-}" ]; then
 		echo "deploy state directory is not prepared for receipt revalidation" >&2
 		return 1
@@ -797,6 +848,9 @@ revalidate_attempt_receipt() {
 		echo "deployment-attempt receipt must be mode 0600 and owned by the effective uid/gid" >&2
 		return 1
 	fi
+	return 0
+}
+receipt_content_matches_recorded() {
 	expected=$(recorded_attempt_receipt_body)
 	actual=$(without_lock_fd cat -- "$receipt") || {
 		echo "failed to read deployment-attempt receipt" >&2
@@ -860,8 +914,19 @@ revalidate_captured_previous() {
 	fi
 	return 0
 }
+# First-deploy/no-previous removal reads current only to verify it still names
+# the exact candidate release_id. That read is never used as target selection.
+# A swapped pointer is left in place.
 safe_remove_current() {
 	if [ -L "$current" ]; then
+		if ! capture readlink -- "$current"; then
+			echo "failed to read current before first-deploy removal" >&2
+			return 1
+		fi
+		if [ "$captured" != "$release_id" ]; then
+			echo "current pointer is not the candidate release; refusing to unlink a substituted pointer" >&2
+			return 1
+		fi
 		if ! without_lock_fd rm -f -- "$current"; then
 			echo "failed to remove current after first-deploy failure" >&2
 			return 1
@@ -923,19 +988,28 @@ atomic_switch_current_to_previous() {
 	return 0
 }
 # Candidate restart/readiness failure always exits 1, even if previous becomes
-# ready. Stop is proven before any restore, cleanup, or pointer mutation.
+# ready. Stop is proven with the exact ActiveState query before any restore,
+# cleanup, or pointer mutation.
 run_fail_closed_rollback() {
 	if ! without_lock_fd "$systemctl_cmd" --user stop codex-commons.service; then
 		echo "failed to stop codex-commons.service" >&2
-		finish_rollback stop_failed "$(active_or_unknown_service_state)" unchanged \
+		query_unit_active_state || true
+		finish_rollback stop_failed "$(recorded_service_state)" unchanged \
 			"candidate failed; service stop failed"
 	fi
 	if ! prove_service_stopped; then
-		finish_rollback stop_failed active unchanged \
-			"candidate failed; service remained active after stop"
+		finish_rollback stop_failed "$(recorded_service_state)" unchanged \
+			"candidate failed; service remained unproven after stop"
 	fi
-	if ! revalidate_attempt_receipt; then
-		echo "candidate failed; receipt revalidation failed; service left stopped" >&2
+	if ! receipt_is_publish_safe; then
+		echo "candidate failed; receipt is unsafe to replace; service left stopped" >&2
+		exit 1
+	fi
+	if ! receipt_content_matches_recorded; then
+		echo "candidate failed; receipt content mismatch; service left stopped" >&2
+		if ! publish_rollback_outcome receipt_mismatch stopped unchanged; then
+			echo "failed to publish receipt_mismatch rollback receipt" >&2
+		fi
 		exit 1
 	fi
 	if ! revalidate_captured_previous; then
@@ -979,29 +1053,20 @@ run_fail_closed_rollback() {
 	fi
 	if ! without_lock_fd "$systemctl_cmd" --user restart codex-commons.service; then
 		echo "previous release failed to restart" >&2
-		if prove_service_stopped; then
-			finish_rollback previous_restart_failed stopped "$rollback_database_state" \
-				"candidate failed; previous process failed to restart"
-		fi
-		finish_rollback previous_restart_failed active "$rollback_database_state" \
+		stop_and_prove_previous "candidate failed; previous process failed to restart"
+		finish_rollback previous_restart_failed stopped "$rollback_database_state" \
 			"candidate failed; previous process failed to restart"
 	fi
 	if ! COMMONS_RELEASE_DIR="$previous" COMMONS_SYSTEMCTL="$systemctl_cmd" without_lock_fd /bin/sh "$previous/ops/check-readiness.sh"; then
 		echo "previous release failed readiness" >&2
-		if ! without_lock_fd "$systemctl_cmd" --user stop codex-commons.service; then
-			echo "failed to stop codex-commons.service after previous readiness failure" >&2
-			finish_rollback previous_stop_failed "$(active_or_unknown_service_state)" "$rollback_database_state" \
-				"candidate failed; previous readiness failed; final stop failed"
-		fi
-		if ! prove_service_stopped; then
-			finish_rollback previous_stop_failed active "$rollback_database_state" \
-				"candidate failed; previous readiness failed; service remained active after stop"
-		fi
+		stop_and_prove_previous "candidate failed; previous readiness failed"
 		finish_rollback previous_readiness_failed stopped "$rollback_database_state" \
 			"candidate failed; previous readiness failed"
 	fi
 	if ! publish_rollback_outcome previous_ready ready "$rollback_database_state"; then
 		echo "failed to publish previous_ready rollback receipt" >&2
+		stop_and_prove_previous "candidate failed; previous_ready receipt publish failed"
+		echo "candidate failed; previous_ready receipt publish failed; service left stopped" >&2
 		exit 1
 	fi
 	echo "candidate failed; previous release restored and ready" >&2

@@ -46,9 +46,11 @@ fi
 
 # Shared current-target grammar with the stable launcher. Capture current
 # losslessly exactly once after candidate verification to choose the rollback
-# target. The later readlink is post-switch readback of that captured id, not
-# a new target selection. Receipt helpers must close the lock fd.
-test "$(grep -c 'readlink -- "$current"' "$deploy_script")" -eq 2
+# target. Later readlink calls are post-switch readback of that captured id,
+# or first-deploy verification that current still names the candidate; they
+# do not choose a new target. Receipt helpers must close the lock fd.
+test "$(grep -c 'readlink -- "$current"' "$deploy_script")" -eq 3
+grep -Fq '"$captured" != "$release_id"' "$deploy_script"
 if grep -Fq 'readlink -f "$current"' "$deploy_script"; then
 	printf 'deploy-release.sh must not re-resolve current with readlink -f\n' >&2
 	exit 1
@@ -65,7 +67,13 @@ fi
 grep -Fq 'owned_next=$previous_id' "$deploy_script"
 grep -Fq 'mv -Tf -- "$next" "$current"' "$deploy_script"
 grep -Fq 'run_fail_closed_rollback' "$deploy_script"
-grep -Fq 'is-active --quiet' "$deploy_script"
+grep -Fq -- '--property=ActiveState --value' "$deploy_script"
+grep -Fq 'query_unit_active_state' "$deploy_script"
+grep -Fq 'receipt_mismatch' "$deploy_script"
+if grep -Fq 'is-active --quiet' "$deploy_script"; then
+	printf 'deploy-release.sh must not treat is-active as stopped proof\n' >&2
+	exit 1
+fi
 grep -Fq 'deploy_outcome=' "$deploy_script"
 grep -Fq 'previous_ready' "$deploy_script"
 grep -Fq 'write_deployment_attempt_receipt' "$deploy_script"
@@ -84,6 +92,12 @@ fi
 grep -Fq 'deploy_outcome' "$runbook"
 grep -Fq 'previous_ready' "$runbook"
 grep -Fq 'fail-closed' "$runbook"
+grep -Fq -- 'show --property=ActiveState --value' "$runbook"
+grep -Fq 'receipt_mismatch' "$runbook"
+if grep -Eq 'is-active nonzero|is-active --quiet' "$runbook"; then
+	printf 'runbook must not claim is-active nonzero proves stopped\n' >&2
+	exit 1
+fi
 grep -Fq 'kind=deployment-attempt' "$deploy_script"
 grep -Fq 'status=recorded' "$deploy_script"
 grep -Fq 'without_lock_fd sh -c' "$deploy_script"
@@ -273,14 +287,17 @@ printf '%s\n' "$*" >> "$FAKE_SYSTEMCTL_LOG"
 state_file=${FAKE_SYSTEMCTL_STATE:-$FAKE_SYSTEMCTL_LOG.state}
 fail_action=${FAKE_SYSTEMCTL_FAIL:-}
 fail_n=${FAKE_SYSTEMCTL_FAIL_N:-0}
+fail_action2=${FAKE_SYSTEMCTL_FAIL2:-}
+fail_n2=${FAKE_SYSTEMCTL_FAIL2_N:-0}
 action=
 for arg in "$@"; do
 	case "$arg" in
-	restart|stop|is-active)
+	restart|stop|is-active|show)
 		action=$arg
 		;;
 	esac
 done
+forced_fail=0
 if [ -n "$fail_action" ] && [ "$action" = "$fail_action" ] && [ "$fail_n" -gt 0 ]; then
 	count_file=$FAKE_SYSTEMCTL_LOG.$fail_action.count
 	n=0
@@ -290,9 +307,27 @@ if [ -n "$fail_action" ] && [ "$action" = "$fail_action" ] && [ "$fail_n" -gt 0 
 	n=$((n + 1))
 	printf '%s\n' "$n" > "$count_file"
 	if [ "$n" -eq "$fail_n" ]; then
-		echo "forced systemctl $action failure" >&2
-		exit 1
+		forced_fail=1
 	fi
+fi
+if [ "$forced_fail" -eq 0 ] && [ -n "$fail_action2" ] && [ "$action" = "$fail_action2" ] && [ "$fail_n2" -gt 0 ]; then
+	count_file=$FAKE_SYSTEMCTL_LOG.$fail_action2.count
+	n=0
+	if [ -f "$count_file" ]; then
+		n=$(cat "$count_file")
+	fi
+	n=$((n + 1))
+	printf '%s\n' "$n" > "$count_file"
+	if [ "$n" -eq "$fail_n2" ]; then
+		forced_fail=1
+	fi
+fi
+if [ "$forced_fail" -eq 1 ]; then
+	if [ "$action" = restart ]; then
+		printf 'active\n' > "$state_file"
+	fi
+	echo "forced systemctl $action failure" >&2
+	exit 1
 fi
 case "$action" in
 restart)
@@ -301,7 +336,11 @@ restart)
 	;;
 stop)
 	if [ -z "${FAKE_SYSTEMCTL_KEEP_ACTIVE:-}" ]; then
-		printf 'inactive\n' > "$state_file"
+		if [ -n "${FAKE_SYSTEMCTL_STOP_STATE:-}" ]; then
+			printf '%s\n' "$FAKE_SYSTEMCTL_STOP_STATE" > "$state_file"
+		else
+			printf 'inactive\n' > "$state_file"
+		fi
 	fi
 	exit 0
 	;;
@@ -313,6 +352,32 @@ is-active)
 		fi
 	fi
 	exit 1
+	;;
+show)
+	case "${FAKE_SYSTEMCTL_SHOW_MODE:-}" in
+	empty)
+		exit 0
+		;;
+	multiline)
+		printf 'inactive\nextra\n'
+		exit 0
+		;;
+	control)
+		printf 'inac\001tive\n'
+		exit 0
+		;;
+	esac
+	if [ -n "${FAKE_SYSTEMCTL_SHOW_OUTPUT+x}" ]; then
+		printf '%s' "$FAKE_SYSTEMCTL_SHOW_OUTPUT"
+		exit 0
+	fi
+	if [ -f "$state_file" ]; then
+		state=$(cat "$state_file")
+	else
+		state=inactive
+	fi
+	printf '%s\n' "$state"
+	exit 0
 	;;
 esac
 exit 0
@@ -625,6 +690,7 @@ restore_previous() {
 		"$systemctl_log.restart.count" \
 		"$systemctl_log.stop.count" \
 		"$systemctl_log.is-active.count" \
+		"$systemctl_log.show.count" \
 		"$backup_marker" "$verify_marker" "$previous_verify_log"
 }
 
@@ -761,16 +827,20 @@ assert_rollback_receipt() {
 
 count_systemctl() {
 	action=$1
-	grep -c -- "--user $action " "$systemctl_log" 2>/dev/null || true
+	n=$(grep -c -- "--user $action " "$systemctl_log" 2>/dev/null) || n=0
+	printf '%s\n' "$n"
 }
 
 assert_systemctl_counts() {
 	expected_restart=$1
 	expected_stop=$2
-	expected_is_active=$3
+	expected_show=$3
 	test "$(count_systemctl restart)" -eq "$expected_restart"
 	test "$(count_systemctl stop)" -eq "$expected_stop"
-	test "$(count_systemctl is-active)" -eq "$expected_is_active"
+	test "$(count_systemctl show)" -eq "$expected_show"
+	test "$(count_systemctl is-active)" -eq 0
+	show_n=$(grep -c -- '--user show --property=ActiveState --value codex-commons.service' "$systemctl_log" 2>/dev/null) || show_n=0
+	test "$show_n" -eq "$expected_show"
 }
 
 service_state_file() {
@@ -1571,6 +1641,39 @@ pr5_deploy() {
 	/bin/sh "$deploy_script" "$release_root/$candidate"
 }
 
+record_pr5_case() {
+	marker=$1
+	child_exit=$2
+	printf '%s_CHILD_EXIT=%s\n' "$marker" "$child_exit"
+	printf '%s=pass\n' "$marker"
+}
+
+pr5_zero_mutation_after_stop() {
+	candidate=$1
+	marker=$2
+	expected_service=$3
+	restore_previous
+	prepare_pr5_db
+	make_ready_fail_candidate "$candidate"
+	db_before=$(/usr/bin/sha256sum "$present_db")
+	: > "$systemctl_log"
+	rm -f -- "$systemctl_log.stop.count" "$systemctl_log.show.count" "$systemctl_log.restart.count"
+	if pr5_deploy "$candidate" \
+		>"$root/pr5-$candidate.out" 2>"$root/pr5-$candidate.err"; then
+		printf '%s unexpectedly succeeded\n' "$candidate" >&2
+		exit 1
+	else
+		status=$?
+	fi
+	test "$status" -eq 1
+	test "$(pointer_target)" = "$candidate"
+	test "$(/usr/bin/sha256sum "$present_db")" = "$db_before"
+	test ! -e "$restore_log"
+	assert_rollback_receipt stop_failed "$expected_service" unchanged "$candidate" validated previous
+	assert_systemctl_counts 1 1 1
+	record_pr5_case "$marker" "$status"
+}
+
 make_ready_fail_candidate() {
 	name=$1
 	make_release "$name"
@@ -1619,7 +1722,7 @@ test "$(service_state_file)" = active
 assert_rollback_receipt previous_ready ready restored restart-fail-candidate validated previous
 assert_systemctl_counts 2 1 1
 grep -Fq 'candidate failed; previous release restored and ready' "$root/pr5-restart-fail.err"
-printf 'DEPLOY_CANDIDATE_RESTART_FAIL_PREVIOUS_READY_EXIT1=pass\n'
+record_pr5_case DEPLOY_CANDIDATE_RESTART_FAIL_PREVIOUS_READY_EXIT1 "$status"
 
 # Candidate readiness failure: previous ready, still exit 1, one-shot.
 restore_previous
@@ -1641,7 +1744,7 @@ test "$(service_state_file)" = active
 assert_rollback_receipt previous_ready ready restored ready-fail-candidate validated previous
 assert_systemctl_counts 2 1 1
 grep -Fxq "restore_backup=$exact_backup" "$restore_log"
-printf 'DEPLOY_CANDIDATE_READINESS_FAIL_PREVIOUS_READY_EXIT1=pass\n'
+record_pr5_case DEPLOY_CANDIDATE_READINESS_FAIL_PREVIOUS_READY_EXIT1 "$status"
 
 # Stop failure causes zero DB/current mutation and no restore.
 restore_previous
@@ -1665,7 +1768,7 @@ test ! -e "$restore_log"
 assert_rollback_receipt stop_failed active unchanged stop-fail-candidate validated previous
 assert_systemctl_counts 1 1 1
 grep -Fq 'service stop failed' "$root/pr5-stop-fail.err"
-printf 'DEPLOY_STOP_FAIL_ZERO_MUTATION=pass\n'
+record_pr5_case DEPLOY_STOP_FAIL_ZERO_MUTATION "$status"
 
 # Receipt mismatch stays stopped with zero mutation and does not overwrite the receipt.
 restore_previous
@@ -1693,10 +1796,10 @@ test "$(pointer_target)" = receipt-mismatch-candidate
 test "$(cat "$present_db")" = live-db-payload
 test ! -e "$restore_log"
 test "$(service_state_file)" = inactive
-grep -Fq 'mutated' "$deploy_state/deployment-attempt"
 grep -Fq 'does not match the captured attempt identity' "$root/pr5-receipt-mismatch.err"
+assert_rollback_receipt receipt_mismatch stopped unchanged receipt-mismatch-candidate validated previous
 assert_systemctl_counts 1 1 1
-printf 'DEPLOY_RECEIPT_MISMATCH_ZERO_MUTATION=pass\n'
+record_pr5_case DEPLOY_RECEIPT_MISMATCH_ZERO_MUTATION "$status"
 
 # Previous reverify failure stays stopped with zero mutation.
 restore_previous
@@ -1727,7 +1830,7 @@ test "$(service_state_file)" = inactive
 assert_rollback_receipt previous_reverify_failed stopped unchanged previous-reverify-candidate validated previous
 assert_systemctl_counts 1 1 1
 grep -Fq 'captured previous revalidation failed' "$root/pr5-prev-reverify.err"
-printf 'DEPLOY_PREVIOUS_REVERIFY_FAIL_ZERO_MUTATION=pass\n'
+record_pr5_case DEPLOY_PREVIOUS_REVERIFY_FAIL_ZERO_MUTATION "$status"
 
 # Backup verify failure: stopped, no restore/pointer/restart.
 restore_previous
@@ -1755,7 +1858,7 @@ test "$(service_state_file)" = inactive
 assert_rollback_receipt backup_verify_failed stopped unchanged backup-verify-candidate validated previous
 assert_systemctl_counts 1 1 1
 grep -Fq 'pre-upgrade backup failed restore verification' "$root/pr5-backup-verify.err"
-printf 'DEPLOY_BACKUP_VERIFY_FAIL_STOPPED=pass\n'
+record_pr5_case DEPLOY_BACKUP_VERIFY_FAIL_STOPPED "$status"
 
 # Restore helper failure before replace: DB uncertain, no pointer/restart.
 restore_previous
@@ -1783,7 +1886,7 @@ test "$(service_state_file)" = inactive
 assert_rollback_receipt restore_failed stopped uncertain restore-fail-candidate validated previous
 assert_systemctl_counts 1 1 1
 grep -Fq 'atomic database restore failed' "$root/pr5-restore-fail.err"
-printf 'DEPLOY_RESTORE_FAIL_BEFORE_REPLACE_UNCERTAIN=pass\n'
+record_pr5_case DEPLOY_RESTORE_FAIL_BEFORE_REPLACE_UNCERTAIN "$status"
 
 # Restore helper failure after dest replace: DB uncertain, no retry/pointer/restart.
 restore_previous
@@ -1813,7 +1916,7 @@ test "$(cat "$present_db")" = exact-backup-payload
 test "$(service_state_file)" = inactive
 assert_rollback_receipt restore_failed stopped uncertain restore-after-replace-candidate validated previous
 assert_systemctl_counts 1 1 1
-printf 'DEPLOY_RESTORE_FAIL_AFTER_REPLACE_UNCERTAIN=pass\n'
+record_pr5_case DEPLOY_RESTORE_FAIL_AFTER_REPLACE_UNCERTAIN "$status"
 
 # Pointer temp failure after restore: current stays candidate, no previous restart.
 restore_previous
@@ -1864,7 +1967,7 @@ assert_rollback_receipt pointer_switch_failed stopped restored pointer-temp-cand
 assert_systemctl_counts 1 1 1
 grep -Fq 'failed to create rollback pointer temp' "$root/pr5-pointer-temp.err"
 rm -f -- "$pr5_bin/ln"
-printf 'DEPLOY_POINTER_TEMP_FAIL=pass\n'
+record_pr5_case DEPLOY_POINTER_TEMP_FAIL "$status"
 
 # Pointer mv failure after restore: current stays candidate, leftover next cleaned.
 restore_previous
@@ -1916,7 +2019,7 @@ test "$(service_state_file)" = inactive
 assert_rollback_receipt pointer_switch_failed stopped restored pointer-mv-candidate validated previous
 assert_systemctl_counts 1 1 1
 grep -Fq 'failed to switch current to the captured previous release' "$root/pr5-pointer-mv.err"
-printf 'DEPLOY_POINTER_MV_FAIL=pass\n'
+record_pr5_case DEPLOY_POINTER_MV_FAIL "$status"
 
 # Pointer readback failure: mv succeeds but current is not the captured previous id.
 restore_previous
@@ -1973,7 +2076,7 @@ assert_rollback_receipt pointer_switch_failed stopped restored pointer-readback-
 assert_systemctl_counts 1 1 1
 grep -Fq 'current readback does not match the captured previous id' "$root/pr5-pointer-readback.err"
 rm -f -- "$pr5_bin/mv"
-printf 'DEPLOY_POINTER_READBACK_FAIL=pass\n'
+record_pr5_case DEPLOY_POINTER_READBACK_FAIL "$status"
 
 # Previous restart failure stays/proves stopped, no retry.
 restore_previous
@@ -1994,9 +2097,9 @@ test "$(pointer_target)" = previous
 test "$(cat "$present_db")" = exact-backup-payload
 test "$(service_state_file)" = inactive
 assert_rollback_receipt previous_restart_failed stopped restored previous-restart-candidate validated previous
-assert_systemctl_counts 2 1 2
+assert_systemctl_counts 2 2 2
 grep -Fq 'previous process failed to restart' "$root/pr5-prev-restart.err"
-printf 'DEPLOY_PREVIOUS_RESTART_FAIL_STOPPED=pass\n'
+record_pr5_case DEPLOY_PREVIOUS_RESTART_FAIL_STOPPED "$status"
 
 # Previous readiness failure performs one stop, proves stopped, no retries.
 restore_previous
@@ -2023,7 +2126,7 @@ test "$(service_state_file)" = inactive
 assert_rollback_receipt previous_readiness_failed stopped restored previous-ready-fail-candidate validated previous
 assert_systemctl_counts 2 2 2
 grep -Fq 'previous readiness failed' "$root/pr5-prev-ready-fail.err"
-printf 'DEPLOY_PREVIOUS_READINESS_FAIL_STOPPED=pass\n'
+record_pr5_case DEPLOY_PREVIOUS_READINESS_FAIL_STOPPED "$status"
 
 # Previous readiness failure plus final stop failure: no retries.
 restore_previous
@@ -2051,7 +2154,7 @@ test "$(cat "$present_db")" = exact-backup-payload
 assert_rollback_receipt previous_stop_failed active restored previous-stop-fail-candidate validated previous
 assert_systemctl_counts 2 2 2
 grep -Fq 'final stop failed' "$root/pr5-prev-stop-fail.err"
-printf 'DEPLOY_PREVIOUS_READINESS_FINAL_STOP_FAIL=pass\n'
+record_pr5_case DEPLOY_PREVIOUS_READINESS_FINAL_STOP_FAIL "$status"
 
 # No previous: current removed, service left stopped, no restart of a previous.
 restore_previous
@@ -2074,7 +2177,7 @@ test "$(service_state_file)" = inactive
 assert_rollback_receipt no_previous stopped absent no-previous-candidate absent
 assert_systemctl_counts 1 1 1
 grep -Fq 'no previous release; service left stopped' "$root/pr5-no-previous.err"
-printf 'DEPLOY_NO_PREVIOUS_STOPPED=pass\n'
+record_pr5_case DEPLOY_NO_PREVIOUS_STOPPED "$status"
 
 # Required rollback receipt write/sync/mv failures at the pre-mutation point
 # refuse later restore/pointer/restart.
@@ -2127,7 +2230,7 @@ test "$(service_state_file)" = inactive
 assert_systemctl_counts 1 1 1
 grep -Fq 'refusing later mutation or restart' "$root/pr5-receipt-write.err"
 assert_receipt validated receipt-write-candidate previous
-printf 'DEPLOY_ROLLBACK_RECEIPT_WRITE_FAIL_SAFE=pass\n'
+record_pr5_case DEPLOY_ROLLBACK_RECEIPT_WRITE_FAIL_SAFE "$status"
 
 cat > "$pr5_bin/sync" <<'EOF'
 #!/bin/sh
@@ -2179,7 +2282,7 @@ test "$(service_state_file)" = inactive
 assert_systemctl_counts 1 1 1
 grep -Fq 'refusing later mutation or restart' "$root/pr5-receipt-sync.err"
 assert_receipt validated receipt-sync-candidate previous
-printf 'DEPLOY_ROLLBACK_RECEIPT_SYNC_FAIL_SAFE=pass\n'
+record_pr5_case DEPLOY_ROLLBACK_RECEIPT_SYNC_FAIL_SAFE "$status"
 
 cat > "$pr5_bin/mv" <<'EOF'
 #!/bin/sh
@@ -2231,6 +2334,194 @@ assert_systemctl_counts 1 1 1
 grep -Fq 'refusing later mutation or restart' "$root/pr5-receipt-mv.err"
 assert_receipt validated receipt-mv-candidate previous
 rm -f -- "$pr5_bin/mv" "$pr5_bin/sync" "$pr5_bin/chmod"
-printf 'DEPLOY_ROLLBACK_RECEIPT_MV_FAIL_SAFE=pass\n'
+record_pr5_case DEPLOY_ROLLBACK_RECEIPT_MV_FAIL_SAFE "$status"
+
+# Successful stop plus ActiveState query failure/unknown/transitional output
+# performs zero DB/current mutation and does not restart.
+FAKE_SYSTEMCTL_FAIL=show FAKE_SYSTEMCTL_FAIL_N=1 \
+	pr5_zero_mutation_after_stop show-fail-candidate DEPLOY_STOP_SHOW_FAIL_ZERO_MUTATION unknown
+FAKE_SYSTEMCTL_SHOW_MODE=empty \
+	pr5_zero_mutation_after_stop show-empty-candidate DEPLOY_STOP_SHOW_EMPTY_ZERO_MUTATION unknown
+FAKE_SYSTEMCTL_SHOW_MODE=multiline \
+	pr5_zero_mutation_after_stop show-multiline-candidate DEPLOY_STOP_SHOW_MULTILINE_ZERO_MUTATION unknown
+FAKE_SYSTEMCTL_SHOW_MODE=control \
+	pr5_zero_mutation_after_stop show-control-candidate DEPLOY_STOP_SHOW_CONTROL_ZERO_MUTATION unknown
+FAKE_SYSTEMCTL_STOP_STATE=bogus \
+	pr5_zero_mutation_after_stop show-unknown-candidate DEPLOY_STOP_SHOW_UNKNOWN_ZERO_MUTATION unknown
+FAKE_SYSTEMCTL_STOP_STATE=activating \
+	pr5_zero_mutation_after_stop show-activating-candidate DEPLOY_STOP_SHOW_ACTIVATING_ZERO_MUTATION active
+FAKE_SYSTEMCTL_STOP_STATE=reloading \
+	pr5_zero_mutation_after_stop show-reloading-candidate DEPLOY_STOP_SHOW_RELOADING_ZERO_MUTATION active
+FAKE_SYSTEMCTL_STOP_STATE=deactivating \
+	pr5_zero_mutation_after_stop show-deactivating-candidate DEPLOY_STOP_SHOW_DEACTIVATING_ZERO_MUTATION active
+
+# ActiveState=failed is a proven stopped state and may restore.
+restore_previous
+prepare_pr5_db
+make_ready_fail_candidate failed-proves-stopped-candidate
+: > "$systemctl_log"
+if FAKE_SYSTEMCTL_STOP_STATE=failed \
+	pr5_deploy failed-proves-stopped-candidate \
+	>"$root/pr5-failed-stopped.out" 2>"$root/pr5-failed-stopped.err"; then
+	printf 'failed-proves-stopped-candidate unexpectedly succeeded\n' >&2
+	exit 1
+else
+	status=$?
+fi
+test "$status" -eq 1
+test "$(pointer_target)" = previous
+test "$(cat "$present_db")" = exact-backup-payload
+test "$(service_state_file)" = active
+assert_rollback_receipt previous_ready ready restored failed-proves-stopped-candidate validated previous
+assert_systemctl_counts 2 1 1
+record_pr5_case DEPLOY_STOP_STATE_FAILED_PROVES_STOPPED "$status"
+
+# Previous restart command failure plus final stop failure: previous_stop_failed, no retry.
+restore_previous
+prepare_pr5_db
+make_ready_fail_candidate previous-restart-stop-fail-candidate
+: > "$systemctl_log"
+rm -f -- "$systemctl_log.restart.count" "$systemctl_log.stop.count"
+if FAKE_SYSTEMCTL_FAIL=restart FAKE_SYSTEMCTL_FAIL_N=2 \
+	FAKE_SYSTEMCTL_FAIL2=stop FAKE_SYSTEMCTL_FAIL2_N=2 \
+	pr5_deploy previous-restart-stop-fail-candidate \
+	>"$root/pr5-prev-restart-stop-fail.out" 2>"$root/pr5-prev-restart-stop-fail.err"; then
+	printf 'previous-restart-stop-fail-candidate unexpectedly succeeded\n' >&2
+	exit 1
+else
+	status=$?
+fi
+test "$status" -eq 1
+test "$(pointer_target)" = previous
+test "$(cat "$present_db")" = exact-backup-payload
+assert_rollback_receipt previous_stop_failed active restored previous-restart-stop-fail-candidate validated previous
+assert_systemctl_counts 2 2 2
+grep -Fq 'final stop failed' "$root/pr5-prev-restart-stop-fail.err"
+record_pr5_case DEPLOY_PREVIOUS_RESTART_FINAL_STOP_FAIL "$status"
+
+# First-deploy/no-previous: swapped current is not unlinked.
+restore_previous
+rm -f -- "$current"
+rm -f -- "$db" "$db-wal" "$db-shm"
+make_release decoy-first
+make_ready_fail_candidate no-previous-swap-candidate
+cat > "$release_root/no-previous-swap-candidate/ops/check-readiness.sh" <<'EOF'
+#!/bin/sh
+set -eu
+rm -f -- "$FAKE_CURRENT"
+ln -s -- decoy-first "$FAKE_CURRENT"
+exit 1
+EOF
+: > "$systemctl_log"
+if PR5_DB=$db pr5_deploy no-previous-swap-candidate \
+	>"$root/pr5-no-previous-swap.out" 2>"$root/pr5-no-previous-swap.err"; then
+	printf 'no-previous-swap-candidate unexpectedly succeeded\n' >&2
+	exit 1
+else
+	status=$?
+fi
+test "$status" -eq 1
+test "$(pointer_target)" = decoy-first
+test "$(pointer_target)" != no-previous-swap-candidate
+test ! -e "$db"
+test "$(service_state_file)" = inactive
+assert_rollback_receipt pointer_switch_failed stopped absent no-previous-swap-candidate absent
+assert_systemctl_counts 1 1 1
+grep -Fq 'refusing to unlink a substituted pointer' "$root/pr5-no-previous-swap.err"
+record_pr5_case DEPLOY_NO_PREVIOUS_SWAPPED_CURRENT "$status"
+
+# Unsafe receipt (mode not 0600) is left untouched; no outcome publish.
+restore_previous
+prepare_pr5_db
+make_ready_fail_candidate receipt-unsafe-candidate
+cat > "$release_root/receipt-unsafe-candidate/ops/check-readiness.sh" <<EOF
+#!/bin/sh
+set -eu
+if [ -n "\${FAKE_READINESS_MARKER:-}" ]; then
+	: > "\$FAKE_READINESS_MARKER"
+fi
+chmod 0644 -- "$deploy_state/deployment-attempt"
+exit 1
+EOF
+db_before=$(/usr/bin/sha256sum "$present_db")
+: > "$systemctl_log"
+if pr5_deploy receipt-unsafe-candidate \
+	>"$root/pr5-receipt-unsafe.out" 2>"$root/pr5-receipt-unsafe.err"; then
+	printf 'receipt-unsafe-candidate unexpectedly succeeded\n' >&2
+	exit 1
+else
+	status=$?
+fi
+test "$status" -eq 1
+test "$(pointer_target)" = receipt-unsafe-candidate
+test "$(/usr/bin/sha256sum "$present_db")" = "$db_before"
+test ! -e "$restore_log"
+test "$(service_state_file)" = inactive
+receipt=$deploy_state/deployment-attempt
+test -f "$receipt"
+test ! -L "$receipt"
+test "$(stat -c %a "$receipt")" = 644
+test "$(wc -l < "$receipt")" -eq 7
+grep -Fxq 'status=recorded' "$receipt"
+if grep -Fq 'deploy_outcome=' "$receipt"; then
+	printf 'unsafe receipt was overwritten with an outcome\n' >&2
+	exit 1
+fi
+assert_systemctl_counts 1 1 1
+grep -Fq 'receipt is unsafe to replace' "$root/pr5-receipt-unsafe.err"
+record_pr5_case DEPLOY_RECEIPT_MISMATCH_UNSAFE_LEFT "$status"
+chmod 0600 -- "$receipt"
+
+# previous_ready publish failure after previous has started: one stop, exact
+# stopped proof, no restart/retry.
+cat > "$pr5_bin/mv" <<'EOF'
+#!/bin/sh
+set -eu
+match=0
+for arg in "$@"; do
+	case "$arg" in
+	*/deployment-attempt)
+		match=1
+		;;
+	esac
+done
+if [ "$match" -eq 1 ]; then
+	nfile=${FAKE_RECEIPT_MV_COUNT:-/tmp/receipt-mv.count}
+	n=0
+	if [ -f "$nfile" ]; then
+		n=$(cat "$nfile")
+	fi
+	n=$((n + 1))
+	printf '%s\n' "$n" > "$nfile"
+	if [ "$n" -eq "${FAKE_RECEIPT_MV_FAIL_N:-0}" ]; then
+		echo "forced receipt mv failure" >&2
+		exit 1
+	fi
+fi
+exec /bin/mv "$@"
+EOF
+chmod 0555 "$pr5_bin/mv"
+restore_previous
+prepare_pr5_db
+make_ready_fail_candidate previous-ready-publish-fail-candidate
+: > "$systemctl_log"
+rm -f -- "$root/receipt-mv.count"
+if FAKE_RECEIPT_MV_COUNT=$root/receipt-mv.count FAKE_RECEIPT_MV_FAIL_N=3 \
+	PATH="$pr5_bin:$PATH" pr5_deploy previous-ready-publish-fail-candidate \
+	>"$root/pr5-prev-ready-publish.out" 2>"$root/pr5-prev-ready-publish.err"; then
+	printf 'previous-ready-publish-fail-candidate unexpectedly succeeded\n' >&2
+	exit 1
+else
+	status=$?
+fi
+test "$status" -eq 1
+test "$(pointer_target)" = previous
+test "$(cat "$present_db")" = exact-backup-payload
+test "$(service_state_file)" = inactive
+assert_rollback_receipt candidate_failed stopped unchanged previous-ready-publish-fail-candidate validated previous
+assert_systemctl_counts 2 2 2
+grep -Fq 'previous_ready receipt publish failed' "$root/pr5-prev-ready-publish.err"
+rm -f -- "$pr5_bin/mv"
+record_pr5_case DEPLOY_PREVIOUS_READY_PUBLISH_FAIL_STOPPED "$status"
 
 printf 'PHASE4_PR5_FAIL_CLOSED_ROLLBACK=pass\n'

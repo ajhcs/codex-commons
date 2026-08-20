@@ -420,18 +420,29 @@ the earlier preflight; it never re-reads `current` and never resolves a new
 target. Candidate restart or readiness failure always exits `1`, even when the
 previous release becomes ready.
 
-The fail-closed machine is one-shot. After candidate failure it proves
-`systemctl --user stop` succeeded and that the unit is not active before any
-restore, first-deploy cleanup, or pointer mutation. Stop failure records
-`deploy_outcome=stop_failed` and performs zero database or `current` mutation.
-It then revalidates the exact 7-line `status=recorded` deployment-attempt
-receipt and the captured previous path, release ID, and manifest digest.
-Receipt mismatch stays stopped, leaves the mismatched receipt in place, and
-performs zero database or `current` mutation. Previous re-verification failure
-stays stopped with zero database or `current` mutation. A required rollback
-receipt with `deploy_outcome=candidate_failed` and `service_state=stopped` must
-publish before later mutation; publish write/sync/`mv -Tf` failure refuses
-restore, pointer switch, and restart.
+The fail-closed machine is one-shot. After candidate failure it runs
+`systemctl --user stop` and then proves the unit is stopped with an exact,
+lossless `systemctl --user show --property=ActiveState --value
+codex-commons.service` query. Only `ActiveState=inactive` or `failed` proves
+stopped. `active`, `reloading`, `activating`, and `deactivating` are not
+stopped. Query failure, empty, multiline, control, or unknown output is
+`unknown` and fail-closed. Do not infer active or stopped from a generic
+`is-active` exit. Stop failure or an unproven stopped state records
+`deploy_outcome=stop_failed` with accurate `service_state` (`active` for known
+non-stopped states, `unknown` for command/parse failure) and performs zero
+database or `current` mutation. It then revalidates the exact 7-line
+`status=recorded` deployment-attempt receipt and the captured previous path,
+release ID, and manifest digest. If that receipt is a structurally safe
+regular non-symlink file, owned by the effective uid/gid, mode 0600, but the
+7-line content does not match the captured attempt identity, publish a
+sanitized fixed-field `deploy_outcome=receipt_mismatch` receipt and still
+perform zero database or `current` mutation. If the receipt path, state
+directory, owner, or mode is unsafe so publishing is not safe, leave the
+receipt untouched and exit stopped with zero mutation. Previous re-verification
+failure stays stopped with zero database or `current` mutation. A required
+rollback receipt with `deploy_outcome=candidate_failed` and
+`service_state=stopped` must publish before later mutation; publish
+write/sync/`mv -Tf` failure refuses restore, pointer switch, and restart.
 
 If a database restore is required, `ops/deploy-release.sh` invokes packaged
 `ops/verify-restore.sh` and `ops/restore-database.sh` through `without_lock_fd`
@@ -453,12 +464,20 @@ failure must not restart the service.
 Switch `current` only to the captured previous release ID through an owned
 `.current.next` temp and `mv -Tf`, then read back that exact ID. Temp, rename,
 or readback failure stays stopped and does not restart previous. Absent
-previous safely removes `current` and finishes stopped with
-`deploy_outcome=no_previous`. Previous restart failure stays and proves
-stopped, with no retry. Previous readiness failure performs one stop, proves
-the final stopped state, and does not retry; a failed final stop records
-`deploy_outcome=previous_stop_failed`. Previous ready publishes durable
-`deploy_outcome=previous_ready` and still exits `1`.
+previous reads `current` only to verify it still names the exact candidate
+`release_id` and then removes that candidate pointer; that read is never used
+as target selection. If `current` was swapped, fail stopped without unlinking
+the substituted pointer. Previous restart command failure performs exactly one
+stop attempt and the same exact ActiveState stopped proof before finishing
+with `deploy_outcome=previous_restart_failed` and `service_state=stopped`. If
+that final stop or proof fails, record `deploy_outcome=previous_stop_failed`
+with `active` or `unknown`, never retry, and do not leave a known active
+previous service. Previous readiness failure performs one stop, proves the
+final stopped state with the same query, and does not retry; a failed final
+stop records `deploy_outcome=previous_stop_failed`. Previous ready publishes
+durable `deploy_outcome=previous_ready` and still exits `1`. If that final
+`previous_ready` publish fails after previous has started, perform one stop
+attempt and the same exact stopped proof before exit; do not restart or retry.
 
 Rollback receipts remain fixed-field only: candidate and previous IDs plus
 manifest digests, and allowlisted `status` (`recorded` or `failed`),
@@ -469,18 +488,22 @@ pointer switch, restart, or readiness result.
 
 | From | Event | `deploy_outcome` | `service_state` | `database_state` | `current` | Exit |
 | --- | --- | --- | --- | --- | --- | --- |
-| Candidate restart/readiness failed | `systemctl stop` or stopped-proof fails | `stop_failed` | `active` or `unknown` | `unchanged` | candidate | 1 |
-| Proven stopped | 7-line receipt mismatch | receipt left in place | `stopped` | `unchanged` | candidate | 1 |
+| Candidate restart/readiness failed | `systemctl stop` or exact ActiveState proof fails | `stop_failed` | `active` or `unknown` | `unchanged` | candidate | 1 |
+| Proven stopped | 7-line receipt content mismatch; path/owner/mode 0600 | `receipt_mismatch` | `stopped` | `unchanged` | candidate | 1 |
+| Proven stopped | receipt path/state dir/owner/mode unsafe to replace | receipt left in place | `stopped` | `unchanged` | candidate | 1 |
 | Proven stopped, receipt valid | captured previous re-verify fails | `previous_reverify_failed` | `stopped` | `unchanged` | candidate | 1 |
 | Proven stopped, identities valid | required rollback receipt write/sync/mv fails | original 7-line `recorded` remains | `stopped` | `unchanged` | candidate | 1 |
 | Required `candidate_failed` receipt published | backup verify fails | `backup_verify_failed` | `stopped` | `unchanged` | candidate | 1 |
 | Backup verified | restore helper fails, possibly after dest replace | `restore_failed` | `stopped` | `uncertain` | candidate | 1 |
 | No pre-upgrade DB | first-deploy cleanup fails | `first_deploy_cleanup_failed` | `stopped` | `uncertain` | candidate | 1 |
 | DB restored or absent | pointer temp/mv/readback fails | `pointer_switch_failed` | `stopped` | `restored` or `absent` | candidate or unverified | 1 |
-| No captured previous, pointer removed | finish stopped | `no_previous` | `stopped` | `absent` or `restored` | absent | 1 |
-| Pointer switched to captured previous | previous `restart` fails | `previous_restart_failed` | `stopped` or `active` | `restored` or `absent` | captured previous | 1 |
+| No captured previous, `current` still the candidate | candidate pointer removed | `no_previous` | `stopped` | `absent` or `restored` | absent | 1 |
+| No captured previous, `current` swapped | refuse unlink of substituted pointer | `pointer_switch_failed` | `stopped` | `absent` or `restored` | substituted | 1 |
+| Pointer switched to captured previous | previous `restart` fails; one stop proves stopped | `previous_restart_failed` | `stopped` | `restored` or `absent` | captured previous | 1 |
+| Previous restart failed | final stop or ActiveState proof fails | `previous_stop_failed` | `active` or `unknown` | `restored` or `absent` | captured previous | 1 |
 | Previous restarted | previous readiness fails; one stop proves stopped | `previous_readiness_failed` | `stopped` | `restored` or `absent` | captured previous | 1 |
-| Previous readiness failed | final stop or stopped-proof fails | `previous_stop_failed` | `active` or `unknown` | `restored` or `absent` | captured previous | 1 |
+| Previous readiness failed | final stop or ActiveState proof fails | `previous_stop_failed` | `active` or `unknown` | `restored` or `absent` | captured previous | 1 |
+| Previous ready, `previous_ready` receipt publish fails | one stop proves stopped; no restart/retry | last published outcome remains | `stopped` | `restored` or `absent` | captured previous | 1 |
 | Previous readiness passes | durable `previous_ready` receipt | `previous_ready` | `ready` | `restored` or `absent` | captured previous | 1 |
 
 Classify the result from that table. For any rollback restart/readiness
