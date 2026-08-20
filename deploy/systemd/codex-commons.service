@@ -12,9 +12,9 @@ NotifyAccess=main
 TimeoutStartSec=180
 WatchdogSec=60
 EnvironmentFile=%h/.config/codex-commons/dogfood.env
-WorkingDirectory=%h/.local/lib/codex-commons/current
-ExecStartPre=/bin/sh %h/.local/lib/codex-commons/current/ops/verify-release.sh
-ExecStart=%h/.local/lib/codex-commons/current/commons-server
+# Start through the stable launcher so current is resolved once and this
+# process stays pinned to that exact verified release directory.
+ExecStart=/bin/sh %h/.local/libexec/codex-commons/commons-launch.sh
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=30
