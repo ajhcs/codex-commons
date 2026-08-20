@@ -329,14 +329,22 @@ pointer is not silently treated as absent.
 
 A sanitized deployment-attempt receipt is then written under
 `COMMONS_DEPLOY_STATE_DIR` (default `~/.local/state/codex-commons/deploy`). The
-parent and leaf must be real directories, not symlinks. The receipt and its
-sidecar digest are regular non-symlink files, mode 0600, replaced by atomic
-temp-plus-rename in that same validated parent. The file contains only the
-fixed fields `kind=deployment-attempt`, `status=recorded`, candidate id/digest,
-and previous state (`absent` or validated id/digest). It must not record
-secrets, database paths, prompts, environment contents, or arbitrary payloads.
-This increment records that attempt identity only; the complete fail-closed
-rollback outcome state machine remains Phase 4 PR 5.
+canonical existing parent must be a real non-symlink directory owned by the
+effective uid/gid and not group or other writable. The deploy state directory
+must be a real non-symlink direct child of that parent, owned by the effective
+uid/gid, with exact mode 0700; a missing leaf is created `mkdir 0700` and
+revalidated. Unsafe parent or directory is rejected before receipt mutation.
+The receipt is one regular non-symlink file, mode 0600, owned by the effective
+uid/gid. It is written to an exclusively created private temp in that
+directory, verified, synced, and atomically `mv -Tf` onto the final path; then
+the containing directory is synced. There is no sidecar digest file. Candidate
+and previous identity use lowercase SHA-256 digests of each release's
+`SHA256SUMS` from `/usr/bin/sha256sum`, bound to the exact manifest path. The
+file contains only the fixed fields `kind=deployment-attempt`, `status=recorded`,
+candidate id/digest, and previous state (`absent` or validated id/digest). It
+must not record secrets, database paths, prompts, environment contents, or
+arbitrary payloads. This increment records that attempt identity only; the
+complete fail-closed rollback outcome state machine remains Phase 4 PR 5.
 
 Prove this increment offline with disposable directories and fake commands:
 

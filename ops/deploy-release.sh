@@ -82,6 +82,8 @@ require_manifest_digest() {
 }
 # Hash the exact SHA256SUMS file of one canonical release directory. Require a
 # regular non-symlink file and a lowercase 64-hex digest bound to that path.
+# Identity evidence uses the trusted host hasher; do not honor PATH or
+# EnvironmentFile substitutes.
 manifest_digest() {
 	release_dir=$1
 	sums=$release_dir/SHA256SUMS
@@ -89,7 +91,7 @@ manifest_digest() {
 		echo "release manifest is missing, not a regular file, or symlink-shaped: $sums" >&2
 		exit 64
 	fi
-	if ! capture sha256sum -- "$sums"; then
+	if ! capture /usr/bin/sha256sum -- "$sums"; then
 		echo "failed to hash release manifest: $sums" >&2
 		exit 64
 	fi
@@ -102,8 +104,10 @@ manifest_digest() {
 	printf '%s\n' "$digest"
 }
 # Private operator-configured or default state directory for the sanitized
-# deployment-attempt receipt. Parent and leaf must be real directories, not
-# symlinks. Child commands used here do not inherit the lock fd.
+# deployment-attempt receipt. The canonical existing parent must be owned by
+# the effective uid/gid and must not be group or other writable. The leaf must
+# be a real non-symlink direct child, owned by the effective uid/gid, mode
+# 0700. Child commands used here do not inherit the lock fd.
 prepare_deploy_state_dir() {
 	state_dir=${COMMONS_DEPLOY_STATE_DIR:-}
 	if [ -z "$state_dir" ]; then
@@ -154,6 +158,26 @@ prepare_deploy_state_dir() {
 	test -n "$state_parent"
 	test -d "$state_parent"
 	test ! -L "$state_parent"
+	effective_uid=$(without_lock_fd id -u)
+	effective_gid=$(without_lock_fd id -g)
+	parent_uid=$(without_lock_fd stat -c %u "$state_parent")
+	parent_gid=$(without_lock_fd stat -c %g "$state_parent")
+	parent_mode=$(without_lock_fd stat -c %a "$state_parent")
+	if [ "$parent_uid" != "$effective_uid" ] || [ "$parent_gid" != "$effective_gid" ]; then
+		echo "deploy state parent must be owned by the effective uid/gid: $state_parent" >&2
+		exit 64
+	fi
+	case "$parent_mode" in
+	[0-7][0-7][0-7]|[0-7][0-7][0-7][0-7]) ;;
+	*)
+		echo "deploy state parent mode is unsafe: $state_parent" >&2
+		exit 64
+		;;
+	esac
+	if [ "$((0$parent_mode & 022))" -ne 0 ]; then
+		echo "deploy state parent must not be group or other writable: $state_parent" >&2
+		exit 64
+	fi
 	state_dir=$state_parent/$state_leaf
 	if [ -L "$state_dir" ]; then
 		echo "deploy state directory must not be a symlink: $state_dir" >&2
@@ -166,30 +190,64 @@ prepare_deploy_state_dir() {
 		fi
 	else
 		without_lock_fd mkdir -m 0700 -- "$state_dir"
-		if [ -L "$state_dir" ] || [ ! -d "$state_dir" ]; then
-			echo "deploy state directory is missing or symlink-shaped after create: $state_dir" >&2
-			exit 64
-		fi
+	fi
+	validate_deploy_state_dir
+}
+validate_deploy_state_dir() {
+	if [ -L "$state_dir" ]; then
+		echo "deploy state directory must not be a symlink: $state_dir" >&2
+		exit 64
+	fi
+	if [ ! -d "$state_dir" ]; then
+		echo "deploy state directory is missing or not a directory: $state_dir" >&2
+		exit 64
+	fi
+	if [ "$(without_lock_fd dirname "$state_dir")" != "$state_parent" ] || [ "$(without_lock_fd basename "$state_dir")" != "$state_leaf" ]; then
+		echo "deploy state directory is not a canonical direct child of its parent: $state_dir" >&2
+		exit 64
+	fi
+	effective_uid=$(without_lock_fd id -u)
+	effective_gid=$(without_lock_fd id -g)
+	dir_uid=$(without_lock_fd stat -c %u "$state_dir")
+	dir_gid=$(without_lock_fd stat -c %g "$state_dir")
+	dir_mode=$(without_lock_fd stat -c %a "$state_dir")
+	if [ "$dir_uid" != "$effective_uid" ] || [ "$dir_gid" != "$effective_gid" ]; then
+		echo "deploy state directory must be owned by the effective uid/gid: $state_dir" >&2
+		exit 64
+	fi
+	if [ "$dir_mode" != 700 ]; then
+		echo "deploy state directory must be mode 0700: $state_dir" >&2
+		exit 64
 	fi
 }
 reject_receipt_path() {
 	echo "deploy receipt path must be a regular non-symlink file in the validated state directory" >&2
 	exit 64
 }
+# Remove only the exclusive temp created by this invocation. Never follow or
+# remove a substituted symlink or non-regular path.
+cleanup_owned_receipt_tmp() {
+	if [ -z "${owned_receipt_tmp:-}" ]; then
+		return 0
+	fi
+	if [ -L "$owned_receipt_tmp" ]; then
+		owned_receipt_tmp=
+		return 0
+	fi
+	if [ -f "$owned_receipt_tmp" ]; then
+		without_lock_fd rm -f -- "$owned_receipt_tmp"
+	fi
+	owned_receipt_tmp=
+}
 write_deployment_attempt_receipt() {
 	prepare_deploy_state_dir
 	receipt=$state_dir/deployment-attempt
-	receipt_digest_file=$state_dir/deployment-attempt.sha256
-	receipt_tmp=$state_dir/deployment-attempt.tmp
-	receipt_digest_tmp=$state_dir/deployment-attempt.sha256.tmp
-	for receipt_path in "$receipt" "$receipt_digest_file" "$receipt_tmp" "$receipt_digest_tmp"; do
-		if [ -L "$receipt_path" ]; then
-			reject_receipt_path
-		fi
-		if [ -e "$receipt_path" ] && [ ! -f "$receipt_path" ]; then
-			reject_receipt_path
-		fi
-	done
+	if [ -L "$receipt" ]; then
+		reject_receipt_path
+	fi
+	if [ -e "$receipt" ] && [ ! -f "$receipt" ]; then
+		reject_receipt_path
+	fi
 	require_release_id "$release_id" "candidate release id is unsafe"
 	require_manifest_digest "$candidate_digest" "candidate manifest digest is malformed"
 	case "$previous_state" in
@@ -216,37 +274,79 @@ write_deployment_attempt_receipt() {
 		"previous_state=$previous_state" \
 		"previous_id=$previous_id" \
 		"previous_digest=$previous_digest")
-	without_lock_fd rm -f -- "$receipt_tmp" "$receipt_digest_tmp"
-	without_lock_fd sh -c 'umask 077; printf "%s\n" "$1" > "$2"; chmod 0600 "$2"' x "$receipt_body" "$receipt_tmp"
+	if ! capture /usr/bin/mktemp -- "$state_dir/deployment-attempt.XXXXXX"; then
+		echo "failed to create private deployment-attempt temp" >&2
+		exit 64
+	fi
+	receipt_tmp=$captured
+	if [ "$(without_lock_fd dirname "$receipt_tmp")" != "$state_dir" ]; then
+		echo "private receipt temp is not in the validated state directory" >&2
+		exit 64
+	fi
+	owned_receipt_tmp=$receipt_tmp
+	tmp_leaf=$(without_lock_fd basename "$receipt_tmp")
+	case "$tmp_leaf" in
+	deployment-attempt.??????) ;;
+	*)
+		echo "private receipt temp name is not exclusive-mktemp-shaped" >&2
+		cleanup_owned_receipt_tmp
+		exit 64
+		;;
+	esac
 	if [ -L "$receipt_tmp" ] || [ ! -f "$receipt_tmp" ]; then
+		cleanup_owned_receipt_tmp
 		reject_receipt_path
 	fi
-	if ! capture sha256sum -- "$receipt_tmp"; then
-		echo "failed to hash deployment-attempt receipt" >&2
-		without_lock_fd rm -f -- "$receipt_tmp"
+	if ! without_lock_fd sh -c 'set -eu; umask 077; printf "%s\n" "$1" > "$2"; chmod 0600 -- "$2"' x "$receipt_body" "$receipt_tmp"; then
+		echo "failed to write deployment-attempt receipt" >&2
+		cleanup_owned_receipt_tmp
 		exit 64
 	fi
-	receipt_sha=${captured%% *}
-	require_manifest_digest "$receipt_sha" "malformed deployment-attempt receipt digest"
-	if [ "$captured" != "$receipt_sha  $receipt_tmp" ]; then
-		echo "receipt digest is not bound to the exact temp receipt" >&2
-		without_lock_fd rm -f -- "$receipt_tmp"
+	if [ -L "$receipt_tmp" ] || [ ! -f "$receipt_tmp" ]; then
+		cleanup_owned_receipt_tmp
+		reject_receipt_path
+	fi
+	effective_uid=$(without_lock_fd id -u)
+	effective_gid=$(without_lock_fd id -g)
+	tmp_uid=$(without_lock_fd stat -c %u "$receipt_tmp")
+	tmp_gid=$(without_lock_fd stat -c %g "$receipt_tmp")
+	tmp_mode=$(without_lock_fd stat -c %a "$receipt_tmp")
+	if [ "$tmp_uid" != "$effective_uid" ] || [ "$tmp_gid" != "$effective_gid" ] || [ "$tmp_mode" != 600 ]; then
+		echo "deployment-attempt receipt temp must be mode 0600 and owned by the effective uid/gid" >&2
+		cleanup_owned_receipt_tmp
 		exit 64
 	fi
-	without_lock_fd sh -c 'umask 077; printf "%s  deployment-attempt\n" "$1" > "$2"; chmod 0600 "$2"' x "$receipt_sha" "$receipt_digest_tmp"
-	if [ -L "$receipt_digest_tmp" ] || [ ! -f "$receipt_digest_tmp" ]; then
-		without_lock_fd rm -f -- "$receipt_tmp" "$receipt_digest_tmp"
+	if ! without_lock_fd sync -- "$receipt_tmp"; then
+		echo "failed to sync deployment-attempt receipt" >&2
+		cleanup_owned_receipt_tmp
+		exit 64
+	fi
+	if [ -L "$receipt" ]; then
+		cleanup_owned_receipt_tmp
 		reject_receipt_path
 	fi
-	without_lock_fd mv -f -- "$receipt_tmp" "$receipt"
-	without_lock_fd mv -f -- "$receipt_digest_tmp" "$receipt_digest_file"
-	if [ -L "$receipt" ] || [ ! -f "$receipt" ] || [ -L "$receipt_digest_file" ] || [ ! -f "$receipt_digest_file" ]; then
+	if [ -e "$receipt" ] && [ ! -f "$receipt" ]; then
+		cleanup_owned_receipt_tmp
 		reject_receipt_path
 	fi
+	if ! without_lock_fd mv -Tf -- "$receipt_tmp" "$receipt"; then
+		echo "failed to publish deployment-attempt receipt" >&2
+		cleanup_owned_receipt_tmp
+		exit 64
+	fi
+	owned_receipt_tmp=
+	if [ -L "$receipt" ] || [ ! -f "$receipt" ]; then
+		reject_receipt_path
+	fi
+	receipt_uid=$(without_lock_fd stat -c %u "$receipt")
+	receipt_gid=$(without_lock_fd stat -c %g "$receipt")
 	receipt_mode=$(without_lock_fd stat -c %a "$receipt")
-	digest_mode=$(without_lock_fd stat -c %a "$receipt_digest_file")
-	if [ "$receipt_mode" != 600 ] || [ "$digest_mode" != 600 ]; then
-		echo "deployment-attempt receipt must be mode 0600" >&2
+	if [ "$receipt_uid" != "$effective_uid" ] || [ "$receipt_gid" != "$effective_gid" ] || [ "$receipt_mode" != 600 ]; then
+		echo "deployment-attempt receipt must be mode 0600 and owned by the effective uid/gid" >&2
+		exit 64
+	fi
+	if ! without_lock_fd sync -- "$state_dir"; then
+		echo "failed to sync deploy state directory" >&2
 		exit 64
 	fi
 }
@@ -257,6 +357,7 @@ previous_digest=
 previous_state=absent
 next="$COMMONS_RELEASE_ROOT/.current.next"
 owned_next=
+owned_receipt_tmp=
 cleanup_owned_next() {
 	# Remove only the temporary pointer created by this invocation. Never
 	# follow it or rewrite current. The directory flock is released by
@@ -268,7 +369,11 @@ cleanup_owned_next() {
 		fi
 	fi
 }
-trap cleanup_owned_next 0
+cleanup_owned_paths() {
+	cleanup_owned_receipt_tmp
+	cleanup_owned_next
+}
+trap cleanup_owned_paths 0
 trap 'exit 129' 1
 trap 'exit 130' 2
 trap 'exit 143' 15

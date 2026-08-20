@@ -52,11 +52,28 @@ grep -Fq 'write_deployment_attempt_receipt' "$deploy_script"
 grep -Fq 'kind=deployment-attempt' "$deploy_script"
 grep -Fq 'status=recorded' "$deploy_script"
 grep -Fq 'without_lock_fd sh -c' "$deploy_script"
+grep -Fq 'capture /usr/bin/sha256sum --' "$deploy_script"
+grep -Fq '/usr/bin/mktemp --' "$deploy_script"
+grep -Fq 'mv -Tf -- "$receipt_tmp" "$receipt"' "$deploy_script"
+grep -Fq 'owned_receipt_tmp' "$deploy_script"
 grep -Fq 'COMMONS_DEPLOY_STATE_DIR' "$deploy_script"
 grep -Fq 'COMMONS_DEPLOY_STATE_DIR' "$env_example"
 grep -Fq 'inspects `current` exactly once' "$runbook"
 grep -Fq 'deployment-attempt receipt' "$runbook"
 grep -Fq 'captured exact previous' "$runbook"
+grep -Fq '/usr/bin/sha256sum' "$runbook"
+if grep -Eq 'capture sha256sum ' "$deploy_script"; then
+	printf 'deploy-release.sh must hash identity evidence with /usr/bin/sha256sum\n' >&2
+	exit 1
+fi
+if grep -Fq 'deployment-attempt.sha256' "$deploy_script" "$runbook" "$env_example"; then
+	printf 'deployment-attempt sidecar digest must not remain in the receipt contract\n' >&2
+	exit 1
+fi
+if grep -Fq 'deployment-attempt.tmp' "$deploy_script"; then
+	printf 'deploy-release.sh must not use a predictable receipt temp name\n' >&2
+	exit 1
+fi
 current_line=$(grep -n 'readlink -- "$current"' "$deploy_script" | head -n1 | cut -d: -f1)
 backup_line=$(grep -n 'without_lock_fd /bin/sh "$staged/ops/backup.sh"' "$deploy_script" | head -n1 | cut -d: -f1)
 receipt_line=$(grep -n '^write_deployment_attempt_receipt$' "$deploy_script" | head -n1 | cut -d: -f1)
@@ -93,6 +110,7 @@ backup_dir=$root/backups
 mkdir -p "$backup_dir/daily"
 deploy_state=$root/deploy-state
 mkdir -p "$deploy_state"
+chmod 0700 "$deploy_state"
 backup_marker=$root/backup.marker
 previous_verify_log=$root/previous.verify
 verify_started=$root/verify.started
@@ -507,9 +525,6 @@ mutation_snapshot() {
 		fi
 		if [ -f "$deploy_state/deployment-attempt" ]; then
 			sha256sum "$deploy_state/deployment-attempt"
-			if [ -f "$deploy_state/deployment-attempt.sha256" ]; then
-				sha256sum "$deploy_state/deployment-attempt.sha256"
-			fi
 		else
 			printf 'receipt=absent\n'
 		fi
@@ -522,17 +537,25 @@ assert_receipt() {
 	expected_candidate=$2
 	expected_previous=${3:-}
 	receipt=$deploy_state/deployment-attempt
-	sidecar=$deploy_state/deployment-attempt.sha256
 	test -f "$receipt"
 	test ! -L "$receipt"
 	test "$(stat -c %a "$receipt")" = 600
-	test -f "$sidecar"
-	test ! -L "$sidecar"
-	test "$(stat -c %a "$sidecar")" = 600
+	test "$(stat -c %u "$receipt")" = "$(id -u)"
+	test "$(stat -c %g "$receipt")" = "$(id -g)"
+	test "$(stat -c %a "$deploy_state")" = 700
+	test "$(stat -c %u "$deploy_state")" = "$(id -u)"
+	test "$(stat -c %g "$deploy_state")" = "$(id -g)"
+	test ! -e "$deploy_state/deployment-attempt.sha256"
+	for leftover in "$deploy_state"/deployment-attempt.*; do
+		if [ -e "$leftover" ]; then
+			printf 'owned receipt temp leaked: %s\n' "$leftover" >&2
+			exit 1
+		fi
+	done
 	test "$(wc -l < "$receipt")" -eq 7
-	candidate_digest=$(sha256sum "$release_root/$expected_candidate/SHA256SUMS" | awk '{print $1}')
+	candidate_digest=$(/usr/bin/sha256sum "$release_root/$expected_candidate/SHA256SUMS" | awk '{print $1}')
 	if [ "$expected_prev_state" = validated ]; then
-		previous_digest=$(sha256sum "$release_root/$expected_previous/SHA256SUMS" | awk '{print $1}')
+		previous_digest=$(/usr/bin/sha256sum "$release_root/$expected_previous/SHA256SUMS" | awk '{print $1}')
 		expected_body=$(printf '%s\n' \
 			'kind=deployment-attempt' \
 			'status=recorded' \
@@ -552,10 +575,10 @@ assert_receipt() {
 			'previous_digest=')
 	fi
 	test "$(cat "$receipt")" = "$expected_body"
-	expected_sha=$(sha256sum "$receipt" | awk '{print $1}')
-	test "$(awk 'NR==1 {print $1}' "$sidecar")" = "$expected_sha"
-	test "$(awk 'NR==1 {print $2}' "$sidecar")" = deployment-attempt
-	if grep -Eq 'present.sqlite3|missing.sqlite3|COMMONS_DB=|/home/USER|prompt|secret|binding.key|COMMONS_CODEX_BINDING' "$receipt" "$sidecar"; then
+	expected_sha=$(/usr/bin/sha256sum "$receipt" | awk '{print $1}')
+	test "${#expected_sha}" -eq 64
+	test "$(/usr/bin/sha256sum "$receipt" | awk '{print $1}')" = "$expected_sha"
+	if grep -Eq 'present.sqlite3|missing.sqlite3|COMMONS_DB=|/home/USER|prompt|secret|binding.key|COMMONS_CODEX_BINDING' "$receipt"; then
 		printf 'deployment-attempt receipt contains forbidden payload\n' >&2
 		exit 1
 	fi
@@ -753,99 +776,33 @@ expect_invalid_previous manifest-directory
 rmdir "$release_root/previous/SHA256SUMS"
 restore_previous
 
+# A PATH/EnvironmentFile sha256sum substitute must not become identity
+# evidence. Injection stays limited to explicit fake commands already used
+# for other deploy behavior.
 sha_bin=$root/sha-bin
 mkdir -p "$sha_bin"
-cat > "$sha_bin/sha256sum" <<EOF
+cat > "$sha_bin/sha256sum" <<'EOF'
 #!/bin/sh
-set -eu
-path=
-for arg; do
-	case "\$arg" in
-	--|-b|-t) ;;
-	*) path=\$arg ;;
-	esac
-done
-case "\$path" in
-$release_root/previous/SHA256SUMS)
-	digest=\$(/usr/bin/sha256sum -- "\$path" | awk '{print \$1}')
-	printf '%s  /tmp/wrong-manifest\\n' "\$digest"
-	exit 0
-	;;
-esac
-exec /usr/bin/sha256sum "\$@"
+echo "PATH sha256sum must not be used for identity evidence" >&2
+exit 1
 EOF
 chmod 0755 "$sha_bin/sha256sum"
-rm -f -- "$backup_marker" "$verify_marker"
+restore_previous
+rm -f -- "$backup_marker"
 : > "$systemctl_log"
-before=$(mutation_snapshot)
-if COMMONS_RELEASE_ROOT=$release_root \
-	COMMONS_DB=$present_db \
-	COMMONS_BACKUP_DIR=$backup_dir \
-	COMMONS_SYSTEMCTL=$fake_bin/systemctl \
-	COMMONS_DEPLOY_STATE_DIR=$deploy_state \
-	FAKE_SYSTEMCTL_LOG=$systemctl_log \
-	FAKE_VERIFY_MARKER=$verify_marker \
-	FAKE_BACKUP_MARKER=$backup_marker \
-	FAKE_CURRENT=$current \
-	PATH="$sha_bin:$PATH" \
-	/bin/sh "$deploy_script" "$release_root/candidate-two" \
-	>"$root/invalid-manifest-mismatch.out" 2>"$root/invalid-manifest-mismatch.err"; then
-	printf 'manifest digest mismatch unexpectedly succeeded\n' >&2
-	exit 1
-else
-	mismatch_status=$?
-fi
-test "$mismatch_status" -eq 64
-test "$(mutation_snapshot)" = "$before"
-test ! -e "$backup_marker"
-grep -Fq 'manifest digest is not bound to the exact release manifest' "$root/invalid-manifest-mismatch.err"
-printf 'REJECTED manifest-mismatch\n'
-
-cat > "$sha_bin/sha256sum" <<EOF
-#!/bin/sh
-set -eu
-path=
-for arg; do
-	case "\$arg" in
-	--|-b|-t) ;;
-	*) path=\$arg ;;
-	esac
-done
-case "\$path" in
-$release_root/previous/SHA256SUMS)
-	digest=\$(/usr/bin/sha256sum -- "\$path" | awk '{print \$1}')
-	upper=\$(printf '%s\\n' "\$digest" | tr 'a-f' 'A-F')
-	printf '%s  %s\\n' "\$upper" "\$path"
-	exit 0
-	;;
-esac
-exec /usr/bin/sha256sum "\$@"
-EOF
-chmod 0755 "$sha_bin/sha256sum"
-rm -f -- "$backup_marker" "$verify_marker"
-: > "$systemctl_log"
-before=$(mutation_snapshot)
-if COMMONS_RELEASE_ROOT=$release_root \
-	COMMONS_DB=$present_db \
-	COMMONS_BACKUP_DIR=$backup_dir \
-	COMMONS_SYSTEMCTL=$fake_bin/systemctl \
-	COMMONS_DEPLOY_STATE_DIR=$deploy_state \
-	FAKE_SYSTEMCTL_LOG=$systemctl_log \
-	FAKE_VERIFY_MARKER=$verify_marker \
-	FAKE_BACKUP_MARKER=$backup_marker \
-	FAKE_CURRENT=$current \
-	PATH="$sha_bin:$PATH" \
-	/bin/sh "$deploy_script" "$release_root/candidate-two" \
-	>"$root/invalid-manifest-malformed.out" 2>"$root/invalid-manifest-malformed.err"; then
-	printf 'malformed manifest digest unexpectedly succeeded\n' >&2
-	exit 1
-else
-	malformed_status=$?
-fi
-test "$malformed_status" -eq 64
-test "$(mutation_snapshot)" = "$before"
-test ! -e "$backup_marker"
-printf 'REJECTED manifest-malformed\n'
+PATH="$sha_bin:$PATH" \
+COMMONS_RELEASE_ROOT=$release_root \
+COMMONS_DB=$db \
+COMMONS_SYSTEMCTL=$fake_bin/systemctl \
+COMMONS_DEPLOY_STATE_DIR=$deploy_state \
+FAKE_SYSTEMCTL_LOG=$systemctl_log \
+FAKE_BACKUP_MARKER=$backup_marker \
+FAKE_CURRENT=$current \
+/bin/sh "$deploy_script" "$release_root/candidate-two" \
+	>"$root/trusted-sha.out" 2>"$root/trusted-sha.err"
+test "$(pointer_target)" = candidate-two
+assert_receipt validated candidate-two previous
+printf 'DEPLOY_TRUSTED_SHA256SUM=pass\n'
 printf 'DEPLOY_INVALID_PREVIOUS_ZERO_MUTATION=pass\n'
 
 # Receipt path must be a regular file in a real parent; symlink-shaped state is rejected.
@@ -857,13 +814,14 @@ expect_invalid_previous receipt-symlink
 rm -f -- "$deploy_state/deployment-attempt"
 restore_previous
 
-rm -f -- "$deploy_state/deployment-attempt.sha256"
-ln -s "$root/outside-receipt" "$deploy_state/deployment-attempt.sha256"
-expect_invalid_previous receipt-digest-symlink
-rm -f -- "$deploy_state/deployment-attempt.sha256"
+rm -f -- "$deploy_state/deployment-attempt"
+mkdir "$deploy_state/deployment-attempt"
+expect_invalid_previous receipt-directory
+rmdir "$deploy_state/deployment-attempt"
 restore_previous
 
 mkdir -p "$root/real-state-parent"
+chmod 0755 "$root/real-state-parent"
 ln -s "$root/real-state-parent" "$root/sym-state-parent"
 expect_invalid_previous unsafe-state-parent 64 "$root/sym-state-parent/deploy"
 rm -f -- "$root/sym-state-parent"
@@ -872,7 +830,220 @@ restore_previous
 ln -s "$deploy_state" "$root/state-dir-alias"
 expect_invalid_previous state-dir-symlink 64 "$root/state-dir-alias"
 rm -f -- "$root/state-dir-alias"
+restore_previous
+
+writable_parent=$root/writable-parent
+mkdir -p "$writable_parent/deploy"
+chmod 0700 "$writable_parent/deploy"
+chmod 0777 "$writable_parent"
+expect_invalid_previous world-writable-state-parent 64 "$writable_parent/deploy"
+test ! -e "$writable_parent/deploy/deployment-attempt"
+chmod 0775 "$writable_parent"
+expect_invalid_previous group-writable-state-parent 64 "$writable_parent/deploy"
+test ! -e "$writable_parent/deploy/deployment-attempt"
+chmod 0700 "$writable_parent"
+restore_previous
+
+mode_parent=$root/mode-parent
+mkdir -p "$mode_parent/deploy"
+chmod 0755 "$mode_parent"
+chmod 0755 "$mode_parent/deploy"
+expect_invalid_previous wrong-mode-state-dir 64 "$mode_parent/deploy"
+test ! -e "$mode_parent/deploy/deployment-attempt"
+chmod 0700 "$mode_parent/deploy"
+restore_previous
+
+if [ "$(stat -c %u /usr)" != "$(id -u)" ]; then
+	expect_invalid_previous unowned-state-parent 64 /usr/codex-commons-deploy-should-not-exist
+	test ! -e /usr/codex-commons-deploy-should-not-exist
+fi
+
+# A leftover predictable temp name must not be pre-deleted or followed.
+printf outside-tmp > "$root/outside-tmp"
+outside_tmp_before=$(/usr/bin/sha256sum "$root/outside-tmp")
+ln -s "$root/outside-tmp" "$deploy_state/deployment-attempt.tmp"
+run_deploy "$release_root" "$release_root/candidate-two"
+test "$(pointer_target)" = candidate-two
+test -L "$deploy_state/deployment-attempt.tmp"
+test "$(/usr/bin/sha256sum "$root/outside-tmp")" = "$outside_tmp_before"
+rm -f -- "$deploy_state/deployment-attempt.tmp"
+assert_receipt validated candidate-two previous
 printf 'DEPLOY_RECEIPT_PATH_REJECT=pass\n'
+
+# Receipt publish must fail closed on sync/mv errors and leave only the owned temp gone.
+restore_previous
+rm -f -- "$deploy_state/deployment-attempt"
+receipt_fail_bin=$root/receipt-fail-bin
+mkdir -p "$receipt_fail_bin"
+cat > "$receipt_fail_bin/mv" <<'EOF'
+#!/bin/sh
+set -eu
+for arg; do
+	case "$arg" in
+	*/deployment-attempt)
+		echo "forced receipt mv failure" >&2
+		exit 1
+		;;
+	esac
+done
+exec /bin/mv "$@"
+EOF
+chmod 0555 "$receipt_fail_bin/mv"
+before=$(mutation_snapshot)
+if COMMONS_RELEASE_ROOT=$release_root \
+	COMMONS_DB=$present_db \
+	COMMONS_BACKUP_DIR=$backup_dir \
+	COMMONS_SYSTEMCTL=$fake_bin/systemctl \
+	COMMONS_DEPLOY_STATE_DIR=$deploy_state \
+	FAKE_SYSTEMCTL_LOG=$systemctl_log \
+	FAKE_VERIFY_MARKER=$verify_marker \
+	FAKE_BACKUP_MARKER=$backup_marker \
+	FAKE_CURRENT=$current \
+	PATH="$receipt_fail_bin:$PATH" \
+	/bin/sh "$deploy_script" "$release_root/candidate-two" \
+	>"$root/receipt-mv.out" 2>"$root/receipt-mv.err"; then
+	printf 'receipt mv failure unexpectedly succeeded\n' >&2
+	exit 1
+else
+	receipt_mv_status=$?
+fi
+test "$receipt_mv_status" -eq 64
+test "$(mutation_snapshot)" = "$before"
+test ! -e "$backup_marker"
+test "$(pointer_target)" = previous
+grep -Fq 'failed to publish deployment-attempt receipt' "$root/receipt-mv.err"
+for leftover in "$deploy_state"/deployment-attempt.*; do
+	if [ -e "$leftover" ]; then
+		printf 'owned receipt temp leaked after mv failure: %s\n' "$leftover" >&2
+		exit 1
+	fi
+done
+printf 'DEPLOY_RECEIPT_MV_FAIL_CLOSED=pass\n'
+
+cat > "$receipt_fail_bin/sync" <<'EOF'
+#!/bin/sh
+set -eu
+for arg; do
+	case "$arg" in
+	--|-d|-f) ;;
+	*/deployment-attempt.*)
+		echo "forced receipt sync failure" >&2
+		exit 1
+		;;
+	esac
+done
+exec /bin/sync "$@"
+EOF
+chmod 0555 "$receipt_fail_bin/sync"
+rm -f -- "$receipt_fail_bin/mv"
+before=$(mutation_snapshot)
+if COMMONS_RELEASE_ROOT=$release_root \
+	COMMONS_DB=$present_db \
+	COMMONS_BACKUP_DIR=$backup_dir \
+	COMMONS_SYSTEMCTL=$fake_bin/systemctl \
+	COMMONS_DEPLOY_STATE_DIR=$deploy_state \
+	FAKE_SYSTEMCTL_LOG=$systemctl_log \
+	FAKE_VERIFY_MARKER=$verify_marker \
+	FAKE_BACKUP_MARKER=$backup_marker \
+	FAKE_CURRENT=$current \
+	PATH="$receipt_fail_bin:$PATH" \
+	/bin/sh "$deploy_script" "$release_root/candidate-two" \
+	>"$root/receipt-sync.out" 2>"$root/receipt-sync.err"; then
+	printf 'receipt sync failure unexpectedly succeeded\n' >&2
+	exit 1
+else
+	receipt_sync_status=$?
+fi
+test "$receipt_sync_status" -eq 64
+test "$(mutation_snapshot)" = "$before"
+test ! -e "$backup_marker"
+test "$(pointer_target)" = previous
+grep -Fq 'failed to sync deployment-attempt receipt' "$root/receipt-sync.err"
+for leftover in "$deploy_state"/deployment-attempt.*; do
+	if [ -e "$leftover" ]; then
+		printf 'owned receipt temp leaked after sync failure: %s\n' "$leftover" >&2
+		exit 1
+	fi
+done
+printf 'DEPLOY_RECEIPT_SYNC_FAIL_CLOSED=pass\n'
+
+# Signal interruption while the owned temp exists must clean only that temp.
+sync_hold=$root/sync.hold
+: > "$sync_hold"
+rm -f -- "$receipt_fail_bin/sync"
+cat > "$receipt_fail_bin/sync" <<EOF
+#!/bin/sh
+set -eu
+hold=0
+for arg; do
+	case "\$arg" in
+	--|-d|-f) ;;
+	*/deployment-attempt.*)
+		hold=1
+		;;
+	esac
+done
+if [ "\$hold" -eq 1 ] && [ -n "\${FAKE_SYNC_HOLD:-}" ]; then
+	while [ -f "\$FAKE_SYNC_HOLD" ]; do
+		sleep 0.01
+	done
+	exit 1
+fi
+exec /bin/sync "\$@"
+EOF
+chmod 0555 "$receipt_fail_bin/sync"
+rm -f -- "$deploy_state/deployment-attempt"
+rm -f -- "$verify_marker"
+COMMONS_RELEASE_ROOT=$release_root \
+COMMONS_DB=$db \
+COMMONS_SYSTEMCTL=$fake_bin/systemctl \
+COMMONS_DEPLOY_STATE_DIR=$deploy_state \
+FAKE_SYSTEMCTL_LOG=$systemctl_log \
+FAKE_SYNC_HOLD=$sync_hold \
+FAKE_BACKUP_MARKER=$backup_marker \
+PATH="$receipt_fail_bin:$PATH" \
+/bin/sh "$deploy_script" "$release_root/candidate-two" \
+	>"$root/receipt-interrupt.out" 2>"$root/receipt-interrupt.err" &
+first_pid=$!
+attempt=0
+while true; do
+	found_tmp=
+	for path in "$deploy_state"/deployment-attempt.*; do
+		if [ -f "$path" ] && [ ! -L "$path" ]; then
+			found_tmp=$path
+			break
+		fi
+	done
+	if [ -n "$found_tmp" ]; then
+		break
+	fi
+	attempt=$((attempt + 1))
+	test "$attempt" -lt 500
+	sleep 0.01
+done
+test "$(pointer_target)" = previous
+for child in $(ps -o pid= --ppid "$first_pid" 2>/dev/null); do
+	kill -TERM "$child" 2>/dev/null || true
+done
+kill -TERM "$first_pid" 2>/dev/null || true
+rm -f -- "$sync_hold"
+if wait "$first_pid"; then
+	printf 'receipt-interrupt deploy exited 0\n' >&2
+	exit 1
+else
+	receipt_interrupt_status=$?
+fi
+first_pid=
+test "$receipt_interrupt_status" -ne 0
+test "$(pointer_target)" = previous
+test ! -e "$deploy_state/deployment-attempt"
+for leftover in "$deploy_state"/deployment-attempt.*; do
+	if [ -e "$leftover" ]; then
+		printf 'owned receipt temp leaked after signal: %s\n' "$leftover" >&2
+		exit 1
+	fi
+done
+printf 'DEPLOY_RECEIPT_INTERRUPT_CLEANUP=pass\n'
 
 # Swapping current after the previous pin must not redirect rollback.
 restore_previous
@@ -967,6 +1138,7 @@ printf 'DEPLOY_PREVIOUS_VERIFY_LOCK_FD_NOT_INHERITED=pass\n'
 restore_previous
 home_dir=$root/home
 mkdir -p "$home_dir/.local/state/codex-commons"
+chmod 0755 "$home_dir/.local/state/codex-commons"
 rm -f -- "$backup_marker"
 : > "$systemctl_log"
 HOME=$home_dir \
@@ -979,13 +1151,19 @@ FAKE_CURRENT=$current \
 /bin/sh "$deploy_script" "$release_root/candidate-two" \
 	>"$root/default-state.out" 2>"$root/default-state.err"
 test "$(pointer_target)" = candidate-two
-default_receipt=$home_dir/.local/state/codex-commons/deploy/deployment-attempt
-default_sidecar=$home_dir/.local/state/codex-commons/deploy/deployment-attempt.sha256
+default_dir=$home_dir/.local/state/codex-commons/deploy
+default_receipt=$default_dir/deployment-attempt
+test -d "$default_dir"
+test ! -L "$default_dir"
+test "$(stat -c %a "$default_dir")" = 700
+test "$(stat -c %u "$default_dir")" = "$(id -u)"
+test "$(stat -c %g "$default_dir")" = "$(id -g)"
 test -f "$default_receipt"
 test ! -L "$default_receipt"
 test "$(stat -c %a "$default_receipt")" = 600
-test -f "$default_sidecar"
-test "$(stat -c %a "$default_sidecar")" = 600
+test "$(stat -c %u "$default_receipt")" = "$(id -u)"
+test "$(stat -c %g "$default_receipt")" = "$(id -g)"
+test ! -e "$default_dir/deployment-attempt.sha256"
 grep -Fxq 'kind=deployment-attempt' "$default_receipt"
 grep -Fxq 'previous_state=validated' "$default_receipt"
 grep -Fxq 'previous_id=previous' "$default_receipt"
