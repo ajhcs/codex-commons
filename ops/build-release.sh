@@ -17,6 +17,13 @@ ops_parent=$(readlink -f "$ops_parent") || exit 64
 output_destination=$output_parent/$(basename "$output")
 ops_destination=$ops_parent/$(basename "$ops_output")
 test "$output_destination" != "$ops_destination" || exit 64
+test ! -L "$output" || exit 64
+test ! -L "$ops_output" || exit 64
+if test -e "$output" && test -e "$ops_output"; then
+	output_inode=$(stat -c '%d:%i' "$output") || exit 64
+	ops_inode=$(stat -c '%d:%i' "$ops_output") || exit 64
+	test "$output_inode" != "$ops_inode" || exit 64
+fi
 CGO_ENABLED=0 go build -trimpath -buildvcs=true -ldflags "-buildid= -X main.releaseID=$id" -o "$output" ./cmd/commons-server
 test "$($output --build-id)" = "$id"
 go version -m "$output" | grep -Fq 'path'"$(printf '\t')"'codex-commons/cmd/commons-server'

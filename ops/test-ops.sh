@@ -78,6 +78,22 @@ symlink_collision_status=0
 test "$symlink_collision_status" -eq 64
 printf 'BUILD_SYMLINK_COLLISION_STATUS=%s\n' "$symlink_collision_status"
 
+mkdir -p "$root/build-leaf-real"
+printf existing > "$root/build-leaf-real/commons-ops"
+ln -s "$root/build-leaf-real/commons-ops" "$root/build-leaf-server"
+leaf_symlink_collision_status=0
+/bin/sh "$build_script" build-leaf-symlink-collision "$root/build-leaf-server" "$root/build-leaf-real/commons-ops" >/dev/null 2>&1 || leaf_symlink_collision_status=$?
+test "$leaf_symlink_collision_status" -eq 64
+printf 'BUILD_LEAF_SYMLINK_COLLISION_STATUS=%s\n' "$leaf_symlink_collision_status"
+
+mkdir -p "$root/build-hardlink"
+printf existing > "$root/build-hardlink/commons-server"
+ln "$root/build-hardlink/commons-server" "$root/build-hardlink/commons-ops"
+hardlink_collision_status=0
+/bin/sh "$build_script" build-hardlink-collision "$root/build-hardlink/commons-server" "$root/build-hardlink/commons-ops" >/dev/null 2>&1 || hardlink_collision_status=$?
+test "$hardlink_collision_status" -eq 64
+printf 'BUILD_HARDLINK_COLLISION_STATUS=%s\n' "$hardlink_collision_status"
+
 negative_cases=0
 restored_cases=0
 positive_cases=0
