@@ -278,7 +278,32 @@ maintenance plan and authorization.
 ## 7. Disposable cutover sequence
 
 The following is the gate sequence for a separately authorized rehearsal. It
-does not authorize live activation:
+does not authorize live activation.
+
+`ops/deploy-release.sh` serializes one deployment transaction by canonicalizing
+`COMMONS_RELEASE_ROOT`, opening that canonical release-root directory itself,
+and taking a nonblocking exclusive `flock` on the directory descriptor. It does
+not create or follow a `.lock` file, and it does not lock through a symlink.
+The descriptor stays open until the process exits, so the same lock covers
+candidate verification, backup, the `current` pointer switch, restart and
+readiness, and the existing database/pointer/previous-readiness rollback
+paths. Staged scripts, the configurable systemctl command, and other child
+processes do not receive a usable copy of that lock descriptor. A second
+concurrent deploy exits `75` (busy) before changing any state. A suspicious
+pre-existing `.current.next` that is not a leftover relative release-basename
+symlink is rejected without following or overwriting it. If this invocation
+creates `.current.next` and is interrupted before the rename, only that
+temporary symlink is removed; `current` is not rewritten by
+the trap. The flock is released automatically when the process exits.
+
+Prove this increment offline with disposable directories and fake commands:
+
+```sh
+sh ops/test-deploy.sh
+```
+
+That fixture is not authorization to switch a live `current`, restart a unit,
+or mutate a live database.
 
 1. Confirm the working tree is clean and the source commit is recorded. Stop
    any temporary process only under its task owner and verify the chosen
@@ -316,10 +341,12 @@ does not authorize live activation:
 
 ## 8. Rollback and failure boundaries
 
-Rollback is a separate operational decision. First capture the candidate
-failure and stop the restart-on-failure service. Validate the matching
-pre-upgrade receipt and exact previous release before touching the database or
-`current`. If a database restore is required, remove only the matching WAL/SHM
+Rollback is a separate operational decision and, when invoked from
+`ops/deploy-release.sh`, still runs under the same release-root directory
+flock. First capture the candidate failure and stop the restart-on-failure
+service. Validate the matching pre-upgrade receipt and exact previous release
+before touching the database or `current`. If a database restore is required,
+remove only the matching WAL/SHM
 while the service is stopped, restore through a verified temporary file in the
 same directory, and atomically replace the exact target. Switch `current` only
 to the validated release directory, then restart and rerun readiness.
@@ -340,9 +367,10 @@ service, and do not delete the last known-good release or backup.
 
 ## 9. Release gates and approval boundary
 
-Source edits, static checks, Go tests, browser tests, and a disposable
-acceptance run prove the candidate contract only. They do not approve a live
-deployment. Live activation is prohibited until the applicable Phase 0–5
+Source edits, static checks, Go tests, browser tests, the Phase 4
+`sh ops/test-deploy.sh` gate, and a disposable acceptance run prove the
+candidate contract only. They do not approve a live deployment. Live
+activation is prohibited until the applicable Phase 0–5
 release gates are complete, the candidate is built from an explicitly reviewed
 commit, its manifest/AppArmor/runtime/backup/restore evidence is recorded, and
 an authorized operator approves the exact release ID, database boundary,

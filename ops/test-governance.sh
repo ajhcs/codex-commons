@@ -28,6 +28,7 @@ for path in \
 	ops/record-evidence.sh \
 	ops/seal-archive.sh \
 	ops/stage-release.sh \
+	ops/test-deploy.sh \
 	ops/test-governance.sh \
 	ops/test-ops.sh \
 	ops/verify-release.sh \
