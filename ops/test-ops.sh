@@ -282,7 +282,7 @@ stage_cwd=$root/stage-cwd
 mkdir -p "$stage_cwd/ops"
 cp "$stage_script" "$stage_cwd/ops/stage-release.sh"
 cp "$verify_script" "$stage_cwd/ops/verify-release.sh"
-for runtime_op in backup.sh check-readiness.sh deploy-release.sh record-evidence.sh seal-archive.sh verify-restore.sh; do
+for runtime_op in backup.sh check-readiness.sh deploy-release.sh record-evidence.sh restore-database.sh seal-archive.sh verify-restore.sh; do
 	printf '#!/bin/sh\nexit 0\n' > "$stage_cwd/ops/$runtime_op"
 done
 

@@ -48,7 +48,7 @@ printf '%s\n' "$id" > "$target/VERSION"
 cp "$COMMONS_SERVER_SOURCE" "$target/commons-server"
 for file in bin/codex bin/codex-code-mode-host codex-resources/bwrap codex-resources/zsh/bin/zsh codex-path/rg codex-package.json; do cp "$bundle/$file" "$target/$file"; done
 cp -R "$COMMONS_WEB_SOURCE"/. "$target/web/"
-for runtime_op in backup.sh check-readiness.sh deploy-release.sh record-evidence.sh seal-archive.sh verify-release.sh verify-restore.sh; do cp "ops/$runtime_op" "$target/ops/$runtime_op"; done
+for runtime_op in backup.sh check-readiness.sh deploy-release.sh record-evidence.sh restore-database.sh seal-archive.sh verify-release.sh verify-restore.sh; do cp "ops/$runtime_op" "$target/ops/$runtime_op"; done
 chmod 0755 "$target/commons-server" "$target/bin/codex" "$target/bin/codex-code-mode-host" "$target/codex-resources/bwrap" "$target/codex-resources/zsh/bin/zsh" "$target/codex-path/rg"
 chmod 0644 "$target/codex-package.json"
 find "$target/web" "$target/ops" -type d -exec chmod 0755 {} +

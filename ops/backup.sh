@@ -17,7 +17,7 @@ test ! -e "$target"
 has_table() { test "$(sqlite3 "$COMMONS_DB" "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='$1'")" -eq 1; }
 status() { if has_table installation_status; then sqlite3 "$COMMONS_DB" "UPDATE installation_status SET backup_status='$1',backup_verified_at=$2,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=1"; fi; }
 trap 'status failed NULL' HUP INT TERM EXIT
-sqlite3 "$COMMONS_DB" ".backup '$target'"
+sqlite3 "$COMMONS_DB" ".backup '$target'" >/dev/null
 test "$(sqlite3 "$target" 'PRAGMA integrity_check')" = ok
 test "$(sqlite3 "$target" 'PRAGMA foreign_key_check' | wc -l)" -eq 0
 sha256sum "$target" > "$target.sha256"
@@ -36,3 +36,10 @@ month=$(date -u +%Y-%m)
 monthly="$COMMONS_BACKUP_DIR/monthly/commons-$month.sqlite3"
 if [ ! -e "$monthly" ]; then cp --reflink=auto "$target" "$monthly"; sha256sum "$monthly" > "$monthly.sha256"; sed "s/$(basename "$target")/$(basename "$monthly")/;s/$(sha256sum "$target" | awk '{print $1}')/$(sha256sum "$monthly" | awk '{print $1}')/" "$target.receipt.json" > "$monthly.receipt.json"; fi
 find "$COMMONS_BACKUP_DIR/monthly" -maxdepth 1 -type f -name 'commons-*.sqlite3' -printf '%T@ %p\n' | sort -nr | awk 'NR>12 {print $2}' | while IFS= read -r old; do rm -f -- "$old" "$old.sha256" "$old.receipt.json"; done
+# Exact backup created by this invocation. Deploy captures this single line
+# and must not select a different timer file by mtime.
+if [ -L "$target" ] || [ ! -f "$target" ]; then
+	echo "backup target is missing, not a regular file, or symlink-shaped" >&2
+	exit 64
+fi
+printf '%s\n' "$target"
