@@ -524,6 +524,44 @@ commit, its manifest/AppArmor/runtime/backup/restore evidence is recorded, and
 an authorized operator approves the exact release ID, database boundary,
 traffic boundary, maintenance window, and rollback target.
 
+### Phase 4 acceptance ledger
+
+The machine-readable Phase 4 handoff is
+`docs/phase-4-acceptance-ledger.md`. It is a strict, sanitized record of the
+clean authority/ancestry, Phase 4 PR and review references, command exits,
+release-gate plan fingerprint/reference/status, receipt schemas and digests,
+allowlisted rollback outcomes, and the exact disposable marker evidence. It
+contains no receipt payloads, database paths, prompts, credentials, tokens, or
+personal content. Exactly two receipt schemas are permitted. The recorded
+deployment-attempt schema digest is computed from the newline-delimited field
+names `kind`, `status`, `candidate_id`, `candidate_digest`, `previous_state`,
+`previous_id`, and `previous_digest`; the failed rollback-outcome schema adds
+`deploy_outcome`, `service_state`, and `database_state`. These are SHA-256
+digests of field names, not receipt payloads. The checker is:
+
+```sh
+sh ops/test-phase4-acceptance.sh
+```
+
+The checker runs only disposable fixtures. It rejects unknown rows, fields,
+statuses, outcomes, schemas, paths, duplicate or missing evidence, a wrong
+expected-failure child exit, a dirty authority, and any `GO`/activation claim.
+The Phase 4 PR5 rollback section contributes 31 expected-failure markers plus
+`DEPLOY_FIRST_DEPLOY_WAL_SYMLINK_REJECT`; each must have exactly one
+`MARKER_CHILD_EXIT=1` and one `MARKER=pass`. It separately records actual
+`receipt_mismatch`, an unsafe receipt left untouched, receipt write/sync/mv
+preserving the recorded receipt without publishing a new outcome, and a failed
+`previous_ready` publication leaving the last durable `candidate_failed`
+outcome. The unsafe and write/sync/`mv -Tf` cases are explicitly recorded as
+no-published-outcome cases; they must not be relabeled as `receipt_mismatch` or
+`candidate_failed`.
+
+This ledger and checker are evidence of source behavior only. They do not run
+`release-gate`, package a candidate, switch `current`, restart systemd, mutate
+a database, or authorize live activation. The live boundary remains
+**NO-GO** and `activation_performed=false` until the complete Phase 0–5 gate
+packet and a separate operational approval exist.
+
 The current delivery direction is to finish through Phase 5 before beginning
 live tests. Phase 9's disposable gates, new-candidate construction, explicit
 live approval, and live recovery/evidence work also remain outstanding.
