@@ -356,9 +356,24 @@ canonical parent is a real non-symlink directory owned by the effective
 uid/gid and not group or other writable. The destination is either safely
 absent for first-deploy cleanup or a regular non-symlink file, mode 0600,
 owned by that uid/gid. A dangling symlink is never treated as absent. When a
-database is present, `ops/backup.sh` prints the exact backup file created by
-this invocation as a single stdout line; deploy captures that regular path and
-does not glob-pick a newer timer file by mtime.
+database is present, packaged `commons-ops backup` (via `ops/backup.sh`)
+validates `COMMONS_BACKUP_DIR`, `daily/`, and `monthly/` as canonical,
+contained, non-symlink directories owned by the effective uid/gid with mode
+0700, then takes a nonblocking exclusive `flock` on the backup-root directory
+descriptor. It does not create or follow a pathname lock file. Publication
+uses a private temporary directory, SQLite backup plus integrity/foreign-key
+checks, and exclusive no-replace fd-relative publishes of the database,
+checksum, and sanitized receipt. Monthly publication uses the same
+no-follow/no-replace policy. Retention may inspect or delete only validated
+direct regular files with expected owner, mode 0600, and link count; it never
+follows or deletes symlinks, directories, or foreign entries. The wrapper
+prints the exact backup file created by this invocation as a single stdout
+line; deploy captures that regular path and does not glob-pick a newer timer
+file by mtime. Prove the backup boundary offline with disposable directories:
+
+```sh
+sh ops/test-backup.sh
+```
 
 Prove this increment offline with disposable directories and fake commands:
 

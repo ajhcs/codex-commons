@@ -44,6 +44,8 @@ grep -Fq 'no-published-outcome cases' "$root/deploy/CONTINUOUS_DOGFOOD_RUNBOOK.m
 for path in \
 	cmd/commons-ops/main.go \
 	docs/commons-ops.md \
+	internal/opsbackup/backup.go \
+	internal/opsfs/path.go \
 	ops/backup.sh \
 	ops/build-release.sh \
 	ops/check-readiness.sh \
@@ -53,6 +55,7 @@ for path in \
 	ops/restore-database.sh \
 	ops/seal-archive.sh \
 	ops/stage-release.sh \
+	ops/test-backup.sh \
 	ops/test-deploy.sh \
 	ops/test-governance.sh \
 	ops/test-launch.sh \
