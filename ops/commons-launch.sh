@@ -13,12 +13,22 @@ export LC_ALL LANG
 # verify it, chdir into it, and exec its commons-server. Never re-read current
 # after the pin. Intended for installation outside mutable release directories.
 
-# Capture command stdout losslessly. POSIX $(...) strips trailing newline
-# bytes; a non-newline sentinel is retained, then removed by the caller.
-# Fail closed if the command itself fails (missing or raced readlink).
-capture_stdout() {
-	"$@" || return 1
-	printf x
+# Capture GNU command stdout losslessly. POSIX $(...) strips every trailing
+# newline; a non-newline sentinel survives that strip. Drop only the sentinel
+# and exactly one GNU terminator newline so a value that itself ends in
+# newline is still presented to later checks. Command failure fails closed.
+nl='
+'
+capture() {
+	captured=$(
+		"$@" || exit 1
+		printf x
+	) || return 1
+	captured=${captured%x}
+	case "$captured" in
+	*"$nl") captured=${captured%"$nl"} ;;
+	*) return 1 ;;
+	esac
 }
 
 reject_controls() {
@@ -38,11 +48,11 @@ case "$COMMONS_RELEASE_ROOT" in /*) ;; *)
 esac
 reject_controls "$COMMONS_RELEASE_ROOT" "COMMONS_RELEASE_ROOT must not contain control characters"
 test -d "$COMMONS_RELEASE_ROOT"
-if ! COMMONS_RELEASE_ROOT=$(capture_stdout readlink -f "$COMMONS_RELEASE_ROOT"); then
+if ! capture readlink -f "$COMMONS_RELEASE_ROOT"; then
 	echo "failed to canonicalize COMMONS_RELEASE_ROOT" >&2
 	exit 64
 fi
-COMMONS_RELEASE_ROOT=${COMMONS_RELEASE_ROOT%x}
+COMMONS_RELEASE_ROOT=$captured
 test -n "$COMMONS_RELEASE_ROOT"
 reject_controls "$COMMONS_RELEASE_ROOT" "COMMONS_RELEASE_ROOT must not contain control characters"
 test -d "$COMMONS_RELEASE_ROOT"
@@ -58,11 +68,11 @@ fi
 # release-directory basename; do not follow nested, absolute, traversal, or
 # other symlink-shaped targets. Capture losslessly before the ASCII grammar
 # so a trailing newline cannot be stripped into a legal name.
-if ! current_target=$(capture_stdout readlink -- "$current"); then
+if ! capture readlink -- "$current"; then
 	echo "failed to read current release pointer" >&2
 	exit 64
 fi
-current_target=${current_target%x}
+current_target=$captured
 case "$current_target" in
 .|..|*/*|*[!A-Za-z0-9._-]*|'')
 	echo "refusing unsafe current release target" >&2
@@ -75,11 +85,11 @@ if [ ! -d "$release_dir" ] || [ -L "$release_dir" ]; then
 	echo "current release is missing, not a directory, or symlink-shaped" >&2
 	exit 64
 fi
-if ! release_dir=$(capture_stdout readlink -f "$release_dir"); then
+if ! capture readlink -f "$release_dir"; then
 	echo "failed to canonicalize current release directory" >&2
 	exit 64
 fi
-release_dir=${release_dir%x}
+release_dir=$captured
 test -n "$release_dir"
 reject_controls "$release_dir" "current release directory must not contain control characters"
 test -d "$release_dir"
