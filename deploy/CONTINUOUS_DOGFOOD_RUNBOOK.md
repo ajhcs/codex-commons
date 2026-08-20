@@ -300,16 +300,51 @@ does not authorize live activation.
 and taking a nonblocking exclusive `flock` on the directory descriptor. It does
 not create or follow a `.lock` file, and it does not lock through a symlink.
 The descriptor stays open until the process exits, so the same lock covers
-candidate verification, backup, the `current` pointer switch, restart and
-readiness, and the existing database/pointer/previous-readiness rollback
-paths. Staged scripts, the configurable systemctl command, and other child
-processes do not receive a usable copy of that lock descriptor. A second
-concurrent deploy exits `75` (busy) before changing any state. A suspicious
-pre-existing `.current.next` that is not a leftover relative release-basename
-symlink is rejected without following or overwriting it. If this invocation
-creates `.current.next` and is interrupted before the rename, only that
-temporary symlink is removed; `current` is not rewritten by
+candidate verification, the previous-release preflight, receipt write, backup,
+the `current` pointer switch, restart and readiness, and the captured-previous
+rollback paths. Staged scripts, the configurable systemctl command, receipt
+helpers, and other child processes do not receive a usable copy of that lock descriptor. A second concurrent deploy exits `75` (busy) before changing any
+state. A suspicious pre-existing `.current.next` that is not a leftover
+relative release-basename symlink is rejected without following or overwriting
+it. If this invocation creates `.current.next` and is interrupted before the
+rename, only that temporary symlink is removed; `current` is not rewritten by
 the trap. The flock is released automatically when the process exits.
+
+After candidate verification and while that flock is held, `ops/deploy-release.sh`
+inspects `current` exactly once. First deployment with `current` absent is
+allowed and records `previous_state=absent`. If `current` exists, it must be a
+symlink whose target is a losslessly captured relative release basename using
+the same safe grammar as `ops/commons-launch.sh`. Absolute, nested, traversal,
+control, newline, and empty targets are rejected. The captured basename is
+resolved to an exact canonical direct child of `COMMONS_RELEASE_ROOT` that is a
+real non-symlink directory. That exact previous release is verified before
+backup or pointer mutation, with `COMMONS_RELEASE_DIR`, `COMMONS_CODEX_BIN`,
+`COMMONS_WEB_DIR`, and `COMMONS_RELEASE_IDENTITY_FILE` pinned to it;
+`VERSION` must equal the captured basename. A lowercase SHA-256 digest of that
+release's `SHA256SUMS` is bound to the exact manifest path and retained in the
+transaction together with the exact previous path and release ID. If `current`
+exists but is invalid, or previous verification or digest binding fails, the
+deploy aborts before backup, pointer mutation, or `systemctl`; the invalid
+pointer is not silently treated as absent.
+
+A sanitized deployment-attempt receipt is then written under
+`COMMONS_DEPLOY_STATE_DIR` (default `~/.local/state/codex-commons/deploy`). The
+canonical existing parent must be a real non-symlink directory owned by the
+effective uid/gid and not group or other writable. The deploy state directory
+must be a real non-symlink direct child of that parent, owned by the effective
+uid/gid, with exact mode 0700; a missing leaf is created `mkdir 0700` and
+revalidated. Unsafe parent or directory is rejected before receipt mutation.
+The receipt is one regular non-symlink file, mode 0600, owned by the effective
+uid/gid. It is written to an exclusively created private temp in that
+directory, verified, synced, and atomically `mv -Tf` onto the final path; then
+the containing directory is synced. There is no sidecar digest file. Candidate
+and previous identity use lowercase SHA-256 digests of each release's
+`SHA256SUMS` from `/usr/bin/sha256sum`, bound to the exact manifest path. The
+file contains only the fixed fields `kind=deployment-attempt`, `status=recorded`,
+candidate id/digest, and previous state (`absent` or validated id/digest). It
+must not record secrets, database paths, prompts, environment contents, or
+arbitrary payloads. This increment records that attempt identity only; the
+complete fail-closed rollback outcome state machine remains Phase 4 PR 5.
 
 Prove this increment offline with disposable directories and fake commands:
 
@@ -365,13 +400,18 @@ is mutated or swapped.
 
 Rollback is a separate operational decision and, when invoked from
 `ops/deploy-release.sh`, still runs under the same release-root directory
-flock. First capture the candidate failure and stop the restart-on-failure
-service. Validate the matching pre-upgrade receipt and exact previous release
-before touching the database or `current`. If a database restore is required,
-remove only the matching WAL/SHM
+flock. This increment's rollback paths use only the captured exact previous
+path and release ID from the earlier preflight; they never re-read `current`
+and never resolve a new target. First capture the candidate failure and stop
+the restart-on-failure service. Validate the matching pre-upgrade
+deployment-attempt receipt and that captured previous release before touching
+the database or `current`. Atomic database restore remains Phase 4 PR 4. If a
+database restore is required, remove only the matching WAL/SHM
 while the service is stopped, restore through a verified temporary file in the
 same directory, and atomically replace the exact target. Switch `current` only
-to the validated release directory, then restart and rerun readiness.
+to the captured exact previous release directory, then restart and rerun
+readiness. Complete fail-closed service-stopped rollback outcomes remain
+Phase 4 PR 5.
 
 Classify the result explicitly:
 
