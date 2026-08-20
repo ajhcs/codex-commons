@@ -599,6 +599,42 @@ func TestPhase3SchedulerRepeatedPreLedgerEnsureFailureBlocksClaims(t *testing.T)
 	}
 }
 
+func TestPhase3SchedulerHealthyLedgerDoesNotClearPreLedgerFault(t *testing.T) {
+	repository := &phase3LedgerRepository{
+		ensureErr: map[domain.ArchaeologyNativePersistenceOperation]error{
+			domain.ArchaeologyNativePersistenceCompleteTurn: errors.New("ensure unavailable"),
+		},
+		applyErr: map[domain.ArchaeologyNativePersistenceOperation]error{},
+		jobs:     []domain.ArchaeologyNativeJob{{ID: "later", CandidateID: "candidate"}},
+	}
+	launcher := &phase3SchedulerLauncher{
+		result:   domain.ArchaeologyLaunchResult{ThreadID: "thread", CodexSessionID: "session", TurnID: "turn"},
+		terminal: &domain.ArchaeologyNativeTerminal{ThreadID: "thread", TurnID: "turn", Status: "completed"},
+	}
+	scheduler := &ArchaeologyScheduler{repository: repository, launcher: launcher, principal: domain.HumanLocalPrincipal, ctx: context.Background(), wake: make(chan struct{}, 1)}
+	scheduler.launch(domain.ArchaeologyNativeJob{ID: "job", CandidateID: "candidate"})
+	waitPhase3PendingIntents(t, scheduler, 1)
+	if !scheduler.Status().PersistenceFault {
+		t.Fatal("pre-ledger Ensure failure did not latch")
+	}
+	if !scheduler.drainPersistence() {
+		t.Fatal("empty durable ledger should report ready before the pre-ledger queue is drained")
+	}
+	status := scheduler.Status()
+	if !status.PersistenceFault || !status.PersistenceAttention {
+		t.Fatalf("healthy ledger cleared pre-ledger latch: %+v", status)
+	}
+	if _, err := scheduler.Cancel(context.Background(), domain.HumanLocalPrincipal, "cancel", 1); !errors.Is(err, ErrArchaeologySchedulerPersistenceFault) {
+		t.Fatalf("Cancel err=%v, want persistence fault while the terminal callback is still queued", err)
+	}
+	repository.mu.Lock()
+	claims := repository.claims
+	repository.mu.Unlock()
+	if claims != 0 {
+		t.Fatalf("claims while pre-ledger terminal intent is queued=%d", claims)
+	}
+}
+
 func TestPhase3SchedulerPreLedgerQueueCoversOnlyFiveReplaySafeOperations(t *testing.T) {
 	operations := []domain.ArchaeologyNativePersistenceOperation{
 		domain.ArchaeologyNativePersistenceFailStart,
