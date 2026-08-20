@@ -24,7 +24,7 @@ test -z "$(find "$COMMONS_RELEASE_DIR" -mindepth 1 \! -uid "$verify_uid" -print 
 test -z "$(find "$COMMONS_RELEASE_DIR" -mindepth 1 \! -gid "$verify_gid" -print -quit)" || exit 64
 test -z "$(find "$COMMONS_RELEASE_DIR" -type d \! -perm 0555 -print -quit)" || exit 64
 test -z "$(find "$COMMONS_RELEASE_DIR" -type f \! -perm 0444 \! -perm 0555 -print -quit)" || exit 64
-for file in commons-server bin/codex bin/codex-code-mode-host codex-resources/bwrap codex-resources/zsh/bin/zsh codex-path/rg; do test -x "$COMMONS_RELEASE_DIR/$file"; test -f "$COMMONS_RELEASE_DIR/$file"; test ! -L "$COMMONS_RELEASE_DIR/$file"; test "$(stat -c %a "$COMMONS_RELEASE_DIR/$file")" = 555; test "$(stat -c %u "$COMMONS_RELEASE_DIR/$file")" = "$verify_uid"; test "$(stat -c %g "$COMMONS_RELEASE_DIR/$file")" = "$verify_gid"; done
+for file in commons-server commons-ops bin/codex bin/codex-code-mode-host codex-resources/bwrap codex-resources/zsh/bin/zsh codex-path/rg; do test -x "$COMMONS_RELEASE_DIR/$file"; test -f "$COMMONS_RELEASE_DIR/$file"; test ! -L "$COMMONS_RELEASE_DIR/$file"; test "$(stat -c %a "$COMMONS_RELEASE_DIR/$file")" = 555; test "$(stat -c %u "$COMMONS_RELEASE_DIR/$file")" = "$verify_uid"; test "$(stat -c %g "$COMMONS_RELEASE_DIR/$file")" = "$verify_gid"; done
 test -f "$COMMONS_RELEASE_DIR/codex-package.json"; test ! -L "$COMMONS_RELEASE_DIR/codex-package.json"; test "$(stat -c %a "$COMMONS_RELEASE_DIR/codex-package.json")" = 444; test "$(stat -c %u "$COMMONS_RELEASE_DIR/codex-package.json")" = "$verify_uid"; test "$(stat -c %g "$COMMONS_RELEASE_DIR/codex-package.json")" = "$verify_gid"
 test -r "$COMMONS_RELEASE_DIR/web/index.html"; test -f "$COMMONS_RELEASE_DIR/VERSION"; test ! -L "$COMMONS_RELEASE_DIR/VERSION"
 test "$(stat -c %a "$COMMONS_RELEASE_DIR/VERSION")" = 444 || exit 64
@@ -41,11 +41,13 @@ cleanup_verify_tmp() {
 trap cleanup_verify_tmp 0 1 2 15
 verify_tmp=$(mktemp)
 find "$COMMONS_RELEASE_DIR" -type f -perm 0555 -printf '%P\n' | LC_ALL=C sort > "$verify_tmp"
-printf '%s\n' "bin/codex" "bin/codex-code-mode-host" "codex-resources/bwrap" "codex-resources/zsh/bin/zsh" "codex-path/rg" "commons-server" | LC_ALL=C sort | cmp -s - "$verify_tmp" || { rm -f -- "$verify_tmp"; exit 64; }
+printf '%s\n' "bin/codex" "bin/codex-code-mode-host" "codex-resources/bwrap" "codex-resources/zsh/bin/zsh" "codex-path/rg" "commons-server" "commons-ops" | LC_ALL=C sort | cmp -s - "$verify_tmp" || { rm -f -- "$verify_tmp"; exit 64; }
 rm -f -- "$verify_tmp"; verify_tmp=
 release_id=$(sed -n '1p' "$COMMONS_RELEASE_DIR/VERSION"); test -n "$release_id"; test "$(wc -l < "$COMMONS_RELEASE_DIR/VERSION")" -eq 1; test "$release_id" = "$(basename "$COMMONS_RELEASE_DIR")"
 test "$(COMMONS_RELEASE_IDENTITY_FILE="$COMMONS_RELEASE_DIR/VERSION" "$COMMONS_RELEASE_DIR/commons-server" --build-id)" = "$release_id"
 go version -m "$COMMONS_RELEASE_DIR/commons-server" | grep -Fq 'path'"$(printf '\t')"'codex-commons/cmd/commons-server'; go version -m "$COMMONS_RELEASE_DIR/commons-server" | grep -Fq 'build'"$(printf '\t')"'-trimpath=true'
+test "$("$COMMONS_RELEASE_DIR/commons-ops" --build-id)" = "$release_id"
+go version -m "$COMMONS_RELEASE_DIR/commons-ops" | grep -Fq 'path'"$(printf '\t')"'codex-commons/cmd/commons-ops'; go version -m "$COMMONS_RELEASE_DIR/commons-ops" | grep -Fq 'build'"$(printf '\t')"'-trimpath=true'
 test "$(readlink -f "${COMMONS_CODEX_BIN:-/missing}")" = "$COMMONS_RELEASE_DIR/bin/codex"; test "$(readlink -f "${COMMONS_WEB_DIR:-/missing}")" = "$COMMONS_RELEASE_DIR/web"
 for spec in "bin/codex:$COMMONS_CODEX_SHA256" "bin/codex-code-mode-host:$COMMONS_CODE_MODE_HOST_SHA256" "codex-resources/bwrap:$COMMONS_CODEX_BWRAP_SHA256" "codex-resources/zsh/bin/zsh:$COMMONS_CODEX_ZSH_SHA256" "codex-path/rg:$COMMONS_CODEX_RG_SHA256" "codex-package.json:$COMMONS_CODEX_PACKAGE_SHA256"; do file=${spec%%:*}; sha=${spec#*:}; test "$(sha256sum "$COMMONS_RELEASE_DIR/$file" | awk '{print $1}')" = "$sha"; done
 test "$($COMMONS_RELEASE_DIR/bin/codex --version | awk '{print $2}')" = 0.147.0

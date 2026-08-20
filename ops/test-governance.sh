@@ -42,6 +42,8 @@ grep -Fq 'no-published-outcome cases' "$root/deploy/CONTINUOUS_DOGFOOD_RUNBOOK.m
 # These are release inputs, not secrets or generated output. They must remain
 # discoverable by normal Git review and must not be hidden by an ignore rule.
 for path in \
+	cmd/commons-ops/main.go \
+	docs/commons-ops.md \
 	ops/backup.sh \
 	ops/build-release.sh \
 	ops/check-readiness.sh \
