@@ -6,8 +6,10 @@ set -eu
 # so all build and staging inputs below live under one disposable root.
 repo_root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 stage_script=$repo_root/ops/stage-release.sh
+build_script=$repo_root/ops/build-release.sh
 verify_script=$repo_root/ops/verify-release.sh
 readiness_script=$repo_root/ops/check-readiness.sh
+test -f "$build_script"
 test -f "$stage_script"
 test -f "$verify_script"
 test -f "$readiness_script"
@@ -58,6 +60,39 @@ cleanup() {
 	rm -rf -- "$root"
 }
 trap cleanup 0 1 2 15
+
+build_collision_status=0
+/bin/sh "$build_script" build-output-collision "$root/commons-server" "$root/commons-server" >/dev/null 2>&1 || build_collision_status=$?
+test "$build_collision_status" -eq 64
+printf 'BUILD_COLLISION_STATUS=%s\n' "$build_collision_status"
+
+mkdir -p "$root/build-real"
+dotdot_collision_status=0
+/bin/sh "$build_script" build-dotdot-collision "$root/build-real/commons-server" "$root/build-real/../build-real/commons-server" >/dev/null 2>&1 || dotdot_collision_status=$?
+test "$dotdot_collision_status" -eq 64
+printf 'BUILD_DOTDOT_COLLISION_STATUS=%s\n' "$dotdot_collision_status"
+
+ln -s "$root/build-real" "$root/build-link"
+symlink_collision_status=0
+/bin/sh "$build_script" build-symlink-collision "$root/build-real/commons-server" "$root/build-link/commons-server" >/dev/null 2>&1 || symlink_collision_status=$?
+test "$symlink_collision_status" -eq 64
+printf 'BUILD_SYMLINK_COLLISION_STATUS=%s\n' "$symlink_collision_status"
+
+mkdir -p "$root/build-leaf-real"
+printf existing > "$root/build-leaf-real/commons-ops"
+ln -s "$root/build-leaf-real/commons-ops" "$root/build-leaf-server"
+leaf_symlink_collision_status=0
+/bin/sh "$build_script" build-leaf-symlink-collision "$root/build-leaf-server" "$root/build-leaf-real/commons-ops" >/dev/null 2>&1 || leaf_symlink_collision_status=$?
+test "$leaf_symlink_collision_status" -eq 64
+printf 'BUILD_LEAF_SYMLINK_COLLISION_STATUS=%s\n' "$leaf_symlink_collision_status"
+
+mkdir -p "$root/build-hardlink"
+printf existing > "$root/build-hardlink/commons-server"
+ln "$root/build-hardlink/commons-server" "$root/build-hardlink/commons-ops"
+hardlink_collision_status=0
+/bin/sh "$build_script" build-hardlink-collision "$root/build-hardlink/commons-server" "$root/build-hardlink/commons-ops" >/dev/null 2>&1 || hardlink_collision_status=$?
+test "$hardlink_collision_status" -eq 64
+printf 'BUILD_HARDLINK_COLLISION_STATUS=%s\n' "$hardlink_collision_status"
 
 negative_cases=0
 restored_cases=0
@@ -176,10 +211,12 @@ stage_release() {
 	target_root=$3
 	web_source=$4
 	bundle_source=$5
+	ops_source=${6:-$(dirname "$server")/commons-ops}
 	(
 		CDPATH= cd -- "$stage_cwd"
 		COMMONS_RELEASE_ROOT="$target_root" \
 		COMMONS_SERVER_SOURCE="$server" \
+		COMMONS_OPS_SOURCE="$ops_source" \
 		COMMONS_WEB_SOURCE="$web_source" \
 		COMMONS_CODEX_BUNDLE_SOURCE="$bundle_source" \
 		/bin/sh "$stage_script" "$id"
@@ -192,6 +229,17 @@ build_server() {
 	mkdir -p "$(dirname "$out")"
 	(
 		CDPATH= cd -- "$root/server-src"
+		go build -trimpath -buildvcs=false -ldflags "-X main.buildID=$id" -o "$out" .
+	)
+	build_ops_helper "$id" "$(dirname "$out")/commons-ops"
+}
+
+build_ops_helper() {
+	id=$1
+	out=$2
+	mkdir -p "$(dirname "$out")"
+	(
+		CDPATH= cd -- "$root/ops-helper-src"
 		go build -trimpath -buildvcs=false -ldflags "-X main.buildID=$id" -o "$out" .
 	)
 }
@@ -214,7 +262,8 @@ check_modes() {
 		codex-resources/bwrap \
 		codex-resources/zsh/bin/zsh \
 		codex-path/rg \
-		commons-server | LC_ALL=C sort > "$mode_list"
+		commons-server \
+		commons-ops | LC_ALL=C sort > "$mode_list"
 	cmp -s "$mode_list" "$actual_list"
 	rm -f -- "$mode_list" "$actual_list"
 }
@@ -259,6 +308,31 @@ printf '%s\n' \
 	'    fmt.Print(buildID)' \
 	'}' > "$root/server-src/main.go"
 
+mkdir -p "$root/ops-helper-src"
+printf '%s\n' \
+	'module codex-commons/cmd/commons-ops' \
+	'' \
+	'go 1.25.0' > "$root/ops-helper-src/go.mod"
+printf '%s\n' \
+	'package main' \
+	'' \
+	'import (' \
+	'    "fmt"' \
+	'    "os"' \
+	')' \
+	'' \
+	'var buildID = ""' \
+	'' \
+	'func main() {' \
+	'    if len(os.Args) == 1 || os.Args[1] == "--help" || os.Args[1] == "--version" {' \
+	'        fmt.Printf("commons-ops %s\\n", buildID)' \
+	'        return' \
+	'    }' \
+	'    if os.Args[1] == "--build-id" {' \
+	'        fmt.Print(buildID)' \
+	'    }' \
+	'}' > "$root/ops-helper-src/main.go"
+
 mkdir -p "$root/source-web"
 printf '<!doctype html>\n' > "$root/source-web/index.html"
 
@@ -289,6 +363,7 @@ done
 release_root=$root/releases
 mkdir -p "$release_root"
 build_server release-test "$root/commons-server"
+test "$("$root/commons-ops" --build-id)" = release-test
 codex_sha=$(sha256sum "$root/codex-bundle/bin/codex" | awk '{print $1}')
 host_sha=$(sha256sum "$root/codex-bundle/bin/codex-code-mode-host" | awk '{print $1}')
 bwrap_sha=$(sha256sum "$root/codex-bundle/codex-resources/bwrap" | awk '{print $1}')
@@ -298,14 +373,46 @@ package_sha=$(sha256sum "$root/codex-bundle/codex-package.json" | awk '{print $1
 stage_release release-test "$root/commons-server" "$release_root" "$root/source-web" "$root/codex-bundle"
 release_dir=$release_root/release-test
 manifest=$release_dir/SHA256SUMS
+ops_sha=$(sha256sum "$release_dir/commons-ops" | awk '{print $1}')
+grep -Fq "$ops_sha  commons-ops" "$manifest"
 valid_manifest=$root/valid-SHA256SUMS
 cp "$manifest" "$valid_manifest"
+valid_ops_helper=$root/valid-commons-ops
+cp "$release_dir/commons-ops" "$valid_ops_helper"
 original_index=$root/original-index.html
 cp "$release_dir/web/index.html" "$original_index"
 
 # A correctly staged complete tree is accepted before any negative fixture.
 verify_test_release >/dev/null
 record_positive known-good-complete-tree
+
+# The packaged helper is a required, exact source input. Missing, symlinked,
+# and wrong-identity helpers must fail before a candidate directory appears.
+helper_stage_root=$root/helper-stage-rejects
+mkdir -p "$helper_stage_root"
+build_server helper-missing "$root/servers/helper-missing"
+rm -f -- "$root/servers/commons-ops"
+expect_stage_failure missing-ops-helper helper-missing "$root/servers/helper-missing" "$helper_stage_root" "$root/source-web" "$root/codex-bundle"
+
+build_server helper-symlink "$root/servers/helper-symlink"
+rm -f -- "$root/servers/commons-ops"
+ln -s "$root/commons-ops" "$root/servers/commons-ops"
+expect_stage_failure symlinked-ops-helper helper-symlink "$root/servers/helper-symlink" "$helper_stage_root" "$root/source-web" "$root/codex-bundle"
+
+build_server helper-wrong-id "$root/servers/helper-wrong-id"
+build_ops_helper different-helper-id "$root/wrong-identity-ops"
+cp "$root/wrong-identity-ops" "$root/servers/commons-ops"
+expect_stage_failure wrong-ops-helper-identity helper-wrong-id "$root/servers/helper-wrong-id" "$helper_stage_root" "$root/source-web" "$root/codex-bundle"
+
+build_ops_helper tampered-helper-id "$root/tampered-ops"
+chmod u+w "$release_dir/commons-ops"
+cp "$root/tampered-ops" "$release_dir/commons-ops"
+chmod 0555 "$release_dir/commons-ops"
+expect_verify_failure tampered-ops-helper-build-id
+chmod u+w "$release_dir/commons-ops"
+cp "$valid_ops_helper" "$release_dir/commons-ops"
+chmod 0555 "$release_dir/commons-ops"
+restore_valid tampered-ops-helper-build-id
 
 # Exercise the readiness policy against bounded local fixtures. These calls
 # use only a disposable SQLite file and fake status commands; no service or
@@ -663,10 +770,10 @@ chmod -R u+w "$release_dir"
 chmod 0555 "$release_dir"
 find "$release_dir" -type d -exec chmod 0555 {} +
 find "$release_dir" -type f -exec chmod 0444 {} +
-chmod 0555 "$release_dir/commons-server" "$release_dir/bin/codex" "$release_dir/bin/codex-code-mode-host" "$release_dir/codex-resources/bwrap" "$release_dir/codex-resources/zsh/bin/zsh" "$release_dir/codex-path/rg"
+chmod 0555 "$release_dir/commons-server" "$release_dir/commons-ops" "$release_dir/bin/codex" "$release_dir/bin/codex-code-mode-host" "$release_dir/codex-resources/bwrap" "$release_dir/codex-resources/zsh/bin/zsh" "$release_dir/codex-path/rg"
 verify_test_release >/dev/null
 
-# Mode drift: root, nested directories, all six runtime executables, every
+# Mode drift: root, nested directories, all seven runtime executables, every
 # ordinary-file class, and an unexpected executable bit are independently
 # rejected and restored.
 chmod u+w "$release_dir"
@@ -683,7 +790,7 @@ for dir_case in web codex-resources codex-resources/zsh/bin; do
 	restore_valid "nested-directory-mode-drift-$dir_case"
 done
 
-for exec_file in commons-server bin/codex bin/codex-code-mode-host codex-resources/bwrap codex-resources/zsh/bin/zsh codex-path/rg; do
+for exec_file in commons-server commons-ops bin/codex bin/codex-code-mode-host codex-resources/bwrap codex-resources/zsh/bin/zsh codex-path/rg; do
 	chmod u+w "$release_dir/$exec_file"
 	chmod 0444 "$release_dir/$exec_file"
 	expect_verify_failure "required-executable-mode-drift-$exec_file"
@@ -801,8 +908,8 @@ fi
 
 # This count is intentionally explicit: a missing block or an early green exit
 # cannot satisfy Phase 1.3 merely by returning status zero.
-expected_negative_cases=$((54 + ownership_path_cases))
-expected_restored_cases=$((54 + ownership_path_cases))
+expected_negative_cases=$((59 + ownership_path_cases))
+expected_restored_cases=$((59 + ownership_path_cases))
 expected_positive_cases=4
 test "$negative_cases" -eq "$expected_negative_cases"
 test "$restored_cases" -eq "$expected_restored_cases"
