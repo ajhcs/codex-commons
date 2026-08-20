@@ -38,14 +38,27 @@ func TestRunExposesOnlyIdentityAndHelp(t *testing.T) {
 }
 
 func TestRunRejectsOperationalArguments(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	if got := run([]string{"backup"}, &stdout, &stderr); got != 2 {
-		t.Fatalf("run(backup) exit code = %d, want 2", got)
-	}
-	if stdout.Len() != 0 {
-		t.Fatalf("run(backup) stdout = %q, want empty", stdout.String())
-	}
-	if !strings.Contains(stderr.String(), "no operational command is enabled") {
-		t.Fatalf("run(backup) stderr = %q, want dormant-boundary error", stderr.String())
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{name: "backup", args: []string{"backup"}},
+		{name: "backup extra", args: []string{"backup", "--force"}},
+		{name: "version extra", args: []string{"--version", "extra"}},
+		{name: "build id extra", args: []string{"--build-id", "extra"}},
+		{name: "help extra", args: []string{"--help", "extra"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if got := run(tc.args, &stdout, &stderr); got != 2 {
+				t.Fatalf("run(%q) exit code = %d, want 2", tc.args, got)
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("run(%q) stdout = %q, want empty", tc.args, stdout.String())
+			}
+			if got, want := stderr.String(), "commons-ops: no operational command is enabled\n"; got != want {
+				t.Fatalf("run(%q) stderr = %q, want %q", tc.args, got, want)
+			}
+		})
 	}
 }

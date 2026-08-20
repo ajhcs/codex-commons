@@ -61,6 +61,11 @@ cleanup() {
 }
 trap cleanup 0 1 2 15
 
+build_collision_status=0
+/bin/sh "$build_script" build-output-collision "$root/commons-server" "$root/commons-server" >/dev/null 2>&1 || build_collision_status=$?
+test "$build_collision_status" -eq 64
+printf 'BUILD_COLLISION_STATUS=%s\n' "$build_collision_status"
+
 negative_cases=0
 restored_cases=0
 positive_cases=0
