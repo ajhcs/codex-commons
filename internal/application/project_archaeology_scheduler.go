@@ -274,7 +274,10 @@ func (s *ArchaeologyScheduler) Status() ArchaeologySchedulerStatus {
 	fault := s.persistenceFault != nil
 	attention := s.persistenceBacklog
 	s.stateMu.RUnlock()
-	status := ArchaeologySchedulerStatus{PersistenceAttention: attention}
+	s.persistenceMu.Lock()
+	pending := len(s.pendingIntents) != 0
+	s.persistenceMu.Unlock()
+	status := ArchaeologySchedulerStatus{PersistenceAttention: attention || pending}
 	if fault {
 		status.PersistenceFault = true
 		status.Error = ErrArchaeologySchedulerPersistenceFault.Error()
@@ -783,24 +786,45 @@ func (s *ArchaeologyScheduler) drainPersistence() bool {
 		s.stateMu.Unlock()
 		return false
 	}
-	// A healthy durable ledger is the verified condition for clearing an
-	// automatically latched fault. Explicit ReconcilePersistence retains its
-	// stronger sequence-checked semantics for non-ledger repositories.
+	s.stateMu.RLock()
+	manual := s.persistenceManualFault
+	seqChanged := s.persistenceSeq != sequence
+	s.stateMu.RUnlock()
+	if manual || seqChanged {
+		return false
+	}
+	// A healthy durable ledger is necessary but not sufficient to clear the
+	// in-memory latch. Pre-ledger callbacks may still be queued, so drain()
+	// clears only after both the durable pass and that queue are idle.
+	return true
+}
+
+// clearAutomaticPersistenceLatchIfIdle drops a ledger-backed latch only when
+// no terminal callback, persistence flight, or pre-ledger queue entry remains.
+// A healthy RetryDue result alone must not clear the latch: that window would
+// let Cancel/Available observe a healthy scheduler while the exact callback is
+// still only in process memory.
+func (s *ArchaeologyScheduler) clearAutomaticPersistenceLatchIfIdle() {
+	if s == nil {
+		return
+	}
+	s.terminalMu.Lock()
+	defer s.terminalMu.Unlock()
+	if s.terminalCallbacks != 0 || s.persistenceInFlight != 0 {
+		return
+	}
+	s.persistenceMu.Lock()
+	defer s.persistenceMu.Unlock()
+	if len(s.pendingIntents) != 0 {
+		return
+	}
 	s.stateMu.Lock()
-	if s.persistenceSeq != sequence {
-		s.stateMu.Unlock()
-		return false
-	}
+	defer s.stateMu.Unlock()
 	if s.persistenceManualFault {
-		s.stateMu.Unlock()
-		return false
-	}
-	if s.persistenceBacklog {
-		s.persistenceBacklog = false
+		return
 	}
 	s.persistenceFault = nil
-	s.stateMu.Unlock()
-	return true
+	s.persistenceBacklog = false
 }
 
 func (s *ArchaeologyScheduler) drain() {
@@ -814,9 +838,13 @@ func (s *ArchaeologyScheduler) drain() {
 	}
 	// Reconcile already-durable rows first so an in-process pre-ledger retry
 	// cannot hide a blocked/leased durable row. Both queues still get one
-	// bounded pass per wake; claims require both passes to be ready.
+	// bounded pass per wake; claims require both passes to be ready, and the
+	// in-memory latch is cleared only after that combined idle condition.
 	durableReady := s.drainPersistence()
 	pendingReady := s.drainPendingIntents()
+	if durableReady && pendingReady {
+		s.clearAutomaticPersistenceLatchIfIdle()
+	}
 	if !durableReady || !pendingReady {
 		return
 	}
