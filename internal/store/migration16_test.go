@@ -122,7 +122,7 @@ func TestMigration16FreshSchemaAndPersistenceIntentConstraints(t *testing.T) {
 
 	var version int
 	must(t, store.DB().QueryRowContext(ctx, `SELECT max(version) FROM schema_migrations`).Scan(&version))
-	if version != 16 {
+	if version != 17 {
 		t.Fatalf("schema version=%d", version)
 	}
 	jobID := seedMigration16Job(t, store.DB(), "constraints")
@@ -278,7 +278,7 @@ func TestMigration16Schema15UpgradePreservesNativeAndSelectedImportData(t *testi
 	defer store.Close()
 	var version int
 	must(t, store.DB().QueryRowContext(ctx, `SELECT max(version) FROM schema_migrations`).Scan(&version))
-	if version != 16 {
+	if version != 17 {
 		t.Fatalf("schema version=%d", version)
 	}
 	var jobs, outcomes, imports, intents int

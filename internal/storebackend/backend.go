@@ -105,6 +105,13 @@ func cloneRuntimeHealthSnapshot(in httpapi.RuntimeHealthSnapshot) httpapi.Runtim
 	return httpapi.CloneRuntimeHealthSnapshot(in)
 }
 
+func (b *Backend) InstallationIdentityHex(ctx context.Context) (string, error) {
+	if b == nil || b.store == nil {
+		return "", httpapi.NewError(httpapi.CodeUnavailable, "installation identity unavailable")
+	}
+	return b.store.InstallationIdentityHex(ctx)
+}
+
 // Health is the public liveness projection. Production wiring supplies the
 // immutable runtime provider, in which case this method performs no I/O and
 // gates only on its cached Live value. A backend without an explicit provider
@@ -148,6 +155,11 @@ func (b *Backend) InstallationStatus(ctx context.Context, _ httpapi.RequestMeta)
 	if err := b.store.DB().QueryRowContext(ctx, `SELECT (SELECT max(version) FROM schema_migrations),backup_status,backup_verified_at,reconciliation_status,reconciliation_checked_at,compatibility_status,compatibility_checked_at,restore_status,restore_verified_at,report_recovery_status,report_recovery_violations,report_recovery_checked_at,report_recovery_receipt_digest,duplicate_launch_status,duplicate_launch_violations,duplicate_launch_checked_at,duplicate_launch_receipt_digest,repository_immutability_status,repository_immutability_violations,repository_immutability_checked_at,repository_immutability_receipt_digest,canonical_immutability_status,canonical_immutability_violations,canonical_immutability_checked_at,canonical_immutability_receipt_digest,codex_session_revocation_pending FROM installation_status WHERE id=1`).Scan(&out.Database.SchemaVersion, &out.Backup.Status, &backupAt, &out.Reconciliation.Status, &reconcileAt, &out.Codex.CompatibilityStatus, &compatibilityAt, &out.Evidence.RestoreDrill.Status, &restoreAt, &out.Evidence.ReportRecovery.Status, &out.Evidence.ReportRecovery.Violations, &recoveryAt, &recoveryDigest, &out.Evidence.DuplicateLaunchCheck.Status, &out.Evidence.DuplicateLaunchCheck.Violations, &duplicateAt, &duplicateDigest, &out.Evidence.RepositoryImmutability.Status, &out.Evidence.RepositoryImmutability.Violations, &repositoryAt, &repositoryDigest, &out.Evidence.CanonicalImmutability.Status, &out.Evidence.CanonicalImmutability.Violations, &canonicalAt, &canonicalDigest, &out.Codex.SessionRevocationPending); err != nil {
 		return out, httpapi.NewError(httpapi.CodeUnavailable, "installation status unavailable")
 	}
+	installationID, err := b.InstallationIdentityHex(ctx)
+	if err != nil {
+		return out, httpapi.NewError(httpapi.CodeUnavailable, "installation status unavailable")
+	}
+	out.Database.InstallationID = installationID
 	var discovered sql.NullString
 	if err := b.store.DB().QueryRowContext(ctx, `SELECT max(discovered_at),(SELECT count(*) FROM archaeology_native_jobs WHERE state IN ('starting','active','report_ready','cancel_requested')),(SELECT count(*) FROM archaeology_native_jobs WHERE state='uncertain') FROM archaeology_sessions`).Scan(&discovered, &out.Archaeology.ActiveCount, &out.Archaeology.UncertainCount); err != nil {
 		return out, httpapi.NewError(httpapi.CodeUnavailable, "installation status unavailable")

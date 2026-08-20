@@ -10,3 +10,11 @@ shell or SQLite commands.
 The release builder embeds the same release ID in `commons-server` and
 `commons-ops`. Staging copies the exact helper, and complete-tree verification
 checks its executable mode, identity, and SHA256SUMS entry.
+
+Source schema 17 adds a stable per-database `installation_id` and an empty
+append-only `installation_restore_evidence` table. That identity is generated
+once, is not derived from `review_secret`, and does not change Beta-prerequisite
+truth. Packaged `ops/check-readiness.sh` still pins live readiness to schema
+15; updating that pin is later ops integration together with backup/restore
+command work. This increment does not change packaged readiness, backup, or
+restore shell behavior.
