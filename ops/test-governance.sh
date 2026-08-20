@@ -24,12 +24,14 @@ for path in \
 	ops/backup.sh \
 	ops/build-release.sh \
 	ops/check-readiness.sh \
+	ops/commons-launch.sh \
 	ops/deploy-release.sh \
 	ops/record-evidence.sh \
 	ops/seal-archive.sh \
 	ops/stage-release.sh \
 	ops/test-deploy.sh \
 	ops/test-governance.sh \
+	ops/test-launch.sh \
 	ops/test-ops.sh \
 	ops/verify-release.sh \
 	ops/verify-restore.sh \

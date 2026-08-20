@@ -27,8 +27,11 @@ grep -Fq 'Type=notify' "$service_unit"
 grep -Fq 'NotifyAccess=main' "$service_unit"
 grep -Eq '^TimeoutStartSec=180$' "$service_unit"
 grep -Fq 'WatchdogSec=60' "$service_unit"
-grep -Fq 'WorkingDirectory=%h/.local/lib/codex-commons/current' "$service_unit"
-grep -Fq 'ExecStartPre=/bin/sh %h/.local/lib/codex-commons/current/ops/verify-release.sh' "$service_unit"
+grep -Fq 'ExecStart=/bin/sh %h/.local/libexec/codex-commons/commons-launch.sh' "$service_unit"
+if grep -Eq '^(WorkingDirectory|ExecStartPre|ExecStart)=.*current' "$service_unit"; then
+	printf 'systemd unit still starts through mutable current\n' >&2
+	exit 1
+fi
 grep -Fq 'COMMONS_REQUIRE_CODEX_READY=false' "$env_example"
 grep -Fqi 'optional-safe default' "$env_example"
 grep -Fq 'runtime_policy_ready' "$readiness_script"

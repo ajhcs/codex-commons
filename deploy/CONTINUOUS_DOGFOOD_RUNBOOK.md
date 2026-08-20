@@ -84,6 +84,21 @@ Never infer either state from a single `/v1/health` 200 response.
 
 ## 3. Startup and readiness
 
+Startup begins at the stable launcher, not at the mutable `current` symlink.
+The systemd unit invokes only
+`~/.local/libexec/codex-commons/commons-launch.sh` (source:
+`ops/commons-launch.sh`), which is installed outside release directories. That
+script resolves `$COMMONS_RELEASE_ROOT/current` exactly once, requires the
+target to be a canonical directory that is a direct child of the configured
+release root, and exports exact `COMMONS_RELEASE_DIR`, `COMMONS_WEB_DIR`,
+`COMMONS_CODEX_BIN`, and `COMMONS_RELEASE_IDENTITY_FILE` from that pin. It then
+runs that directory's `ops/verify-release.sh`, `chdir`s into the same
+directory, and `exec`s its `commons-server`. Missing, non-directory, nested,
+outside-root, and unsafe/symlink-shaped targets fail closed. After the pin, a
+later mutation or swap of `current` cannot redirect that startup. The unit
+does not set `WorkingDirectory=current` and does not run `ExecStartPre`
+against a separately resolved `current` path.
+
 For an approved disposable rehearsal, the expected order is:
 
 1. Verify the exact immutable release directory and its `SHA256SUMS` manifest.
@@ -300,10 +315,14 @@ Prove this increment offline with disposable directories and fake commands:
 
 ```sh
 sh ops/test-deploy.sh
+sh ops/test-launch.sh
 ```
 
-That fixture is not authorization to switch a live `current`, restart a unit,
-or mutate a live database.
+Those fixtures are not authorization to switch a live `current`, restart a
+unit, or mutate a live database. `ops/test-launch.sh` never calls systemd; it
+uses disposable directories and fake verify/server commands to prove that
+verify, `chdir`, and `exec` stay on the originally pinned tree after `current`
+is mutated or swapped.
 
 1. Confirm the working tree is clean and the source commit is recorded. Stop
    any temporary process only under its task owner and verify the chosen
@@ -322,9 +341,12 @@ or mutate a live database.
 6. Bootstrap through direct loopback HTTP with no public origin and first-LAN
    bind disabled. Verify one durable human account binding, then stop the
    disposable process.
-7. Install the environment/key with mode 0600 and units/templates with mode
-   0644. Enable user linger, the service, and backup timer only in the approved
-   maintenance window; keep the app listener on loopback.
+7. Install the environment/key with mode 0600, the stable launcher outside
+   the release directories (for example
+   `~/.local/libexec/codex-commons/commons-launch.sh`), and units/templates
+   with mode 0644. The service unit must invoke only that launcher. Enable user
+   linger, the service, and backup timer only in the approved maintenance
+   window; keep the app listener on loopback.
 8. Verify Type=notify `READY=1` timing (a local listener may exist before it),
    watchdog grace/fatal behavior, the runtime-only readiness payload, exact
    release identity, schema/digests, compatibility, Host/origin/CSRF rules,
@@ -368,8 +390,8 @@ service, and do not delete the last known-good release or backup.
 ## 9. Release gates and approval boundary
 
 Source edits, static checks, Go tests, browser tests, the Phase 4
-`sh ops/test-deploy.sh` gate, and a disposable acceptance run prove the
-candidate contract only. They do not approve a live deployment. Live
+`sh ops/test-deploy.sh` and `sh ops/test-launch.sh` gates, and a disposable
+acceptance run prove the candidate contract only. They do not approve a live deployment. Live
 activation is prohibited until the applicable Phase 0–5
 release gates are complete, the candidate is built from an explicitly reviewed
 commit, its manifest/AppArmor/runtime/backup/restore evidence is recorded, and
