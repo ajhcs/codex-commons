@@ -198,3 +198,50 @@ func TestFlockExclusiveNonblockBusy(t *testing.T) {
 		t.Fatalf("second flock = %v, want ErrBusy", err)
 	}
 }
+
+func TestPinnedDBRevalidateRejectsParentSwap(t *testing.T) {
+	root := testDir(t)
+	srcDir := filepath.Join(root, "src")
+	if err := os.Mkdir(srcDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(srcDir, "commons.sqlite3")
+	writeDB(t, path)
+	pin, err := PinDatabaseUnlocked(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pin.Close()
+
+	swapped := srcDir + "-swapped"
+	if err := os.Rename(srcDir, swapped); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(srcDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	replacement := filepath.Join(srcDir, "commons.sqlite3")
+	if err := os.WriteFile(replacement, []byte("replacement-db"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(replacement)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := pin.Revalidate(); err == nil {
+		t.Fatal("revalidate succeeded after parent swap")
+	}
+	after, err := os.ReadFile(replacement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("replacement path mutated: %q -> %q", before, after)
+	}
+	for _, sibling := range []string{replacement + "-wal", replacement + "-shm", replacement + "-journal"} {
+		if _, err := os.Lstat(sibling); !os.IsNotExist(err) {
+			t.Fatalf("replacement sibling created: %s (%v)", sibling, err)
+		}
+	}
+}

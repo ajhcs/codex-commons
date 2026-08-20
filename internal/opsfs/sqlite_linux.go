@@ -23,7 +23,9 @@ import (
 // Commons processes are serialized on the backup-root directory. A same-uid
 // attacker can still rename the leaf between revalidation and SQLite's
 // open; we detect inode/mode/nlink drift immediately after open and refuse
-// to write. Residual races are stated, not papered over.
+// to write. Revalidation also confirms the opened parent directory still
+// resolves to the requested absolute path. Residual races are stated, not
+// papered over.
 type PinnedDB struct {
 	Dir    *Dir
 	File   *File
@@ -165,11 +167,16 @@ func validateSiblings(dirfd int, leaf string, uid, gid uint32) error {
 	return nil
 }
 
-// Revalidate repeats main-file and sibling checks against the originally
-// pinned inode.
+// Revalidate repeats parent-directory, main-file, and sibling checks against
+// the originally pinned identity. The opened parent must still resolve to the
+// requested absolute path with expected owner/mode/identity; a rename or
+// replacement of the COMMONS_DB parent fails closed.
 func (p *PinnedDB) Revalidate() error {
 	if p == nil || p.Dir == nil || p.File == nil {
 		return fmt.Errorf("closed database pin")
+	}
+	if err := p.Dir.RevalidateDBParent(); err != nil {
+		return err
 	}
 	uid, gid, err := currentIDs()
 	if err != nil {
@@ -179,6 +186,31 @@ func (p *PinnedDB) Revalidate() error {
 		return err
 	}
 	return validateSiblings(p.Dir.FD, p.Leaf, uid, gid)
+}
+
+// RevalidateDBParent confirms the opened parent directory descriptor still
+// matches the requested absolute path with expected owner, mode policy, and
+// inode identity.
+func (d *Dir) RevalidateDBParent() error {
+	if d == nil || d.FD < 0 {
+		return fmt.Errorf("closed directory")
+	}
+	uid, gid, err := currentIDs()
+	if err != nil {
+		return err
+	}
+	var st unix.Stat_t
+	if err := unix.Fstat(d.FD, &st); err != nil {
+		return err
+	}
+	if err := validateParentStat(&st, uid, gid); err != nil {
+		return err
+	}
+	if d.Stat.Ino != 0 && !sameFile(&d.Stat, &st) {
+		return fmt.Errorf("inode changed")
+	}
+	d.Stat = st
+	return confirmOpenedPath(d.FD, d.Path)
 }
 
 // URI is the pinned directory-fd SQLite filename. Sidecars are named

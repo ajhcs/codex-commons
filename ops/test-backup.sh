@@ -27,6 +27,8 @@ fi
 grep -Fq 'FlockExclusiveNonblock' "$repo_root/internal/opsfs/open_linux.go"
 grep -Fq 'RENAME_NOREPLACE' "$repo_root/internal/opsfs/open_linux.go"
 grep -Fq 'commons-ops backup' "$docs"
+grep -Fq 'Linux-only' "$docs"
+grep -Fq 'detected post-publication' "$docs"
 grep -Fq 'directory descriptor' "$runbook"
 grep -Fq 'ops/test-backup.sh' "$runbook"
 grep -Fq 'must already exist' "$docs"

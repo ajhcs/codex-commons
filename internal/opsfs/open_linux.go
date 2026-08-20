@@ -3,6 +3,7 @@
 package opsfs
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -842,7 +843,16 @@ func (d *Dir) ReadValidatedRegular(name string, limit int) ([]byte, error) {
 
 // PublishNoReplace renameat2(RENAME_NOREPLACE)s fromName in from onto toName
 // in d, then fsyncs the published leaf and destination directory. The private
-// source leaf is revalidated immediately before the rename.
+// source leaf is revalidated immediately before the rename. Its descriptor
+// remains open through the rename and destination identity check so the
+// validated inode cannot be recycled in between; immediately after rename the
+// published destination must still be that same regular inode or the publish
+// fails closed.
+//
+// A same-uid actor can still replace the source name between validation and
+// renameat2, or retarget the destination name after rename. Those pre-rename
+// / post-rename name races are detected by the post-publication identity
+// check; they are not atomically prevented.
 func (d *Dir) PublishNoReplace(from *Dir, fromName, toName string) error {
 	if d == nil || d.FD < 0 || from == nil || from.FD < 0 {
 		return fmt.Errorf("closed directory")
@@ -859,11 +869,14 @@ func (d *Dir) PublishNoReplace(from *Dir, fromName, toName string) error {
 	if err := d.ValidateExact(DirMode); err != nil {
 		return err
 	}
-	src, _, err := from.OpenValidatedRegular(fromName)
+	src, srcStat, err := from.OpenValidatedRegular(fromName)
 	if err != nil {
 		return err
 	}
-	_ = unix.Close(src)
+	defer unix.Close(src)
+	if err := WaitHold(context.Background(), HoldPrePublishRename); err != nil {
+		return err
+	}
 	err = unix.Renameat2(from.FD, fromName, d.FD, toName, unix.RENAME_NOREPLACE)
 	if isEEXIST(err) {
 		return fmt.Errorf("destination exists")
@@ -874,6 +887,24 @@ func (d *Dir) PublishNoReplace(from *Dir, fromName, toName string) error {
 	fd, err := d.openChild(toName, unix.O_RDONLY, 0)
 	if err != nil {
 		return err
+	}
+	var dstStat unix.Stat_t
+	if err := unix.Fstat(fd, &dstStat); err != nil {
+		_ = unix.Close(fd)
+		return err
+	}
+	uid, gid, err := currentIDs()
+	if err != nil {
+		_ = unix.Close(fd)
+		return err
+	}
+	if err := validateFileStat(&dstStat, uid, gid, FileMode); err != nil {
+		_ = unix.Close(fd)
+		return err
+	}
+	if !sameFile(&srcStat, &dstStat) {
+		_ = unix.Close(fd)
+		return fmt.Errorf("published inode changed")
 	}
 	syncErr := unix.Fsync(fd)
 	_ = unix.Close(fd)

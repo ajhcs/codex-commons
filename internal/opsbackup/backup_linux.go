@@ -226,6 +226,15 @@ func Backup(ctx context.Context, dbPath, backupDir string) (published string, er
 	if err := publishMonthly(daily, monthly, leaf, monthLeaf, stamp, digest, meta); err != nil {
 		return failAfter(err)
 	}
+	if err := opsfs.WaitHold(ctx, opsfs.HoldAfterMonthlyPublications); err != nil {
+		return failAfter(err)
+	}
+	if err := revalidateLocked(ctx, src, root, daily, monthly); err != nil {
+		return failAfter(err)
+	}
+	if err := validatePublishedSet(monthly, monthLeaf); err != nil {
+		return failAfter(err)
+	}
 	if err := retainValidated(ctx, daily, dailyKeep); err != nil {
 		return failAfter(err)
 	}
@@ -334,7 +343,13 @@ func publishMonthly(daily, monthly *opsfs.Dir, dailyLeaf, monthLeaf, stamp, dige
 	if err := monthly.PublishNoReplace(tmp, monthLeaf+".sha256", monthLeaf+".sha256"); err != nil {
 		return err
 	}
-	return monthly.PublishNoReplace(tmp, monthLeaf+".receipt.json", monthLeaf+".receipt.json")
+	if err := monthly.PublishNoReplace(tmp, monthLeaf+".receipt.json", monthLeaf+".receipt.json"); err != nil {
+		return err
+	}
+	if err := monthly.ValidateExact(opsfs.DirMode); err != nil {
+		return err
+	}
+	return validatePublishedSet(monthly, monthLeaf)
 }
 
 func backupTo(ctx context.Context, src *sql.DB, destURI string) error {

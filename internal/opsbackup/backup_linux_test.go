@@ -685,6 +685,111 @@ func TestBackupDailyAndMonthlySwap(t *testing.T) {
 	})
 }
 
+func TestBackupRejectsMonthlyCorruptionBeforeVerified(t *testing.T) {
+	nowUTC = func() time.Time { return time.Date(2026, 8, 20, 18, 0, 0, 0, time.UTC) }
+	t.Cleanup(func() { nowUTC = func() time.Time { return time.Now().UTC() } })
+
+	dbPath, backupDir := setupBackupTree(t)
+	hold := filepath.Join(filepath.Dir(backupDir), "hold")
+	status := filepath.Join(filepath.Dir(backupDir), "status")
+	if err := os.WriteFile(hold, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("COMMONS_OPS_HOLD", hold)
+	t.Setenv("COMMONS_OPS_HOLD_POINT", opsfs.HoldAfterMonthlyPublications)
+	t.Setenv("COMMONS_OPS_HOLD_STATUS", status)
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := Backup(context.Background(), dbPath, backupDir)
+		errCh <- err
+	}()
+	waitHoldReady(t, status)
+	monthly := filepath.Join(backupDir, "monthly", "commons-2026-08.sqlite3")
+	if err := os.WriteFile(monthly, []byte("corrupted-monthly"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(hold); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-errCh; err == nil {
+		t.Fatal("backup succeeded after monthly corruption")
+	}
+	var backupStatus string
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.QueryRow(`SELECT backup_status FROM installation_status WHERE id=1`).Scan(&backupStatus); err != nil {
+		t.Fatal(err)
+	}
+	if backupStatus == "verified" {
+		t.Fatalf("backup_status=%q after monthly corruption", backupStatus)
+	}
+}
+
+func TestBackupRejectsDatabaseParentSwap(t *testing.T) {
+	dbPath, backupDir := setupBackupTree(t)
+	srcDir := filepath.Dir(dbPath)
+	hold := filepath.Join(filepath.Dir(backupDir), "hold")
+	status := filepath.Join(filepath.Dir(backupDir), "status")
+	if err := os.WriteFile(hold, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("COMMONS_OPS_HOLD", hold)
+	t.Setenv("COMMONS_OPS_HOLD_POINT", opsfs.HoldPreOpen)
+	t.Setenv("COMMONS_OPS_HOLD_STATUS", status)
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := Backup(context.Background(), dbPath, backupDir)
+		errCh <- err
+	}()
+	waitHoldReady(t, status)
+
+	swapped := srcDir + "-swapped"
+	if err := os.Rename(srcDir, swapped); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(srcDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	replacement := filepath.Join(srcDir, "commons.sqlite3")
+	if err := os.WriteFile(replacement, []byte("replacement-db"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(replacement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(hold); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-errCh; err == nil {
+		t.Fatal("backup succeeded after database parent swap")
+	}
+	after, err := os.ReadFile(replacement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("replacement path mutated: %q -> %q", before, after)
+	}
+	for _, sibling := range []string{replacement + "-wal", replacement + "-shm", replacement + "-journal"} {
+		if _, err := os.Lstat(sibling); !os.IsNotExist(err) {
+			t.Fatalf("replacement sibling created: %s (%v)", sibling, err)
+		}
+	}
+	entries, err := os.ReadDir(filepath.Join(backupDir, "daily"))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("backup mutated daily after parent swap: %v", entries)
+	}
+}
+
 func TestBackupSidecarCollision(t *testing.T) {
 	nowUTC = func() time.Time { return time.Date(2026, 8, 20, 17, 0, 0, 0, time.UTC) }
 	t.Cleanup(func() { nowUTC = func() time.Time { return time.Now().UTC() } })

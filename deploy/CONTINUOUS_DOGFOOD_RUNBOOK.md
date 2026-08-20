@@ -369,6 +369,10 @@ sanitized receipt. The private source is revalidated immediately before each
 publish or copy. Monthly publication uses the same no-follow/no-replace
 policy and treats an existing monthly name as one coherent set of backup,
 checksum, and receipt; malformed or mismatched sidecars fail closed.
+Newly created monthly sets are revalidated as one coherent set before
+retention and before verified status. Each publish holds the validated source
+descriptor open and rechecks the published destination identity; same-uid
+pre-rename name races are detected post-publication, not atomically prevented.
 Retention may inspect or delete only validated direct regular files with
 expected owner, mode 0600, and link count; it never follows or deletes
 symlinks, directories, or foreign entries. Retention revalidates the same

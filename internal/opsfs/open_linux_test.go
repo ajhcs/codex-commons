@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -106,5 +107,84 @@ func TestOpenDirRejectsFIFO(t *testing.T) {
 	defer dir.Close()
 	if _, err := dir.OpenDir("daily"); err == nil {
 		t.Fatal("accepted FIFO child")
+	}
+}
+
+func TestPublishNoReplaceDetectsSourceReplacement(t *testing.T) {
+	root := testDir(t)
+	dirPath := filepath.Join(root, "daily")
+	if err := os.Mkdir(dirPath, DirMode); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := OpenBackupDir(dirPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+	tmp, tmpName, err := dir.MkdirPrivate("backup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = tmp.Close()
+		_ = dir.RemoveDir(tmpName)
+	}()
+	if err := tmp.WriteExclusive("leaf.sqlite3", []byte("trusted")); err != nil {
+		t.Fatal(err)
+	}
+	if err := tmp.WriteExclusive("other.sqlite3", []byte("replaced")); err != nil {
+		t.Fatal(err)
+	}
+	var trustedStat, otherStat unix.Stat_t
+	if err := unix.Stat(filepath.Join(tmp.Path, "leaf.sqlite3"), &trustedStat); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Stat(filepath.Join(tmp.Path, "other.sqlite3"), &otherStat); err != nil {
+		t.Fatal(err)
+	}
+	if sameFile(&trustedStat, &otherStat) {
+		t.Fatal("replacement inode unexpectedly identical")
+	}
+
+	hold := filepath.Join(root, "hold")
+	status := filepath.Join(root, "status")
+	if err := os.WriteFile(hold, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("COMMONS_OPS_HOLD", hold)
+	t.Setenv("COMMONS_OPS_HOLD_POINT", HoldPrePublishRename)
+	t.Setenv("COMMONS_OPS_HOLD_STATUS", status)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- dir.PublishNoReplace(tmp, "leaf.sqlite3", "leaf.sqlite3")
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(status); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("hold status missing")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	srcPath := filepath.Join(tmp.Path, "leaf.sqlite3")
+	otherPath := filepath.Join(tmp.Path, "other.sqlite3")
+	if err := os.Remove(srcPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(otherPath, srcPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(hold); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-errCh; err == nil {
+		t.Fatal("publish succeeded after source replacement")
+	}
+	got, readErr := os.ReadFile(filepath.Join(dirPath, "leaf.sqlite3"))
+	if readErr == nil && string(got) == "trusted" {
+		t.Fatal("published original inode after source was replaced")
 	}
 }

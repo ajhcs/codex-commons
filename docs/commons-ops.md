@@ -7,6 +7,11 @@ deployment commands stay disabled. Future Phase 5 path-sensitive restore work
 must still enter through this packaged boundary rather than interpolating
 operator paths into shell or SQLite commands.
 
+The packaged helper is Linux-only. Release packaging builds and verifies it on
+Linux; non-Linux builds fail closed and are outside the release contract.
+Enabled operations create SQLite backups through fd-relative Linux path
+validation.
+
 The release builder embeds the same release ID in `commons-server` and
 `commons-ops`. Staging copies the exact helper, and complete-tree verification
 checks its executable mode, identity, and SHA256SUMS entry. Packaged
@@ -61,15 +66,23 @@ Publication prepares the SQLite copy plus checksum and sanitized receipt
 sidecars in a random private mode-0700 directory inside the verified
 destination, fsyncs file data and directories, then publishes each leaf with
 `renameat2(RENAME_NOREPLACE)`. The private source leaf and destination
-directory are revalidated immediately before each publish or copy. Parent
+directory are revalidated immediately before each publish or copy. Each
+publish keeps the validated source descriptor open through the rename, then
+revalidates that the published destination is still that same regular inode
+before fsync. A
+same-uid actor can still replace the source name between that close and
+`renameat2`, or retarget the destination name afterward; those races are
+detected post-publication and fail closed, not atomically prevented. Parent
 directories are fsynced after each public rename. Monthly publication uses the
-same no-follow/no-replace policy. An already-present monthly name is accepted
-only as one coherent set: the sqlite backup, GNU `sha256sum` sidecar, and
-sanitized receipt must each be validated regular files, the checksum must name
-that absolute monthly path, and the receipt `file`/`sha256` must match the
-file digest. Malformed or mismatched sidecars fail closed. A symlink, FIFO,
-directory, hard link, or other occupant of the monthly name fails closed.
-Successfully published leaves are not unlinked on a later failure or signal.
+same no-follow/no-replace policy. Newly created monthly sets are revalidated as
+one coherent set before retention and before `backup_status=verified`. An
+already-present monthly name is accepted only as one coherent set: the sqlite
+backup, GNU `sha256sum` sidecar, and sanitized receipt must each be validated
+regular files, the checksum must name that absolute monthly path, and the
+receipt `file`/`sha256` must match the file digest. Malformed or mismatched
+sidecars fail closed. A symlink, FIFO, directory, hard link, or other occupant
+of the monthly name fails closed. Successfully published leaves are not
+unlinked on a later failure or signal.
 
 Backup receipts contain only deterministic metadata (`file`, `sha256`,
 `verified_at`, `schema`, `schema_digest`, `counts`, `selected_digest`,
@@ -90,10 +103,12 @@ is name-based and that remaining race is not claimed closed.
 SQLite is opened through a pinned directory-fd URI
 (`/proc/self/fd/<dirfd>/<leaf>`) so WAL/SHM sidecars are created next to the
 real leaf. Directory flock plus inode/mode/nlink revalidation run as close as
-possible to open and publish. This is not an absolute TOCTOU close against a
-hostile same-uid actor: SQLite's own open does not take `O_NOFOLLOW`,
-`flock(2)` is advisory, and unlink of a retained name is still a name-based
-operation after an fd-relative regular-file check. Cooperating Commons
-processes are serialized. Residual same-uid rename races are detected after
-open when the inode or `/proc/self/fd` path drifts; they are not claimed
-closed.
+possible to open and publish. Revalidation also confirms the opened database
+parent directory still resolves to the requested absolute path with expected
+owner/mode/identity; a rename or replacement of that parent fails closed.
+This is not an absolute TOCTOU close against a hostile same-uid actor:
+SQLite's own open does not take `O_NOFOLLOW`, `flock(2)` is advisory, and
+unlink of a retained name is still a name-based operation after an
+fd-relative regular-file check. Cooperating Commons processes are serialized.
+Residual same-uid rename races are detected after open when the inode or
+`/proc/self/fd` path drifts; they are not claimed closed.
