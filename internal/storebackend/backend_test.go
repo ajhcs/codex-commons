@@ -65,6 +65,71 @@ func TestMatchesPresenceState(t *testing.T) {
 	}
 }
 
+func TestInstallationStatusEmptyRestoreEvidenceDoesNotSatisfyBeta(t *testing.T) {
+	ctx := context.Background()
+	store, err := commonsstore.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	backend, err := New(store, presence.New(nil), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := backend.InstallationIdentityHex(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(id) != 32 || id != strings.ToLower(id) || id == strings.Repeat("0", 32) {
+		t.Fatalf("installation identity hex=%q", id)
+	}
+	status, err := backend.InstallationStatus(ctx, httpapi.RequestMeta{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Database.SchemaVersion != 17 {
+		t.Fatalf("schema version=%d", status.Database.SchemaVersion)
+	}
+	if status.Database.InstallationID != id {
+		t.Fatalf("status identity=%q helper=%q", status.Database.InstallationID, id)
+	}
+	if status.Evidence.RestoreDrill.Status != "unknown" || status.Evidence.BetaPrerequisitesMet {
+		t.Fatalf("empty restore evidence was treated as Beta-ready: %+v", status.Evidence)
+	}
+	var evidence int
+	if err = store.DB().QueryRowContext(ctx, `SELECT count(*) FROM installation_restore_evidence`).Scan(&evidence); err != nil {
+		t.Fatal(err)
+	}
+	if evidence != 0 {
+		t.Fatalf("restore evidence count=%d", evidence)
+	}
+}
+
+func TestInstallationStatusRejectsAllZeroIdentity(t *testing.T) {
+	ctx := context.Background()
+	store, err := commonsstore.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err = store.DB().ExecContext(ctx, `DROP TRIGGER installation_status_identity_no_update`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.DB().ExecContext(ctx, `UPDATE installation_status SET installation_id=x'00000000000000000000000000000000' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	backend, err := New(store, presence.New(nil), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backend.InstallationIdentityHex(ctx); err == nil {
+		t.Fatal("helper accepted all-zero identity")
+	}
+	if _, err := backend.InstallationStatus(ctx, httpapi.RequestMeta{}); err == nil {
+		t.Fatal("status accepted all-zero identity")
+	}
+}
+
 func TestInstallationStatusRejectsUnreceiptedEvidenceAndPendingRevocation(t *testing.T) {
 	ctx := context.Background()
 	store, err := commonsstore.Open(ctx, ":memory:")

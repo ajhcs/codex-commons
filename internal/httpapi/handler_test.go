@@ -38,6 +38,18 @@ func (b *readinessBackend) InstallationStatus(context.Context, RequestMeta) (Ins
 	return out, nil
 }
 
+type installationIdentityBackend struct {
+	*fakeBackend
+	id string
+}
+
+func (b *installationIdentityBackend) InstallationStatus(context.Context, RequestMeta) (InstallationStatusResult, error) {
+	out := InstallationStatusResult{}
+	out.Database.SchemaVersion = 17
+	out.Database.InstallationID = b.id
+	return out, nil
+}
+
 func (f *fakeBackend) seen(name string, meta RequestMeta) {
 	f.calls = append(f.calls, name)
 	f.last = meta
@@ -146,6 +158,21 @@ func decodeEnvelope(t *testing.T, rec *httptest.ResponseRecorder) map[string]any
 		t.Fatalf("invalid JSON: %v body=%s", err, rec.Body.String())
 	}
 	return got
+}
+
+func TestInstallationStatusTransportIncludesInstallationID(t *testing.T) {
+	id := "0123456789abcdef0123456789abcdef"
+	h := testHandler(&installationIdentityBackend{fakeBackend: &fakeBackend{}, id: id}, 0)
+	rec := request(h, http.MethodGet, "/v1/installation-status", "", "bearer-secret")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	got := decodeEnvelope(t, rec)
+	data, _ := got["data"].(map[string]any)
+	database, _ := data["database"].(map[string]any)
+	if database["schema_version"] != float64(17) || database["installation_id"] != id {
+		t.Fatalf("database=%v body=%s", database, rec.Body.String())
+	}
 }
 
 func TestHealthIsMinimalAndUnauthenticated(t *testing.T) {

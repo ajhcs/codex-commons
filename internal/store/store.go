@@ -63,11 +63,12 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 	for _, opt := range opts {
 		opt(s)
 	}
-	if err := db.PingContext(ctx); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := s.migrate(ctx); err != nil {
+	if err := withBusyRetry(ctx, func() error {
+		if err := db.PingContext(ctx); err != nil {
+			return err
+		}
+		return s.migrate(ctx)
+	}); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -80,8 +81,20 @@ func (s *Store) Close() error { return s.db.Close() }
 // application queries.
 func (s *Store) DB() *sql.DB { return s.db }
 
+var errMigrationApplied = errors.New("migration already applied")
+
 func (s *Store) migrate(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT`); err != nil {
+	// Concurrent Open serializes on one connection with BEGIN IMMEDIATE rather
+	// than a process-wide _txlock DSN, which would change ordinary writers.
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if err := withImmediate(ctx, conn, func() error {
+		_, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT`)
+		return err
+	}); err != nil {
 		return err
 	}
 	entries, err := fs.ReadDir(migrations.FS, ".")
@@ -99,7 +112,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			return fmt.Errorf("migration %s: %w", entry.Name(), err)
 		}
 		var exists int
-		if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations WHERE version=?`, version).Scan(&exists); err != nil {
+		if err := conn.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations WHERE version=?`, version).Scan(&exists); err != nil {
 			return err
 		}
 		if exists != 0 {
@@ -109,22 +122,78 @@ func (s *Store) migrate(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
+		err = withImmediate(ctx, conn, func() error {
+			if err := conn.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations WHERE version=?`, version).Scan(&exists); err != nil {
+				return err
+			}
+			if exists != 0 {
+				return errMigrationApplied
+			}
+			if _, err := conn.ExecContext(ctx, string(body)); err != nil {
+				return err
+			}
+			_, err := conn.ExecContext(ctx, `INSERT INTO schema_migrations(version,name,applied_at) VALUES(?,?,?)`, version, entry.Name(), stamp(s.now()))
 			return err
-		}
-		if _, err = tx.ExecContext(ctx, string(body)); err == nil {
-			_, err = tx.ExecContext(ctx, `INSERT INTO schema_migrations(version,name,applied_at) VALUES(?,?,?)`, version, entry.Name(), stamp(s.now()))
+		})
+		if errors.Is(err, errMigrationApplied) {
+			continue
 		}
 		if err != nil {
-			_ = tx.Rollback()
 			return fmt.Errorf("migration %s: %w", entry.Name(), err)
-		}
-		if err := tx.Commit(); err != nil {
-			return err
 		}
 	}
 	return nil
+}
+
+func withImmediate(ctx context.Context, conn *sql.Conn, fn func() error) error {
+	if err := withBusyRetry(ctx, func() error {
+		_, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`)
+		return err
+	}); err != nil {
+		return err
+	}
+	// COMMIT/ROLLBACK must still run if the caller cancels after BEGIN.
+	cleanupCtx := context.WithoutCancel(ctx)
+	if err := fn(); err != nil {
+		_, _ = conn.ExecContext(cleanupCtx, `ROLLBACK`)
+		return err
+	}
+	if _, err := conn.ExecContext(cleanupCtx, `COMMIT`); err != nil {
+		_, _ = conn.ExecContext(cleanupCtx, `ROLLBACK`)
+		return err
+	}
+	return nil
+}
+
+func busyErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "database is locked") || strings.Contains(msg, "database is busy") || strings.Contains(msg, "SQLITE_BUSY")
+}
+
+func withBusyRetry(ctx context.Context, fn func() error) error {
+	delay := 20 * time.Millisecond
+	var err error
+	for attempt := 0; attempt < 40; attempt++ {
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+		err = fn()
+		if err == nil || !busyErr(err) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+		if delay < 200*time.Millisecond {
+			delay *= 2
+		}
+	}
+	return err
 }
 
 func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
@@ -145,7 +214,7 @@ func mapErr(err error) error {
 		return nil
 	}
 	msg := err.Error()
-	if strings.Contains(msg, "database is locked") || strings.Contains(msg, "database is busy") {
+	if busyErr(err) {
 		return fmt.Errorf("%w: %v", domain.ErrUnavailable, err)
 	}
 	if strings.Contains(msg, "UNIQUE constraint failed") || strings.Contains(msg, "constraint failed") {

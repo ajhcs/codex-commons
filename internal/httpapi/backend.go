@@ -47,7 +47,8 @@ type InstallationStatusResult struct {
 	// section additive preserves the established installation-status contract.
 	Runtime  RuntimeHealthSnapshot `json:"runtime"`
 	Database struct {
-		SchemaVersion int `json:"schema_version"`
+		SchemaVersion  int    `json:"schema_version"`
+		InstallationID string `json:"installation_id,omitempty"`
 	} `json:"database"`
 	Codex struct {
 		Configured               bool       `json:"configured"`
