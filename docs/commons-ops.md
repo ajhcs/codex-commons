@@ -70,7 +70,7 @@ directory are revalidated immediately before each publish or copy. Each
 publish keeps the validated source descriptor open through the rename, then
 revalidates that the published destination is still that same regular inode
 before fsync. A
-same-uid actor can still replace the source name between that close and
+same-uid actor can still replace the source name between validation and
 `renameat2`, or retarget the destination name afterward; those races are
 detected post-publication and fail closed, not atomically prevented. Parent
 directories are fsynced after each public rename. Monthly publication uses the
