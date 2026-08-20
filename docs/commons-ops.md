@@ -18,3 +18,17 @@ not change Beta-prerequisite truth. Packaged `ops/check-readiness.sh` still
 pins live readiness to schema 15; updating that pin is later ops integration
 together with backup/restore command work. This increment does not change
 packaged readiness, backup, or restore shell behavior.
+
+Restore evidence is recorded only after a strict bounded parse of a sanitized
+receipt object. The parser rejects duplicate keys, unknown fields, malformed
+JSON, trailing data, control characters, wrong types, oversized input/fields,
+uppercase or non-hex SHA-256 digests, and invalid schema, release, drill, or
+timestamp values. A validated receipt must match the live `installation_id`;
+cross-installation identities are rejected. The store then derives a
+deterministic domain-separated fingerprint (`codex-commons.installation.restore-evidence`
+v1) that explicitly frames hash algorithm `sha256` with the domain and version,
+then length-prefixed field framing over the bound identity, drill, timestamp,
+backup digest, schema version, and release id. Exact replay is
+idempotent; drill or digest collisions fail closed. Recording a valid receipt
+does not set `restore_status` and does not make Beta prerequisites true.
+Backup/restore CLI commands remain later work.
