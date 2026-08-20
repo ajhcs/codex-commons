@@ -66,6 +66,18 @@ build_collision_status=0
 test "$build_collision_status" -eq 64
 printf 'BUILD_COLLISION_STATUS=%s\n' "$build_collision_status"
 
+mkdir -p "$root/build-real"
+dotdot_collision_status=0
+/bin/sh "$build_script" build-dotdot-collision "$root/build-real/commons-server" "$root/build-real/../build-real/commons-server" >/dev/null 2>&1 || dotdot_collision_status=$?
+test "$dotdot_collision_status" -eq 64
+printf 'BUILD_DOTDOT_COLLISION_STATUS=%s\n' "$dotdot_collision_status"
+
+ln -s "$root/build-real" "$root/build-link"
+symlink_collision_status=0
+/bin/sh "$build_script" build-symlink-collision "$root/build-real/commons-server" "$root/build-link/commons-server" >/dev/null 2>&1 || symlink_collision_status=$?
+test "$symlink_collision_status" -eq 64
+printf 'BUILD_SYMLINK_COLLISION_STATUS=%s\n' "$symlink_collision_status"
+
 negative_cases=0
 restored_cases=0
 positive_cases=0

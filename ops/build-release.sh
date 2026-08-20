@@ -8,7 +8,15 @@ case "$output" in /*) ;; *) exit 64;; esac
 build_dir=$(dirname "$output")
 ops_output=${3:-$build_dir/commons-ops}
 case "$ops_output" in /*) ;; *) exit 64;; esac
-test "$ops_output" != "$output" || exit 64
+output_parent=$(dirname "$output")
+ops_parent=$(dirname "$ops_output")
+test -d "$output_parent" || exit 64
+test -d "$ops_parent" || exit 64
+output_parent=$(readlink -f "$output_parent") || exit 64
+ops_parent=$(readlink -f "$ops_parent") || exit 64
+output_destination=$output_parent/$(basename "$output")
+ops_destination=$ops_parent/$(basename "$ops_output")
+test "$output_destination" != "$ops_destination" || exit 64
 CGO_ENABLED=0 go build -trimpath -buildvcs=true -ldflags "-buildid= -X main.releaseID=$id" -o "$output" ./cmd/commons-server
 test "$($output --build-id)" = "$id"
 go version -m "$output" | grep -Fq 'path'"$(printf '\t')"'codex-commons/cmd/commons-server'
