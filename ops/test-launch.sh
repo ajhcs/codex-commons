@@ -431,8 +431,8 @@ rm -f -- "$current"
 nl_target=$(printf 'release-a\n.')
 nl_target=${nl_target%.}
 ln -s -- "$nl_target" "$current"
-nl_raw=$(readlink -- "$current"; printf .)
-test "$nl_raw" = "$(printf 'release-a\n.')"
+nl_raw=$(readlink -n -- "$current"; printf x)
+test "$nl_raw" = "$(printf 'release-a\nx')"
 expect_launch_failure newline-target
 test ! -e "$verify_log"
 
@@ -441,8 +441,8 @@ rm -f -- "$current"
 ctrl_target=$(printf 'release-a\001.')
 ctrl_target=${ctrl_target%.}
 ln -s -- "$ctrl_target" "$current"
-ctrl_raw=$(readlink -- "$current"; printf .)
-test "$ctrl_raw" = "$(printf 'release-a\001.')"
+ctrl_raw=$(readlink -n -- "$current"; printf x)
+test "$ctrl_raw" = "$(printf 'release-a\001x')"
 expect_launch_failure control-target
 test ! -e "$verify_log"
 
