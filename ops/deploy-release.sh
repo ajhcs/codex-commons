@@ -239,22 +239,14 @@ cleanup_owned_receipt_tmp() {
 	fi
 	owned_receipt_tmp=
 }
-write_deployment_attempt_receipt() {
-	prepare_deploy_state_dir
-	receipt=$state_dir/deployment-attempt
-	if [ -L "$receipt" ]; then
-		reject_receipt_path
-	fi
-	if [ -e "$receipt" ] && [ ! -f "$receipt" ]; then
-		reject_receipt_path
-	fi
+require_receipt_identity_fields() {
 	require_release_id "$release_id" "candidate release id is unsafe"
 	require_manifest_digest "$candidate_digest" "candidate manifest digest is malformed"
 	case "$previous_state" in
 	absent)
 		if [ -n "$previous_id" ] || [ -n "$previous_digest" ]; then
 			echo "absent previous state must not record an id or digest" >&2
-			exit 64
+			return 1
 		fi
 		;;
 	validated)
@@ -263,25 +255,34 @@ write_deployment_attempt_receipt() {
 		;;
 	*)
 		echo "unsupported deployment-attempt previous_state" >&2
-		exit 64
+		return 1
 		;;
 	esac
-	receipt_body=$(printf '%s\n' \
-		"kind=deployment-attempt" \
-		"status=recorded" \
-		"candidate_id=$release_id" \
-		"candidate_digest=$candidate_digest" \
-		"previous_state=$previous_state" \
-		"previous_id=$previous_id" \
-		"previous_digest=$previous_digest")
+	return 0
+}
+# Publish one regular mode-0600 receipt through exclusive temp, owner/mode
+# checks, file sync, mv -Tf, and directory sync. Callers decide whether a
+# failure exits 64 or remains in the rollback machine. Never treat a failed
+# publish as authorization to mutate or restart.
+publish_receipt_body() {
+	receipt_body=$1
+	receipt=$state_dir/deployment-attempt
+	if [ -L "$receipt" ]; then
+		echo "deploy receipt path must be a regular non-symlink file in the validated state directory" >&2
+		return 1
+	fi
+	if [ -e "$receipt" ] && [ ! -f "$receipt" ]; then
+		echo "deploy receipt path must be a regular non-symlink file in the validated state directory" >&2
+		return 1
+	fi
 	if ! capture /usr/bin/mktemp -- "$state_dir/deployment-attempt.XXXXXX"; then
 		echo "failed to create private deployment-attempt temp" >&2
-		exit 64
+		return 1
 	fi
 	receipt_tmp=$captured
 	if [ "$(without_lock_fd dirname "$receipt_tmp")" != "$state_dir" ]; then
 		echo "private receipt temp is not in the validated state directory" >&2
-		exit 64
+		return 1
 	fi
 	owned_receipt_tmp=$receipt_tmp
 	tmp_leaf=$(without_lock_fd basename "$receipt_tmp")
@@ -290,21 +291,23 @@ write_deployment_attempt_receipt() {
 	*)
 		echo "private receipt temp name is not exclusive-mktemp-shaped" >&2
 		cleanup_owned_receipt_tmp
-		exit 64
+		return 1
 		;;
 	esac
 	if [ -L "$receipt_tmp" ] || [ ! -f "$receipt_tmp" ]; then
 		cleanup_owned_receipt_tmp
-		reject_receipt_path
+		echo "deploy receipt path must be a regular non-symlink file in the validated state directory" >&2
+		return 1
 	fi
 	if ! without_lock_fd sh -c 'set -eu; umask 077; printf "%s\n" "$1" > "$2"; chmod 0600 -- "$2"' x "$receipt_body" "$receipt_tmp"; then
 		echo "failed to write deployment-attempt receipt" >&2
 		cleanup_owned_receipt_tmp
-		exit 64
+		return 1
 	fi
 	if [ -L "$receipt_tmp" ] || [ ! -f "$receipt_tmp" ]; then
 		cleanup_owned_receipt_tmp
-		reject_receipt_path
+		echo "deploy receipt path must be a regular non-symlink file in the validated state directory" >&2
+		return 1
 	fi
 	effective_uid=$(without_lock_fd id -u)
 	effective_gid=$(without_lock_fd id -g)
@@ -314,39 +317,67 @@ write_deployment_attempt_receipt() {
 	if [ "$tmp_uid" != "$effective_uid" ] || [ "$tmp_gid" != "$effective_gid" ] || [ "$tmp_mode" != 600 ]; then
 		echo "deployment-attempt receipt temp must be mode 0600 and owned by the effective uid/gid" >&2
 		cleanup_owned_receipt_tmp
-		exit 64
+		return 1
 	fi
 	if ! without_lock_fd sync -- "$receipt_tmp"; then
 		echo "failed to sync deployment-attempt receipt" >&2
 		cleanup_owned_receipt_tmp
-		exit 64
+		return 1
 	fi
 	if [ -L "$receipt" ]; then
 		cleanup_owned_receipt_tmp
-		reject_receipt_path
+		echo "deploy receipt path must be a regular non-symlink file in the validated state directory" >&2
+		return 1
 	fi
 	if [ -e "$receipt" ] && [ ! -f "$receipt" ]; then
 		cleanup_owned_receipt_tmp
-		reject_receipt_path
+		echo "deploy receipt path must be a regular non-symlink file in the validated state directory" >&2
+		return 1
 	fi
 	if ! without_lock_fd mv -Tf -- "$receipt_tmp" "$receipt"; then
 		echo "failed to publish deployment-attempt receipt" >&2
 		cleanup_owned_receipt_tmp
-		exit 64
+		return 1
 	fi
 	owned_receipt_tmp=
 	if [ -L "$receipt" ] || [ ! -f "$receipt" ]; then
-		reject_receipt_path
+		echo "deploy receipt path must be a regular non-symlink file in the validated state directory" >&2
+		return 1
 	fi
 	receipt_uid=$(without_lock_fd stat -c %u "$receipt")
 	receipt_gid=$(without_lock_fd stat -c %g "$receipt")
 	receipt_mode=$(without_lock_fd stat -c %a "$receipt")
 	if [ "$receipt_uid" != "$effective_uid" ] || [ "$receipt_gid" != "$effective_gid" ] || [ "$receipt_mode" != 600 ]; then
 		echo "deployment-attempt receipt must be mode 0600 and owned by the effective uid/gid" >&2
-		exit 64
+		return 1
 	fi
 	if ! without_lock_fd sync -- "$state_dir"; then
 		echo "failed to sync deploy state directory" >&2
+		return 1
+	fi
+	return 0
+}
+write_deployment_attempt_receipt() {
+	prepare_deploy_state_dir
+	receipt=$state_dir/deployment-attempt
+	if [ -L "$receipt" ]; then
+		reject_receipt_path
+	fi
+	if [ -e "$receipt" ] && [ ! -f "$receipt" ]; then
+		reject_receipt_path
+	fi
+	if ! require_receipt_identity_fields; then
+		exit 64
+	fi
+	receipt_body=$(printf '%s\n' \
+		"kind=deployment-attempt" \
+		"status=recorded" \
+		"candidate_id=$release_id" \
+		"candidate_digest=$candidate_digest" \
+		"previous_state=$previous_state" \
+		"previous_id=$previous_id" \
+		"previous_digest=$previous_digest")
+	if ! publish_receipt_body "$receipt_body"; then
 		exit 64
 	fi
 }
@@ -449,31 +480,47 @@ remove_validated_sqlite_sidecar() {
 	label=$2
 	if [ -L "$sidecar" ]; then
 		echo "refusing $label symlink: $sidecar" >&2
-		exit 64
+		return 1
 	fi
 	if [ ! -e "$sidecar" ]; then
 		return 0
 	fi
 	if [ -d "$sidecar" ] || [ ! -f "$sidecar" ]; then
 		echo "refusing non-regular $label: $sidecar" >&2
-		exit 64
+		return 1
 	fi
-	without_lock_fd rm -f -- "$sidecar"
+	if ! without_lock_fd rm -f -- "$sidecar"; then
+		echo "failed to remove $label" >&2
+		return 1
+	fi
+	if [ -e "$sidecar" ] || [ -L "$sidecar" ]; then
+		echo "failed to remove $label" >&2
+		return 1
+	fi
+	return 0
 }
 cleanup_first_deploy_db() {
 	if [ -L "$COMMONS_DB" ]; then
 		echo "COMMONS_DB must not be a symlink; a dangling symlink is not absent: $COMMONS_DB" >&2
-		exit 64
+		return 1
 	fi
 	if [ -e "$COMMONS_DB" ]; then
 		if [ ! -f "$COMMONS_DB" ]; then
 			echo "COMMONS_DB exists and is not a regular file: $COMMONS_DB" >&2
-			exit 64
+			return 1
 		fi
-		without_lock_fd rm -f -- "$COMMONS_DB"
+		if ! without_lock_fd rm -f -- "$COMMONS_DB"; then
+			echo "failed to remove first-deploy database" >&2
+			return 1
+		fi
+		if [ -e "$COMMONS_DB" ] || [ -L "$COMMONS_DB" ]; then
+			echo "failed to remove first-deploy database" >&2
+			return 1
+		fi
 	fi
-	remove_validated_sqlite_sidecar "$COMMONS_DB-wal" "WAL"
-	remove_validated_sqlite_sidecar "$COMMONS_DB-shm" "SHM"
+	remove_validated_sqlite_sidecar "$COMMONS_DB-wal" "WAL" || return 1
+	remove_validated_sqlite_sidecar "$COMMONS_DB-shm" "SHM" || return 1
+	return 0
 }
 current="$COMMONS_RELEASE_ROOT/current"
 previous=
@@ -633,28 +680,399 @@ owned_next=$(without_lock_fd basename "$staged")
 without_lock_fd ln -s "$owned_next" "$next"
 without_lock_fd mv -Tf "$next" "$current"
 owned_next=
-if ! without_lock_fd "$systemctl_cmd" --user restart codex-commons.service || ! COMMONS_RELEASE_DIR="$staged" COMMONS_SYSTEMCTL="$systemctl_cmd" without_lock_fd /bin/sh "$staged/ops/check-readiness.sh"; then
-	without_lock_fd "$systemctl_cmd" --user stop codex-commons.service || true
+require_allowlisted() {
+	value=$1
+	label=$2
+	shift 2
+	for allowed in "$@"; do
+		if [ "$value" = "$allowed" ]; then
+			return 0
+		fi
+	done
+	echo "unsupported $label" >&2
+	return 1
+}
+recorded_attempt_receipt_body() {
+	printf '%s\n' \
+		"kind=deployment-attempt" \
+		"status=recorded" \
+		"candidate_id=$release_id" \
+		"candidate_digest=$candidate_digest" \
+		"previous_state=$previous_state" \
+		"previous_id=$previous_id" \
+		"previous_digest=$previous_digest"
+}
+# Query ActiveState exactly and losslessly. Do not infer active or stopped
+# from a generic command exit. Only inactive or failed proves stopped.
+# active/reloading/activating/deactivating are not stopped. Query failure,
+# empty, multiline, control, or unknown output is unknown and fails closed.
+query_unit_active_state() {
+	unit_active_state=
+	unit_active_state_class=unknown
+	if ! capture "$systemctl_cmd" --user show --property=ActiveState --value codex-commons.service; then
+		return 1
+	fi
+	case "$captured" in
+	*[[:cntrl:]]*|'')
+		return 1
+		;;
+	esac
+	case "$captured" in
+	inactive|failed)
+		unit_active_state=$captured
+		unit_active_state_class=stopped
+		return 0
+		;;
+	active|reloading|activating|deactivating)
+		unit_active_state=$captured
+		unit_active_state_class=active
+		return 0
+		;;
+	esac
+	return 1
+}
+prove_service_stopped() {
+	if query_unit_active_state && [ "$unit_active_state_class" = stopped ]; then
+		return 0
+	fi
+	echo "codex-commons.service is not proven stopped" >&2
+	return 1
+}
+recorded_service_state() {
+	case "${unit_active_state_class:-unknown}" in
+	stopped)
+		printf '%s\n' stopped
+		;;
+	active)
+		printf '%s\n' active
+		;;
+	*)
+		printf '%s\n' unknown
+		;;
+	esac
+}
+# One stop attempt and the same exact ActiveState proof. If that final stop
+# or proof fails, record previous_stop_failed with active/unknown and never
+# retry. Do not leave a known active previous service.
+stop_and_prove_previous() {
+	context=$1
+	if ! without_lock_fd "$systemctl_cmd" --user stop codex-commons.service; then
+		echo "failed to stop codex-commons.service" >&2
+		query_unit_active_state || true
+		finish_rollback previous_stop_failed "$(recorded_service_state)" "$rollback_database_state" \
+			"$context; final stop failed"
+	fi
+	if ! prove_service_stopped; then
+		finish_rollback previous_stop_failed "$(recorded_service_state)" "$rollback_database_state" \
+			"$context; service remained unproven after stop"
+	fi
+}
+publish_rollback_outcome() {
+	deploy_outcome=$1
+	service_state=$2
+	database_state=$3
+	if ! require_receipt_identity_fields; then
+		echo "rollback receipt identity fields are invalid" >&2
+		return 1
+	fi
+	if ! require_allowlisted "$deploy_outcome" "deploy_outcome" \
+		candidate_failed stop_failed receipt_mismatch previous_reverify_failed \
+		backup_verify_failed restore_failed first_deploy_cleanup_failed \
+		pointer_switch_failed previous_restart_failed previous_readiness_failed \
+		previous_stop_failed previous_ready no_previous; then
+		return 1
+	fi
+	if ! require_allowlisted "$service_state" "service_state" stopped active unknown ready; then
+		return 1
+	fi
+	if ! require_allowlisted "$database_state" "database_state" unchanged restored absent uncertain; then
+		return 1
+	fi
+	if [ -z "${state_dir:-}" ] || [ -z "${state_parent:-}" ] || [ -z "${state_leaf:-}" ]; then
+		echo "deploy state directory is not prepared for a rollback receipt" >&2
+		return 1
+	fi
+	if ! validate_deploy_state_dir; then
+		return 1
+	fi
+	receipt_body=$(printf '%s\n' \
+		"kind=deployment-attempt" \
+		"status=failed" \
+		"candidate_id=$release_id" \
+		"candidate_digest=$candidate_digest" \
+		"previous_state=$previous_state" \
+		"previous_id=$previous_id" \
+		"previous_digest=$previous_digest" \
+		"deploy_outcome=$deploy_outcome" \
+		"service_state=$service_state" \
+		"database_state=$database_state")
+	if ! publish_receipt_body "$receipt_body"; then
+		echo "failed to publish rollback outcome receipt" >&2
+		return 1
+	fi
+	return 0
+}
+finish_rollback() {
+	deploy_outcome=$1
+	service_state=$2
+	database_state=$3
+	message=$4
+	echo "$message" >&2
+	if ! publish_rollback_outcome "$deploy_outcome" "$service_state" "$database_state"; then
+		echo "failed to publish rollback outcome receipt" >&2
+	fi
+	exit 1
+}
+# Publishing a rollback outcome is safe only when the state directory and the
+# receipt path are a regular non-symlink file, owned by the effective uid/gid,
+# mode 0600. Unsafe shape must be left untouched.
+receipt_is_publish_safe() {
+	if [ -z "${state_dir:-}" ] || [ -z "${state_parent:-}" ] || [ -z "${state_leaf:-}" ]; then
+		echo "deploy state directory is not prepared for receipt revalidation" >&2
+		return 1
+	fi
+	if ! validate_deploy_state_dir; then
+		return 1
+	fi
+	receipt=$state_dir/deployment-attempt
+	if [ -L "$receipt" ] || [ ! -f "$receipt" ]; then
+		echo "deployment-attempt receipt is missing or not a regular file" >&2
+		return 1
+	fi
+	effective_uid=$(without_lock_fd id -u)
+	effective_gid=$(without_lock_fd id -g)
+	receipt_uid=$(without_lock_fd stat -c %u "$receipt")
+	receipt_gid=$(without_lock_fd stat -c %g "$receipt")
+	receipt_mode=$(without_lock_fd stat -c %a "$receipt")
+	if [ "$receipt_uid" != "$effective_uid" ] || [ "$receipt_gid" != "$effective_gid" ] || [ "$receipt_mode" != 600 ]; then
+		echo "deployment-attempt receipt must be mode 0600 and owned by the effective uid/gid" >&2
+		return 1
+	fi
+	return 0
+}
+receipt_content_matches_recorded() {
+	expected=$(recorded_attempt_receipt_body)
+	actual=$(without_lock_fd cat -- "$receipt") || {
+		echo "failed to read deployment-attempt receipt" >&2
+		return 1
+	}
+	if [ "$actual" != "$expected" ]; then
+		echo "deployment-attempt receipt does not match the captured attempt identity" >&2
+		return 1
+	fi
+	if [ "$(without_lock_fd wc -l < "$receipt")" -ne 7 ]; then
+		echo "deployment-attempt receipt is not the exact recorded 7-line contract" >&2
+		return 1
+	fi
+	return 0
+}
+revalidate_captured_previous() {
+	if [ "$previous_state" = absent ]; then
+		if [ -n "${previous:-}" ] || [ -n "$previous_id" ] || [ -n "$previous_digest" ]; then
+			echo "absent previous state must not have a captured previous identity" >&2
+			return 1
+		fi
+		return 0
+	fi
+	if [ "$previous_state" != validated ]; then
+		echo "unsupported previous_state during rollback" >&2
+		return 1
+	fi
+	if [ -z "${previous:-}" ] || [ -z "$previous_id" ] || [ -z "$previous_digest" ]; then
+		echo "captured previous identity is missing" >&2
+		return 1
+	fi
+	if [ -L "$previous" ] || [ ! -d "$previous" ]; then
+		echo "captured previous release is missing, not a directory, or symlink-shaped" >&2
+		return 1
+	fi
+	if [ "$(without_lock_fd dirname "$previous")" != "$COMMONS_RELEASE_ROOT" ] || [ "$(without_lock_fd basename "$previous")" != "$previous_id" ]; then
+		echo "captured previous release is not a canonical direct child of COMMONS_RELEASE_ROOT" >&2
+		return 1
+	fi
+	if [ ! -f "$previous/ops/verify-release.sh" ] || [ -L "$previous/ops/verify-release.sh" ]; then
+		echo "previous release verifier is missing or symlink-shaped" >&2
+		return 1
+	fi
+	COMMONS_RELEASE_DIR=$previous \
+	COMMONS_CODEX_BIN=$previous/bin/codex \
+	COMMONS_WEB_DIR=$previous/web \
+	COMMONS_RELEASE_IDENTITY_FILE=$previous/VERSION \
+	without_lock_fd /bin/sh "$previous/ops/verify-release.sh" || {
+		echo "captured previous release failed re-verification" >&2
+		return 1
+	}
+	reverify_id=$(without_lock_fd sed -n '1p' "$previous/VERSION")
+	if [ "$reverify_id" != "$previous_id" ] || [ "$reverify_id" != "$(without_lock_fd basename "$previous")" ]; then
+		echo "previous VERSION does not match the captured release basename" >&2
+		return 1
+	fi
+	reverify_digest=$(manifest_digest "$previous") || return 1
+	if [ "$reverify_digest" != "$previous_digest" ]; then
+		echo "previous manifest digest does not match the captured digest" >&2
+		return 1
+	fi
+	return 0
+}
+# First-deploy/no-previous removal reads current only to verify it still names
+# the exact candidate release_id. That read is never used as target selection.
+# A swapped pointer is left in place.
+safe_remove_current() {
+	if [ -L "$current" ]; then
+		if ! capture readlink -- "$current"; then
+			echo "failed to read current before first-deploy removal" >&2
+			return 1
+		fi
+		if [ "$captured" != "$release_id" ]; then
+			echo "current pointer is not the candidate release; refusing to unlink a substituted pointer" >&2
+			return 1
+		fi
+		if ! without_lock_fd rm -f -- "$current"; then
+			echo "failed to remove current after first-deploy failure" >&2
+			return 1
+		fi
+	elif [ -e "$current" ]; then
+		echo "refusing to remove non-symlink current pointer" >&2
+		return 1
+	fi
+	if [ -e "$current" ] || [ -L "$current" ]; then
+		echo "current pointer still present after first-deploy rollback" >&2
+		return 1
+	fi
+	return 0
+}
+# Switch current only to the captured previous id. The post-switch readlink
+# verifies that exact id; it does not choose a new target by re-reading current.
+atomic_switch_current_to_previous() {
+	require_release_id "$previous_id" "rollback target id is unsafe"
+	if [ -L "$next" ]; then
+		if ! without_lock_fd rm -f -- "$next"; then
+			echo "failed to remove leftover rollback pointer temp" >&2
+			return 1
+		fi
+	fi
+	if [ -e "$next" ] || [ -L "$next" ]; then
+		echo "refusing to follow or overwrite suspicious $next" >&2
+		return 1
+	fi
+	owned_next=$previous_id
+	if ! without_lock_fd ln -s "$owned_next" "$next"; then
+		echo "failed to create rollback pointer temp" >&2
+		owned_next=
+		return 1
+	fi
+	if ! capture readlink -- "$next"; then
+		echo "failed to read rollback pointer temp" >&2
+		cleanup_owned_next
+		return 1
+	fi
+	if [ "$captured" != "$previous_id" ]; then
+		echo "rollback pointer temp does not match the captured previous id" >&2
+		cleanup_owned_next
+		return 1
+	fi
+	if ! without_lock_fd mv -Tf -- "$next" "$current"; then
+		echo "failed to switch current to the captured previous release" >&2
+		cleanup_owned_next
+		return 1
+	fi
+	owned_next=
+	if ! capture readlink -- "$current"; then
+		echo "failed to read current after rollback pointer switch" >&2
+		return 1
+	fi
+	if [ "$captured" != "$previous_id" ]; then
+		echo "current readback does not match the captured previous id" >&2
+		return 1
+	fi
+	return 0
+}
+# Candidate restart/readiness failure always exits 1, even if previous becomes
+# ready. Stop is proven with the exact ActiveState query before any restore,
+# cleanup, or pointer mutation.
+run_fail_closed_rollback() {
+	if ! without_lock_fd "$systemctl_cmd" --user stop codex-commons.service; then
+		echo "failed to stop codex-commons.service" >&2
+		query_unit_active_state || true
+		finish_rollback stop_failed "$(recorded_service_state)" unchanged \
+			"candidate failed; service stop failed"
+	fi
+	if ! prove_service_stopped; then
+		finish_rollback stop_failed "$(recorded_service_state)" unchanged \
+			"candidate failed; service remained unproven after stop"
+	fi
+	if ! receipt_is_publish_safe; then
+		echo "candidate failed; receipt is unsafe to replace; service left stopped" >&2
+		exit 1
+	fi
+	if ! receipt_content_matches_recorded; then
+		echo "candidate failed; receipt content mismatch; service left stopped" >&2
+		if ! publish_rollback_outcome receipt_mismatch stopped unchanged; then
+			echo "failed to publish receipt_mismatch rollback receipt" >&2
+		fi
+		exit 1
+	fi
+	if ! revalidate_captured_previous; then
+		finish_rollback previous_reverify_failed stopped unchanged \
+			"candidate failed; captured previous revalidation failed"
+	fi
+	if ! publish_rollback_outcome candidate_failed stopped unchanged; then
+		echo "required rollback receipt publish failed; refusing later mutation or restart" >&2
+		exit 1
+	fi
+	rollback_database_state=unchanged
 	if [ -n "$prebackup" ]; then
 		if ! without_lock_fd /bin/sh "$staged/ops/verify-restore.sh" "$prebackup" >/dev/null; then
-			echo "pre-upgrade backup failed restore verification" >&2
-			exit 1
+			finish_rollback backup_verify_failed stopped unchanged \
+				"pre-upgrade backup failed restore verification"
 		fi
 		if ! without_lock_fd /bin/sh "$staged/ops/restore-database.sh" "$prebackup" "$COMMONS_DB"; then
-			echo "atomic database restore failed" >&2
-			exit 1
+			finish_rollback restore_failed stopped uncertain \
+				"atomic database restore failed"
 		fi
+		rollback_database_state=restored
 	elif [ "$had_db" = false ]; then
-		cleanup_first_deploy_db
+		if ! cleanup_first_deploy_db; then
+			finish_rollback first_deploy_cleanup_failed stopped uncertain \
+				"first-deploy database cleanup failed"
+		fi
+		rollback_database_state=absent
 	fi
-	# Rollback uses only the captured exact previous path and id. Do not
-	# re-read current or resolve a new target.
 	if [ -n "$previous_id" ]; then
-		without_lock_fd ln -sfn -- "$previous_id" "$current"
-		without_lock_fd "$systemctl_cmd" --user restart codex-commons.service || true
-		COMMONS_RELEASE_DIR="$previous" COMMONS_SYSTEMCTL="$systemctl_cmd" without_lock_fd /bin/sh "$previous/ops/check-readiness.sh" || true
+		if ! atomic_switch_current_to_previous; then
+			finish_rollback pointer_switch_failed stopped "$rollback_database_state" \
+				"failed to switch current to the captured previous release"
+		fi
 	else
-		without_lock_fd rm -f -- "$current"
+		if ! safe_remove_current; then
+			finish_rollback pointer_switch_failed stopped "$rollback_database_state" \
+				"failed to remove current after first-deploy failure"
+		fi
+		finish_rollback no_previous stopped "$rollback_database_state" \
+			"candidate failed; no previous release; service left stopped"
 	fi
+	if ! without_lock_fd "$systemctl_cmd" --user restart codex-commons.service; then
+		echo "previous release failed to restart" >&2
+		stop_and_prove_previous "candidate failed; previous process failed to restart"
+		finish_rollback previous_restart_failed stopped "$rollback_database_state" \
+			"candidate failed; previous process failed to restart"
+	fi
+	if ! COMMONS_RELEASE_DIR="$previous" COMMONS_SYSTEMCTL="$systemctl_cmd" without_lock_fd /bin/sh "$previous/ops/check-readiness.sh"; then
+		echo "previous release failed readiness" >&2
+		stop_and_prove_previous "candidate failed; previous readiness failed"
+		finish_rollback previous_readiness_failed stopped "$rollback_database_state" \
+			"candidate failed; previous readiness failed"
+	fi
+	if ! publish_rollback_outcome previous_ready ready "$rollback_database_state"; then
+		echo "failed to publish previous_ready rollback receipt" >&2
+		stop_and_prove_previous "candidate failed; previous_ready receipt publish failed"
+		echo "candidate failed; previous_ready receipt publish failed; service left stopped" >&2
+		exit 1
+	fi
+	echo "candidate failed; previous release restored and ready" >&2
+	exit 1
+}
+if ! without_lock_fd "$systemctl_cmd" --user restart codex-commons.service || ! COMMONS_RELEASE_DIR="$staged" COMMONS_SYSTEMCTL="$systemctl_cmd" without_lock_fd /bin/sh "$staged/ops/check-readiness.sh"; then
+	run_fail_closed_rollback
 	exit 1
 fi
