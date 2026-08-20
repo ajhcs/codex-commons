@@ -10,11 +10,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
 	"codex-commons/internal/apiclient"
+	"codex-commons/internal/privatefile"
 )
 
 const (
@@ -114,27 +114,9 @@ func loadAgentClient(deps runtimeDeps) (*apiclient.Client, agentConfig, error) {
 }
 
 func readAgentConfig(path string) (agentConfig, error) {
-	file, err := os.Open(path)
+	payload, err := privatefile.Read(path, "agent config", maxAgentConfigBytes)
 	if err != nil {
-		return agentConfig{}, fmt.Errorf("agent config: %w", err)
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return agentConfig{}, fmt.Errorf("agent config: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return agentConfig{}, errors.New("agent config must be a regular file")
-	}
-	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
-		return agentConfig{}, errors.New("agent config must not be accessible by group or other users")
-	}
-	payload, err := io.ReadAll(io.LimitReader(file, maxAgentConfigBytes+1))
-	if err != nil {
-		return agentConfig{}, fmt.Errorf("agent config: %w", err)
-	}
-	if int64(len(payload)) > maxAgentConfigBytes {
-		return agentConfig{}, errors.New("agent config exceeds 65536 bytes")
+		return agentConfig{}, err
 	}
 	var config agentConfig
 	decoder := json.NewDecoder(bytes.NewReader(payload))

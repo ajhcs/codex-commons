@@ -17,6 +17,7 @@ import (
 	"codex-commons/internal/codexauth"
 	"codex-commons/internal/domain"
 	"codex-commons/internal/httpapi"
+	"codex-commons/internal/privatefile"
 )
 
 const (
@@ -364,16 +365,9 @@ func readCredentials(path string) ([]httpapi.Credential, error) {
 	if path == "" {
 		return nil, nil
 	}
-	info, err := os.Stat(path)
+	file, err := privatefile.Open(path, "credentials file", 64<<10)
 	if err != nil {
-		return nil, fmt.Errorf("credentials file: %w", err)
-	}
-	if info.Mode().Perm()&0o077 != 0 {
-		return nil, errors.New("credentials file must not be accessible by group or other users")
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("credentials file: %w", err)
+		return nil, err
 	}
 	defer file.Close()
 	type fileCredential struct {
