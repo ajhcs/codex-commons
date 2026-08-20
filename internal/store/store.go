@@ -63,11 +63,12 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 	for _, opt := range opts {
 		opt(s)
 	}
-	if err := db.PingContext(ctx); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := s.migrate(ctx); err != nil {
+	if err := withBusyRetry(ctx, func() error {
+		if err := db.PingContext(ctx); err != nil {
+			return err
+		}
+		return s.migrate(ctx)
+	}); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -145,18 +146,54 @@ func (s *Store) migrate(ctx context.Context) error {
 }
 
 func withImmediate(ctx context.Context, conn *sql.Conn, fn func() error) error {
-	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+	if err := withBusyRetry(ctx, func() error {
+		_, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`)
+		return err
+	}); err != nil {
 		return err
 	}
+	// COMMIT/ROLLBACK must still run if the caller cancels after BEGIN.
+	cleanupCtx := context.WithoutCancel(ctx)
 	if err := fn(); err != nil {
-		_, _ = conn.ExecContext(ctx, `ROLLBACK`)
+		_, _ = conn.ExecContext(cleanupCtx, `ROLLBACK`)
 		return err
 	}
-	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
-		_, _ = conn.ExecContext(ctx, `ROLLBACK`)
+	if _, err := conn.ExecContext(cleanupCtx, `COMMIT`); err != nil {
+		_, _ = conn.ExecContext(cleanupCtx, `ROLLBACK`)
 		return err
 	}
 	return nil
+}
+
+func busyErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "database is locked") || strings.Contains(msg, "database is busy") || strings.Contains(msg, "SQLITE_BUSY")
+}
+
+func withBusyRetry(ctx context.Context, fn func() error) error {
+	delay := 20 * time.Millisecond
+	var err error
+	for attempt := 0; attempt < 40; attempt++ {
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+		err = fn()
+		if err == nil || !busyErr(err) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+		if delay < 200*time.Millisecond {
+			delay *= 2
+		}
+	}
+	return err
 }
 
 func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
@@ -177,7 +214,7 @@ func mapErr(err error) error {
 		return nil
 	}
 	msg := err.Error()
-	if strings.Contains(msg, "database is locked") || strings.Contains(msg, "database is busy") {
+	if busyErr(err) {
 		return fmt.Errorf("%w: %v", domain.ErrUnavailable, err)
 	}
 	if strings.Contains(msg, "UNIQUE constraint failed") || strings.Contains(msg, "constraint failed") {

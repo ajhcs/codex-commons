@@ -4,6 +4,7 @@
 -- not record a drill or change backup/restore status.
 ALTER TABLE installation_status ADD COLUMN installation_id BLOB NOT NULL DEFAULT x'00000000000000000000000000000000' CHECK(length(installation_id)=16);
 UPDATE installation_status SET installation_id=randomblob(16) WHERE id=1;
+UPDATE installation_status SET installation_id=randomblob(16) WHERE id=1 AND installation_id=x'00000000000000000000000000000000';
 CREATE UNIQUE INDEX installation_status_installation_id ON installation_status(installation_id);
 
 CREATE TRIGGER installation_status_identity_no_update BEFORE UPDATE OF installation_id ON installation_status
@@ -13,7 +14,10 @@ BEGIN SELECT RAISE(ABORT,'installation identity is immutable'); END;
 
 CREATE TABLE installation_restore_evidence (
   drill_id TEXT PRIMARY KEY CHECK (length(trim(drill_id)) BETWEEN 1 AND 200),
-  installation_id BLOB NOT NULL REFERENCES installation_status(installation_id),
+  installation_id BLOB NOT NULL REFERENCES installation_status(installation_id) CHECK (
+    length(installation_id)=16
+    AND installation_id != x'00000000000000000000000000000000'
+  ),
   recorded_at TEXT NOT NULL CHECK (length(trim(recorded_at)) BETWEEN 1 AND 100),
   restore_receipt_digest TEXT NOT NULL UNIQUE CHECK (
     length(restore_receipt_digest)=64

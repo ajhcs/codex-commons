@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -12,12 +13,21 @@ import (
 	"sync"
 	"testing"
 
+	"codex-commons/internal/domain"
+
 	_ "modernc.org/sqlite"
 )
 
 const migration17At = "2026-08-20T00:00:00Z"
 
 var installationIdentityHex = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+func mustNonZeroInstallationIdentityHex(t *testing.T, id string) {
+	t.Helper()
+	if !installationIdentityHex.MatchString(id) || id == strings.Repeat("0", 32) {
+		t.Fatalf("identity hex=%q", id)
+	}
+}
 
 func newMigration17Database(t *testing.T, through int) (*sql.DB, string) {
 	t.Helper()
@@ -78,7 +88,8 @@ func TestMigration17FreshUpgradeAndStableReopen(t *testing.T) {
 	must(t, err)
 	firstHex, err := store.InstallationIdentityHex(ctx)
 	must(t, err)
-	if !installationIdentityHex.MatchString(firstHex) || firstHex != hex.EncodeToString(first) {
+	mustNonZeroInstallationIdentityHex(t, firstHex)
+	if firstHex != hex.EncodeToString(first) {
 		t.Fatalf("identity hex=%q", firstHex)
 	}
 	var secret []byte
@@ -134,6 +145,9 @@ func TestMigration17UpgradeFromFifteenAndSixteenPreservesReviewSecret(t *testing
 			}
 			id, err := store.InstallationIdentity(ctx)
 			must(t, err)
+			idHex, err := store.InstallationIdentityHex(ctx)
+			must(t, err)
+			mustNonZeroInstallationIdentityHex(t, idHex)
 			if bytes.Equal(id, knownSecret[:16]) {
 				t.Fatal("installation identity was copied from review_secret")
 			}
@@ -173,9 +187,7 @@ func TestMigration17ConcurrentOpensShareOneIdentity(t *testing.T) {
 		if errs[i] != nil {
 			t.Fatalf("open %d: %v", i, errs[i])
 		}
-		if !installationIdentityHex.MatchString(ids[i]) {
-			t.Fatalf("open %d identity=%q", i, ids[i])
-		}
+		mustNonZeroInstallationIdentityHex(t, ids[i])
 		if first == "" {
 			first = ids[i]
 			continue
@@ -198,6 +210,8 @@ func TestMigration17DistinctDatabaseFilesHaveDistinctIdentities(t *testing.T) {
 	must(t, err)
 	rightID, err := right.InstallationIdentityHex(ctx)
 	must(t, err)
+	mustNonZeroInstallationIdentityHex(t, leftID)
+	mustNonZeroInstallationIdentityHex(t, rightID)
 	if leftID == rightID {
 		t.Fatalf("distinct files shared identity %q", leftID)
 	}
@@ -234,6 +248,7 @@ func TestMigration17RejectsIdentityMutationAndRestoreEvidenceTampering(t *testin
 		t.Fatal("accepted restore evidence delete")
 	}
 
+	mustMigration17Reject(t, insertRestoreEvidence(store.DB(), "drill-zero-identity", bytes.Repeat([]byte{0x00}, 16), migration17At, strings.Repeat("c", 64), strings.Repeat("d", 64), 17, "continuous-dogfood-test"), "all-zero installation identity")
 	mustMigration17Reject(t, insertRestoreEvidence(store.DB(), "drill-foreign", bytes.Repeat([]byte{0x22}, 16), migration17At, strings.Repeat("c", 64), strings.Repeat("d", 64), 17, "continuous-dogfood-test"), "foreign installation identity")
 	mustMigration17Reject(t, insertRestoreEvidence(store.DB(), "drill-short-receipt", id, migration17At, strings.Repeat("a", 63), backup, 17, "continuous-dogfood-test"), "short receipt digest")
 	mustMigration17Reject(t, insertRestoreEvidence(store.DB(), "drill-long-receipt", id, migration17At, strings.Repeat("a", 65), backup, 17, "continuous-dogfood-test"), "long receipt digest")
@@ -252,6 +267,40 @@ func TestMigration17RejectsIdentityMutationAndRestoreEvidenceTampering(t *testin
 	mustMigration17Reject(t, insertRestoreEvidence(store.DB(), "drill-long-time", id, strings.Repeat("t", 101), strings.Repeat("e", 64), strings.Repeat("f", 64), 17, "continuous-dogfood-test"), "oversized timestamp")
 	mustMigration17Reject(t, insertRestoreEvidence(store.DB(), "drill-1", id, migration17At, strings.Repeat("e", 64), strings.Repeat("f", 64), 17, "continuous-dogfood-test"), "duplicate drill id")
 	mustMigration17Reject(t, insertRestoreEvidence(store.DB(), "drill-dup-receipt", id, migration17At, receipt, strings.Repeat("f", 64), 17, "continuous-dogfood-test"), "duplicate receipt digest")
+}
+
+func TestEncodeInstallationIdentityRejectsAllZeroAndWrongLength(t *testing.T) {
+	if _, err := EncodeInstallationIdentity(nil); err == nil || !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("nil identity err=%v", err)
+	}
+	if _, err := EncodeInstallationIdentity(make([]byte, 15)); err == nil || !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("short identity err=%v", err)
+	}
+	if _, err := EncodeInstallationIdentity(make([]byte, 16)); err == nil || !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("all-zero identity err=%v", err)
+	}
+	id := bytes.Repeat([]byte{0xab}, 16)
+	got, err := EncodeInstallationIdentity(id)
+	if err != nil || got != strings.Repeat("ab", 16) {
+		t.Fatalf("got=%q err=%v", got, err)
+	}
+}
+
+func TestInstallationIdentityRejectsAllZero(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "zero-identity.sqlite3"))
+	must(t, err)
+	defer store.Close()
+	_, err = store.DB().ExecContext(ctx, `DROP TRIGGER installation_status_identity_no_update`)
+	must(t, err)
+	_, err = store.DB().ExecContext(ctx, `UPDATE installation_status SET installation_id=x'00000000000000000000000000000000' WHERE id=1`)
+	must(t, err)
+	if _, err := store.InstallationIdentity(ctx); err == nil || !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("zero identity err=%v", err)
+	}
+	if _, err := store.InstallationIdentityHex(ctx); err == nil || !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("zero identity hex err=%v", err)
+	}
 }
 
 func TestMigration17FailureRollsBackToSixteenWithoutPartialObjects(t *testing.T) {
