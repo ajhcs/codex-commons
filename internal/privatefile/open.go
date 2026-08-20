@@ -1,7 +1,7 @@
 //go:build linux
 
 // Package privatefile opens Linux private configuration files without
-// check/use races. Callers read or decode only from the returned descriptor.
+// check/use races. Callers read bounded bytes from the opened descriptor.
 package privatefile
 
 import (
@@ -15,16 +15,18 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Open opens path with O_NOFOLLOW and O_CLOEXEC, then validates the already-open
-// descriptor with fstat: a regular file owned by the effective user, with no
-// group/other permission bits, and no larger than maxSize. Reads from the
-// returned file stay on that inode, so a later replacement at path is harmless.
+// Open opens path with O_RDONLY, O_CLOEXEC, O_NOFOLLOW, and O_NONBLOCK, then
+// validates the already-open descriptor with fstat: a regular file owned by
+// the effective user, with exact mode 0600, and no larger than maxSize.
+// O_NONBLOCK is required so a FIFO cannot block open before fstat rejects it;
+// it is harmless for regular files. Reads from the returned file stay on that
+// inode, so a later replacement at path is harmless.
 func Open(path, label string, maxSize int64) (*os.File, error) {
 	label = normalizeLabel(label)
 	if maxSize <= 0 {
 		return nil, fmt.Errorf("%s: maximum size must be positive", label)
 	}
-	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, openError(label, err)
 	}
@@ -40,20 +42,37 @@ func Open(path, label string, maxSize int64) (*os.File, error) {
 	return file, nil
 }
 
-// Read opens path with Open, reads at most maxSize bytes from that descriptor,
-// and closes it. The returned slice never includes bytes from a replaced path.
+// Read opens path with Open, reads at most maxSize+1 bytes from that
+// descriptor, and closes it. The file is rejected if it contains more than
+// maxSize bytes, including when the already-open inode grows after fstat.
+// The returned slice never includes bytes from a replaced path and is never
+// a silently truncated prefix.
 func Read(path, label string, maxSize int64) ([]byte, error) {
 	file, err := Open(path, label, maxSize)
 	if err != nil {
 		return nil, err
 	}
-	body, readErr := io.ReadAll(io.LimitReader(file, maxSize))
+	body, readErr := readFromOpened(file, normalizeLabel(label), maxSize)
 	closeErr := file.Close()
 	if readErr != nil {
-		return nil, fmt.Errorf("%s: %w", normalizeLabel(label), readErr)
+		return nil, readErr
 	}
 	if closeErr != nil {
 		return nil, fmt.Errorf("%s: %w", normalizeLabel(label), closeErr)
+	}
+	return body, nil
+}
+
+// readFromOpened reads at most maxSize+1 bytes from an already-open private
+// descriptor and rejects the read if the inode now contains more than maxSize
+// bytes. Callers that decode JSON must decode from these bounded bytes.
+func readFromOpened(file *os.File, label string, maxSize int64) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(file, maxSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", label, err)
+	}
+	if int64(len(body)) > maxSize {
+		return nil, fmt.Errorf("%s exceeds %d bytes", label, maxSize)
 	}
 	return body, nil
 }
@@ -71,8 +90,8 @@ func validate(file *os.File, label string, maxSize int64) error {
 	if st.Uid != uint32(unix.Geteuid()) {
 		return fmt.Errorf("%s must be owned by the effective user", label)
 	}
-	if st.Mode&0o077 != 0 {
-		return fmt.Errorf("%s must not be accessible by group or other users", label)
+	if st.Mode&^unix.S_IFMT != 0o600 {
+		return fmt.Errorf("%s must have mode 0600", label)
 	}
 	if st.Size > maxSize {
 		return fmt.Errorf("%s exceeds %d bytes", label, maxSize)

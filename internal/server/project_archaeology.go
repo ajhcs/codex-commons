@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,15 +31,14 @@ func readArchaeologyRoots(path string) ([]ArchaeologyRoot, error) {
 	if path == "" {
 		return nil, nil
 	}
-	file, err := privatefile.Open(path, "archaeology roots file", 64<<10)
+	raw, err := privatefile.Read(path, "archaeology roots file", 64<<10)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
 	var payload struct {
 		Roots []ArchaeologyRoot `json:"roots"`
 	}
-	decoder := json.NewDecoder(io.LimitReader(file, 64<<10))
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err = decoder.Decode(&payload); err != nil {
 		return nil, err

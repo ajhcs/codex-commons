@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -365,11 +366,10 @@ func readCredentials(path string) ([]httpapi.Credential, error) {
 	if path == "" {
 		return nil, nil
 	}
-	file, err := privatefile.Open(path, "credentials file", 64<<10)
+	raw, err := privatefile.Read(path, "credentials file", 64<<10)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
 	type fileCredential struct {
 		BearerToken    string `json:"bearer_token"`
 		HostCredential string `json:"host_credential"`
@@ -382,7 +382,7 @@ func readCredentials(path string) ([]httpapi.Credential, error) {
 	var payload struct {
 		Credentials []fileCredential `json:"credentials"`
 	}
-	decoder := json.NewDecoder(io.LimitReader(file, 64<<10))
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&payload); err != nil {
 		return nil, fmt.Errorf("credentials file: %w", err)

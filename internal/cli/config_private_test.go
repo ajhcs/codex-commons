@@ -32,11 +32,13 @@ func TestReadAgentConfigPreservesStrictJSONAndPrivateMode(t *testing.T) {
 	if _, err := readAgentConfig(malformed); err == nil {
 		t.Fatal("malformed JSON accepted")
 	}
-	if err := os.Chmod(path, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := readAgentConfig(path); err == nil || !strings.Contains(err.Error(), "group or other") {
-		t.Fatalf("broad agent config accepted: %v", err)
+	for _, mode := range []os.FileMode{0o644, 0o400, 0o700} {
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readAgentConfig(path); err == nil || !strings.Contains(err.Error(), "mode 0600") {
+			t.Fatalf("mode %04o agent config accepted: %v", mode, err)
+		}
 	}
 }
 

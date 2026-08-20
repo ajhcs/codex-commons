@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,9 +39,11 @@ func TestCredentialsFileRejectsSymlinkAndBroadMode(t *testing.T) {
 	} else if _, err := readCredentials(link); err == nil || !strings.Contains(err.Error(), "symlink") {
 		t.Fatalf("symlink credentials accepted: %v", err)
 	}
-	wide := writeModeFile(t, dir, "wide.json", []byte(`{"credentials":[]}`), 0o644)
-	if _, err := readCredentials(wide); err == nil || !strings.Contains(err.Error(), "group or other") {
-		t.Fatalf("broad credentials accepted: %v", err)
+	for _, mode := range []os.FileMode{0o644, 0o400, 0o700} {
+		wide := writeModeFile(t, dir, fmt.Sprintf("wide-%04o.json", mode), []byte(`{"credentials":[]}`), mode)
+		if _, err := readCredentials(wide); err == nil || !strings.Contains(err.Error(), "mode 0600") {
+			t.Fatalf("mode %04o credentials accepted: %v", mode, err)
+		}
 	}
 }
 
@@ -80,6 +83,10 @@ func TestCodexBindingKeyFileUsesPrivateOpener(t *testing.T) {
 	short := writeModeFile(t, dir, "short.key", bytes.Repeat([]byte{0x2a}, 31), 0o600)
 	if _, err := readCodexBindingKey(short); err == nil || !strings.Contains(err.Error(), "exactly 32 bytes") {
 		t.Fatalf("short binding key accepted: %v", err)
+	}
+	long := writeModeFile(t, dir, "long.key", bytes.Repeat([]byte{0x2a}, 33), 0o600)
+	if _, err := readCodexBindingKey(long); err == nil {
+		t.Fatal("oversized binding key accepted")
 	}
 }
 

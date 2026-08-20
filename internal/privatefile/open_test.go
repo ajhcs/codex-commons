@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -54,11 +55,34 @@ func TestOpenRejectsNonRegular(t *testing.T) {
 	}
 }
 
-func TestOpenRejectsGroupOrOtherMode(t *testing.T) {
-	for _, mode := range []os.FileMode{0o640, 0o604, 0o644, 0o660} {
+func TestOpenRejectsFIFOWithoutBlocking(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fifo")
+	if err := unix.Mkfifo(path, 0o600); err != nil {
+		t.Skipf("mkfifo unavailable: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := Open(path, testLabel, 4096)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("FIFO accepted")
+		}
+		if !strings.Contains(err.Error(), "regular file") && !errors.Is(err, unix.ENXIO) && !errors.Is(err, unix.EAGAIN) && !errors.Is(err, unix.EWOULDBLOCK) {
+			t.Fatalf("FIFO poorly reported: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("FIFO open blocked")
+	}
+}
+
+func TestOpenRejectsNon0600Mode(t *testing.T) {
+	for _, mode := range []os.FileMode{0o400, 0o700, 0o640, 0o604, 0o644, 0o660} {
 		path := writePrivate(t, t.TempDir(), "wide", []byte("mode-secret"), mode)
 		err := mustOpenError(t, path)
-		if !strings.Contains(err.Error(), "group or other") {
+		if !strings.Contains(err.Error(), "mode 0600") {
 			t.Fatalf("mode %04o accepted or poorly reported: %v", mode, err)
 		}
 		if strings.Contains(err.Error(), "mode-secret") {
@@ -75,7 +99,7 @@ func TestOpenRejectsOversizedFile(t *testing.T) {
 	}
 }
 
-func TestOpenReadsExactOwnerModeFile(t *testing.T) {
+func TestOpenReadsExactMode0600File(t *testing.T) {
 	want := []byte("owner-only-config")
 	path := writePrivate(t, t.TempDir(), "ok", want, 0o600)
 	got, err := Read(path, testLabel, 4096)
@@ -85,9 +109,49 @@ func TestOpenReadsExactOwnerModeFile(t *testing.T) {
 	if !bytes.Equal(got, want) {
 		t.Fatal("read bytes did not match the opened file")
 	}
-	readonly := writePrivate(t, t.TempDir(), "ro", want, 0o400)
-	if _, err := Read(readonly, testLabel, 4096); err != nil {
-		t.Fatalf("owner-only 0400 file rejected: %v", err)
+}
+
+func TestReadAcceptsExactMaxSize(t *testing.T) {
+	want := bytes.Repeat([]byte("n"), 64)
+	path := writePrivate(t, t.TempDir(), "exact", want, 0o600)
+	got, err := Read(path, testLabel, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("exact maxSize read failed")
+	}
+}
+
+func TestReadFromOpenedRejectsSameInodeGrowth(t *testing.T) {
+	dir := t.TempDir()
+	path := writePrivate(t, dir, "grow", []byte("small"), 0o600)
+	file, err := Open(path, testLabel, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	writer, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write([]byte("too-big-now")); err != nil {
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	if err := writer.Sync(); err != nil {
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	body, err := readFromOpened(file, testLabel, 8)
+	if err == nil || !strings.Contains(err.Error(), "exceeds 8 bytes") {
+		t.Fatalf("same-inode growth accepted or poorly reported: %v", err)
+	}
+	if len(body) != 0 {
+		t.Fatal("oversized growth returned truncated contents")
 	}
 }
 
@@ -142,19 +206,22 @@ func TestDecodeJSONFromOpenedDescriptorPreservesTrailingAndMalformedBehavior(t *
 	var payload struct {
 		Value string `json:"value"`
 	}
-	decoder := json.NewDecoder(io.LimitReader(file, 4096))
+	body, err := readFromOpened(file, testLabel, 4096)
+	closeErr := file.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&payload); err != nil {
-		_ = file.Close()
 		t.Fatal(err)
 	}
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		_ = file.Close()
 		t.Fatalf("pinned JSON unexpectedly had trailing data: %v", err)
-	}
-	if err := file.Close(); err != nil {
-		t.Fatal(err)
 	}
 	if payload.Value != "pinned" {
 		t.Fatal("JSON decode did not stay on the opened inode")
@@ -175,8 +242,10 @@ func TestDecodeJSONFromOpenedDescriptorPreservesTrailingAndMalformedBehavior(t *
 }
 
 func TestOpenRejectsWrongOwner(t *testing.T) {
+	// Unprivileged processes cannot chown the fixture to a foreign uid, so
+	// this ownership check is skipped unless the test is running as root.
 	if unix.Geteuid() != 0 {
-		t.Skip("wrong-owner rejection requires chown")
+		t.Skip("wrong-owner rejection requires chown; skipped when unprivileged")
 	}
 	path := writePrivate(t, t.TempDir(), "foreign", []byte("foreign-owned"), 0o600)
 	if err := unix.Chown(path, 65534, -1); err != nil {
@@ -227,8 +296,15 @@ func decodeOneJSON(t *testing.T, path string) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
-	decoder := json.NewDecoder(io.LimitReader(file, 4096))
+	body, err := readFromOpened(file, testLabel, 4096)
+	closeErr := file.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	var payload struct {
 		Value string `json:"value"`
