@@ -302,8 +302,9 @@ not create or follow a `.lock` file, and it does not lock through a symlink.
 The descriptor stays open until the process exits, so the same lock covers
 candidate verification, the previous-release preflight, receipt write, backup,
 the `current` pointer switch, restart and readiness, and the captured-previous
-rollback paths. Staged scripts, the configurable systemctl command, receipt
-helpers, and other child processes do not receive a usable copy of that lock descriptor. A second concurrent deploy exits `75` (busy) before changing any
+rollback paths including atomic database restore. Staged scripts, the
+configurable systemctl command, receipt helpers, the restore helper, and other
+child processes do not receive a usable copy of that lock descriptor. A second concurrent deploy exits `75` (busy) before changing any
 state. A suspicious pre-existing `.current.next` that is not a leftover
 relative release-basename symlink is rejected without following or overwriting
 it. If this invocation creates `.current.next` and is interrupted before the
@@ -346,10 +347,20 @@ must not record secrets, database paths, prompts, environment contents, or
 arbitrary payloads. This increment records that attempt identity only; the
 complete fail-closed rollback outcome state machine remains Phase 4 PR 5.
 
+After the receipt, `COMMONS_DB` is validated as an absolute path whose
+canonical parent is a real non-symlink directory owned by the effective
+uid/gid and not group or other writable. The destination is either safely
+absent for first-deploy cleanup or a regular non-symlink file, mode 0600,
+owned by that uid/gid. A dangling symlink is never treated as absent. When a
+database is present, `ops/backup.sh` prints the exact backup file created by
+this invocation as a single stdout line; deploy captures that regular path and
+does not glob-pick a newer timer file by mtime.
+
 Prove this increment offline with disposable directories and fake commands:
 
 ```sh
 sh ops/test-deploy.sh
+sh ops/test-restore.sh
 sh ops/test-launch.sh
 ```
 
@@ -405,13 +416,17 @@ path and release ID from the earlier preflight; they never re-read `current`
 and never resolve a new target. First capture the candidate failure and stop
 the restart-on-failure service. Validate the matching pre-upgrade
 deployment-attempt receipt and that captured previous release before touching
-the database or `current`. Atomic database restore remains Phase 4 PR 4. If a
-database restore is required, remove only the matching WAL/SHM
-while the service is stopped, restore through a verified temporary file in the
-same directory, and atomically replace the exact target. Switch `current` only
-to the captured exact previous release directory, then restart and rerun
-readiness. Complete fail-closed service-stopped rollback outcomes remain
-Phase 4 PR 5.
+the database or `current`. If a database restore is required, `ops/deploy-release.sh`
+invokes packaged `ops/verify-restore.sh` and `ops/restore-database.sh` through
+`without_lock_fd` while fd 9 stays in the parent. The helper copies the exact
+verified backup with `cp -P` into an exclusive private temp in the validated
+database parent, re-verifies that temp, syncs it, rejects symlink/directory/
+non-regular WAL/SHM, removes only validated regular WAL/SHM, and atomically
+`mv -Tf` onto the exact destination. A stale predictable `.rollback` name is
+not used. Copy, verify, sync, mv, or source/destination/parent validation
+failure is fail-closed with no silent fallback. Switch `current` only to the
+captured exact previous release directory, then restart and rerun readiness.
+Complete fail-closed service-stopped rollback outcomes remain Phase 4 PR 5.
 
 Classify the result explicitly:
 

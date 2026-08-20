@@ -5,7 +5,7 @@ set -eu
 : "${COMMONS_DB:?COMMONS_DB is required}"
 staged=$1
 systemctl_cmd=${COMMONS_SYSTEMCTL:-systemctl}
-case "$staged:$COMMONS_RELEASE_ROOT" in /*:/*) ;; *) exit 64;; esac
+case "$staged:$COMMONS_RELEASE_ROOT:$COMMONS_DB" in /*:/*:/*) ;; *) exit 64;; esac
 test -d "$staged"; test ! -L "$staged"
 test -d "$COMMONS_RELEASE_ROOT"
 # Canonicalize the lock domain before any deploy mutation. Open that directory
@@ -350,6 +350,131 @@ write_deployment_attempt_receipt() {
 		exit 64
 	fi
 }
+# COMMONS_DB must be an absolute canonical-parent path. A dangling symlink is
+# never treated as first-deploy absence. Child checks close the lock fd.
+prepare_commons_db() {
+	reject_controls "$COMMONS_DB" "COMMONS_DB must not contain control characters"
+	case "$COMMONS_DB" in /*) ;; *)
+		echo "COMMONS_DB must be an absolute path" >&2
+		exit 64
+		;;
+	esac
+	case "$COMMONS_DB" in
+	*/)
+		echo "COMMONS_DB must not have a trailing slash" >&2
+		exit 64
+		;;
+	esac
+	case "$COMMONS_DB" in
+	*/.|*/..|*/./*|*/../*)
+		echo "COMMONS_DB must not contain . or .. components" >&2
+		exit 64
+		;;
+	esac
+	case "$COMMONS_DB" in
+	*[!A-Za-z0-9_./:-]*)
+		echo "COMMONS_DB contains unsafe characters" >&2
+		exit 64
+		;;
+	esac
+	db_leaf=$(without_lock_fd basename "$COMMONS_DB")
+	require_release_id "$db_leaf" "COMMONS_DB leaf must be a safe basename"
+	db_parent=$(without_lock_fd dirname "$COMMONS_DB")
+	if [ -L "$db_parent" ]; then
+		echo "database parent must not be a symlink: $db_parent" >&2
+		exit 64
+	fi
+	if [ ! -d "$db_parent" ]; then
+		echo "database parent is missing or not a directory: $db_parent" >&2
+		exit 64
+	fi
+	if ! capture readlink -f "$db_parent"; then
+		echo "failed to canonicalize database parent" >&2
+		exit 64
+	fi
+	db_parent=$captured
+	reject_controls "$db_parent" "database parent must not contain control characters"
+	test -n "$db_parent"
+	test -d "$db_parent"
+	test ! -L "$db_parent"
+	effective_uid=$(without_lock_fd id -u)
+	effective_gid=$(without_lock_fd id -g)
+	parent_uid=$(without_lock_fd stat -c %u "$db_parent")
+	parent_gid=$(without_lock_fd stat -c %g "$db_parent")
+	parent_mode=$(without_lock_fd stat -c %a "$db_parent")
+	if [ "$parent_uid" != "$effective_uid" ] || [ "$parent_gid" != "$effective_gid" ]; then
+		echo "database parent must be owned by the effective uid/gid: $db_parent" >&2
+		exit 64
+	fi
+	case "$parent_mode" in
+	[0-7][0-7][0-7]|[0-7][0-7][0-7][0-7]) ;;
+	*)
+		echo "database parent mode is unsafe: $db_parent" >&2
+		exit 64
+		;;
+	esac
+	if [ "$((0$parent_mode & 022))" -ne 0 ]; then
+		echo "database parent must not be group or other writable: $db_parent" >&2
+		exit 64
+	fi
+	COMMONS_DB=$db_parent/$db_leaf
+	if [ "$(without_lock_fd dirname "$COMMONS_DB")" != "$db_parent" ] || [ "$(without_lock_fd basename "$COMMONS_DB")" != "$db_leaf" ]; then
+		echo "COMMONS_DB is not a canonical direct child of its parent: $COMMONS_DB" >&2
+		exit 64
+	fi
+	if [ -L "$COMMONS_DB" ]; then
+		echo "COMMONS_DB must not be a symlink; a dangling symlink is not absent: $COMMONS_DB" >&2
+		exit 64
+	fi
+	had_db=false
+	if [ -e "$COMMONS_DB" ]; then
+		if [ ! -f "$COMMONS_DB" ]; then
+			echo "COMMONS_DB exists and is not a regular file: $COMMONS_DB" >&2
+			exit 64
+		fi
+		effective_uid=$(without_lock_fd id -u)
+		effective_gid=$(without_lock_fd id -g)
+		db_uid=$(without_lock_fd stat -c %u "$COMMONS_DB")
+		db_gid=$(without_lock_fd stat -c %g "$COMMONS_DB")
+		db_mode=$(without_lock_fd stat -c %a "$COMMONS_DB")
+		if [ "$db_uid" != "$effective_uid" ] || [ "$db_gid" != "$effective_gid" ] || [ "$db_mode" != 600 ]; then
+			echo "COMMONS_DB must be mode 0600 and owned by the effective uid/gid: $COMMONS_DB" >&2
+			exit 64
+		fi
+		had_db=true
+	fi
+}
+remove_validated_sqlite_sidecar() {
+	sidecar=$1
+	label=$2
+	if [ -L "$sidecar" ]; then
+		echo "refusing $label symlink: $sidecar" >&2
+		exit 64
+	fi
+	if [ ! -e "$sidecar" ]; then
+		return 0
+	fi
+	if [ -d "$sidecar" ] || [ ! -f "$sidecar" ]; then
+		echo "refusing non-regular $label: $sidecar" >&2
+		exit 64
+	fi
+	without_lock_fd rm -f -- "$sidecar"
+}
+cleanup_first_deploy_db() {
+	if [ -L "$COMMONS_DB" ]; then
+		echo "COMMONS_DB must not be a symlink; a dangling symlink is not absent: $COMMONS_DB" >&2
+		exit 64
+	fi
+	if [ -e "$COMMONS_DB" ]; then
+		if [ ! -f "$COMMONS_DB" ]; then
+			echo "COMMONS_DB exists and is not a regular file: $COMMONS_DB" >&2
+			exit 64
+		fi
+		without_lock_fd rm -f -- "$COMMONS_DB"
+	fi
+	remove_validated_sqlite_sidecar "$COMMONS_DB-wal" "WAL"
+	remove_validated_sqlite_sidecar "$COMMONS_DB-shm" "SHM"
+}
 current="$COMMONS_RELEASE_ROOT/current"
 previous=
 previous_id=
@@ -458,17 +583,43 @@ fi
 write_deployment_attempt_receipt
 prebackup=
 had_db=false
-if [ -f "$COMMONS_DB" ]; then
-	had_db=true
+prepare_commons_db
+if [ "$had_db" = true ]; then
+	: "${COMMONS_BACKUP_DIR:?COMMONS_BACKUP_DIR is required}"
+	reject_controls "$COMMONS_BACKUP_DIR" "COMMONS_BACKUP_DIR must not contain control characters"
+	case "$COMMONS_BACKUP_DIR" in /*) ;; *)
+		echo "COMMONS_BACKUP_DIR must be an absolute path" >&2
+		exit 64
+		;;
+	esac
 	if [ -n "${COMMONS_PUBLIC_ORIGIN:-}" ] && [ "${COMMONS_ALLOW_FIRST_CODEX_BIND_LAN:-false}" != true ]; then
-		test "$(without_lock_fd sqlite3 "$COMMONS_DB" "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='human_account_bindings'")" -eq 1
-		test "$(without_lock_fd sqlite3 "$COMMONS_DB" 'SELECT count(*) FROM human_account_bindings')" -eq 1
+		test "$(without_lock_fd sqlite3 -- "$COMMONS_DB" "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='human_account_bindings'")" -eq 1
+		test "$(without_lock_fd sqlite3 -- "$COMMONS_DB" 'SELECT count(*) FROM human_account_bindings')" -eq 1
 	fi
-	without_lock_fd /bin/sh "$staged/ops/backup.sh"
-	prebackup=$(without_lock_fd find "$COMMONS_BACKUP_DIR/daily" -maxdepth 1 -type f -name 'commons-*.sqlite3' -printf '%T@ %p\n' | without_lock_fd sort -nr | without_lock_fd awk 'NR==1 {print $2}')
-	test -n "$prebackup"
+	if ! capture /bin/sh "$staged/ops/backup.sh"; then
+		echo "pre-upgrade backup failed or did not report an exact backup path" >&2
+		exit 64
+	fi
+	prebackup=$captured
+	reject_controls "$prebackup" "captured backup path must not contain control characters"
+	case "$prebackup" in /*) ;; *)
+		echo "captured backup path must be absolute" >&2
+		exit 64
+		;;
+	esac
+	case "$prebackup" in
+	"$COMMONS_BACKUP_DIR"/*) ;;
+	*)
+		echo "captured backup path is outside COMMONS_BACKUP_DIR" >&2
+		exit 64
+		;;
+	esac
+	if [ -L "$prebackup" ] || [ ! -f "$prebackup" ]; then
+		echo "captured backup path is missing, not a regular file, or symlink-shaped: $prebackup" >&2
+		exit 64
+	fi
 fi
-if [ ! -f "$COMMONS_DB" ] && [ -n "${COMMONS_PUBLIC_ORIGIN:-}" ]; then
+if [ "$had_db" = false ] && [ -n "${COMMONS_PUBLIC_ORIGIN:-}" ]; then
 	echo "bootstrap a durable Codex account binding on direct loopback before enabling COMMONS_PUBLIC_ORIGIN" >&2
 	exit 78
 fi
@@ -485,11 +636,16 @@ owned_next=
 if ! without_lock_fd "$systemctl_cmd" --user restart codex-commons.service || ! COMMONS_RELEASE_DIR="$staged" COMMONS_SYSTEMCTL="$systemctl_cmd" without_lock_fd /bin/sh "$staged/ops/check-readiness.sh"; then
 	without_lock_fd "$systemctl_cmd" --user stop codex-commons.service || true
 	if [ -n "$prebackup" ]; then
-		without_lock_fd /bin/sh "$staged/ops/verify-restore.sh" "$prebackup" >/dev/null
-		without_lock_fd rm -f -- "$COMMONS_DB-wal" "$COMMONS_DB-shm"
-		without_lock_fd cp -- "$prebackup" "$COMMONS_DB.rollback"; without_lock_fd mv -f "$COMMONS_DB.rollback" "$COMMONS_DB"
+		if ! without_lock_fd /bin/sh "$staged/ops/verify-restore.sh" "$prebackup" >/dev/null; then
+			echo "pre-upgrade backup failed restore verification" >&2
+			exit 1
+		fi
+		if ! without_lock_fd /bin/sh "$staged/ops/restore-database.sh" "$prebackup" "$COMMONS_DB"; then
+			echo "atomic database restore failed" >&2
+			exit 1
+		fi
 	elif [ "$had_db" = false ]; then
-		without_lock_fd rm -f -- "$COMMONS_DB" "$COMMONS_DB-wal" "$COMMONS_DB-shm"
+		cleanup_first_deploy_db
 	fi
 	# Rollback uses only the captured exact previous path and id. Do not
 	# re-read current or resolve a new target.

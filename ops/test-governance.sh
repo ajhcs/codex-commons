@@ -27,12 +27,14 @@ for path in \
 	ops/commons-launch.sh \
 	ops/deploy-release.sh \
 	ops/record-evidence.sh \
+	ops/restore-database.sh \
 	ops/seal-archive.sh \
 	ops/stage-release.sh \
 	ops/test-deploy.sh \
 	ops/test-governance.sh \
 	ops/test-launch.sh \
 	ops/test-ops.sh \
+	ops/test-restore.sh \
 	ops/verify-release.sh \
 	ops/verify-restore.sh \
 	deploy/CONTINUOUS_DOGFOOD_RUNBOOK.md \

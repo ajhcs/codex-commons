@@ -1,10 +1,10 @@
 #!/bin/sh
 set -eu
 
-# Phase 4 PR 1 + PR 3: offline deploy-lock, previous-target, and receipt
-# fixtures. Disposable directories and fake commands only. This suite never
-# starts a service, binds a listener, or touches a live release pointer or
-# database.
+# Phase 4 PR 1 + PR 3 + PR 4: offline deploy-lock, previous-target, receipt,
+# and atomic database restore fixtures. Disposable directories and fake
+# commands only. This suite never starts a service, binds a listener, or
+# touches a live release pointer or database.
 repo_root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 deploy_script=$repo_root/ops/deploy-release.sh
 launcher=$repo_root/ops/commons-launch.sh
@@ -22,10 +22,19 @@ grep -Fq '.current.next' "$deploy_script"
 grep -Fq 'without_lock_fd() {' "$deploy_script"
 grep -Fq '"$@" 9<&-' "$deploy_script"
 grep -Fq 'without_lock_fd /bin/sh "$staged/ops/verify-release.sh"' "$deploy_script"
-grep -Fq 'without_lock_fd /bin/sh "$staged/ops/backup.sh"' "$deploy_script"
+grep -Fq 'capture /bin/sh "$staged/ops/backup.sh"' "$deploy_script"
 grep -Fq 'without_lock_fd /bin/sh "$staged/ops/check-readiness.sh"' "$deploy_script"
 grep -Fq 'without_lock_fd /bin/sh "$staged/ops/verify-restore.sh"' "$deploy_script"
+grep -Fq 'without_lock_fd /bin/sh "$staged/ops/restore-database.sh"' "$deploy_script"
 grep -Fq 'without_lock_fd "$systemctl_cmd"' "$deploy_script"
+if grep -Fq 'COMMONS_DB.rollback' "$deploy_script"; then
+	printf 'deploy-release.sh must not use a predictable .rollback restore path\n' >&2
+	exit 1
+fi
+if grep -Fq 'sort -nr' "$deploy_script"; then
+	printf 'deploy-release.sh must not select a backup by mtime\n' >&2
+	exit 1
+fi
 grep -Fq 'ops/test-deploy.sh' "$runbook"
 grep -Fq 'canonical release-root directory' "$runbook"
 grep -Fq 'do not receive a usable copy of that lock descriptor' "$runbook"
@@ -75,11 +84,13 @@ if grep -Fq 'deployment-attempt.tmp' "$deploy_script"; then
 	exit 1
 fi
 current_line=$(grep -n 'readlink -- "$current"' "$deploy_script" | head -n1 | cut -d: -f1)
-backup_line=$(grep -n 'without_lock_fd /bin/sh "$staged/ops/backup.sh"' "$deploy_script" | head -n1 | cut -d: -f1)
+backup_line=$(grep -n 'capture /bin/sh "$staged/ops/backup.sh"' "$deploy_script" | head -n1 | cut -d: -f1)
 receipt_line=$(grep -n '^write_deployment_attempt_receipt$' "$deploy_script" | head -n1 | cut -d: -f1)
-test -n "$current_line" && test -n "$backup_line" && test -n "$receipt_line"
+restore_line=$(grep -n 'without_lock_fd /bin/sh "$staged/ops/restore-database.sh"' "$deploy_script" | head -n1 | cut -d: -f1)
+test -n "$current_line" && test -n "$backup_line" && test -n "$receipt_line" && test -n "$restore_line"
 test "$current_line" -lt "$receipt_line"
 test "$receipt_line" -lt "$backup_line"
+test "$backup_line" -lt "$restore_line"
 if grep -Eq 'readlink -f "\$current" 2>/dev/null \|\| true' "$deploy_script"; then
 	printf 'deploy-release.sh still treats an invalid current pointer as absent\n' >&2
 	exit 1
@@ -106,6 +117,7 @@ current=$release_root/current
 db=$root/missing.sqlite3
 present_db=$root/present.sqlite3
 printf 'not-a-live-database\n' > "$present_db"
+chmod 0600 "$present_db"
 backup_dir=$root/backups
 mkdir -p "$backup_dir/daily"
 deploy_state=$root/deploy-state
@@ -187,15 +199,43 @@ if [ -n "${FAKE_BACKUP_SWAP_TO:-}" ] && [ -n "${FAKE_CURRENT:-}" ]; then
 	rm -f -- "$FAKE_CURRENT"
 	ln -s -- "$FAKE_BACKUP_SWAP_TO" "$FAKE_CURRENT"
 fi
-if [ -n "${COMMONS_BACKUP_DIR:-}" ]; then
-	mkdir -p "$COMMONS_BACKUP_DIR/daily"
-	: > "$COMMONS_BACKUP_DIR/daily/commons-fake.sqlite3"
+if [ -z "${COMMONS_BACKUP_DIR:-}" ]; then
+	exit 64
 fi
+mkdir -p "$COMMONS_BACKUP_DIR/daily"
+if [ -n "${FAKE_BACKUP_PATH:-}" ]; then
+	target=$FAKE_BACKUP_PATH
+else
+	target=$COMMONS_BACKUP_DIR/daily/commons-fake.sqlite3
+fi
+if [ ! -e "$target" ]; then
+	: > "$target"
+fi
+if [ -n "${FAKE_BACKUP_NEWER:-}" ]; then
+	printf 'newer-unrelated\n' > "$FAKE_BACKUP_NEWER"
+	touch -d '2099-01-01T00:00:00Z' "$FAKE_BACKUP_NEWER" 2>/dev/null || touch "$FAKE_BACKUP_NEWER"
+fi
+printf '%s\n' "$target"
 exit 0
 EOF
 	cat > "$release_dir/ops/verify-restore.sh" <<'EOF'
 #!/bin/sh
 set -eu
+exit 0
+EOF
+	cat > "$release_dir/ops/restore-database.sh" <<'EOF'
+#!/bin/sh
+set -eu
+backup=$1
+dest=$2
+if [ -n "${FAKE_RESTORE_LOG:-}" ]; then
+	{
+		printf 'restore_backup=%s\n' "$backup"
+		printf 'restore_dest=%s\n' "$dest"
+	} >> "$FAKE_RESTORE_LOG"
+fi
+cp -P -- "$backup" "$dest"
+chmod 0600 -- "$dest"
 exit 0
 EOF
 }
@@ -1170,3 +1210,173 @@ grep -Fxq 'previous_id=previous' "$default_receipt"
 printf 'DEPLOY_DEFAULT_STATE_DIR=pass\n'
 
 printf 'PHASE4_PR3_PREVIOUS_TARGET_RECEIPT=pass\n'
+
+# Phase 4 PR 4: exact backup capture, dest validation, and helper invocation.
+restore_log=$root/restore.log
+restore_previous
+printf 'live-db-payload\n' > "$present_db"
+chmod 0600 "$present_db"
+
+# Dangling COMMONS_DB is not first-deploy absence. Fail closed after the
+# receipt without backup or pointer mutation.
+rm -f -- "$present_db"
+ln -s "$root/missing-db-target" "$present_db"
+rm -f -- "$backup_marker"
+: > "$systemctl_log"
+before_ptr=$(pointer_target)
+if COMMONS_RELEASE_ROOT=$release_root \
+	COMMONS_DB=$present_db \
+	COMMONS_BACKUP_DIR=$backup_dir \
+	COMMONS_SYSTEMCTL=$fake_bin/systemctl \
+	COMMONS_DEPLOY_STATE_DIR=$deploy_state \
+	FAKE_SYSTEMCTL_LOG=$systemctl_log \
+	FAKE_VERIFY_MARKER=$verify_marker \
+	FAKE_BACKUP_MARKER=$backup_marker \
+	FAKE_CURRENT=$current \
+	/bin/sh "$deploy_script" "$release_root/candidate-two" \
+	>"$root/dangling-db.out" 2>"$root/dangling-db.err"; then
+	printf 'dangling COMMONS_DB unexpectedly succeeded\n' >&2
+	exit 1
+else
+	dangling_status=$?
+fi
+test "$dangling_status" -eq 64
+test "$(pointer_target)" = "$before_ptr"
+test ! -e "$backup_marker"
+test ! -e "$release_root/.current.next"
+grep -Fq 'dangling symlink is not absent' "$root/dangling-db.err"
+rm -f -- "$present_db"
+printf 'live-db-payload\n' > "$present_db"
+chmod 0600 "$present_db"
+printf 'DEPLOY_DB_DANGLING_SYMLINK_REJECT=pass\n'
+
+# Exact captured backup is restored even when a newer unrelated file exists.
+restore_previous
+printf 'live-db-payload\n' > "$present_db"
+chmod 0600 "$present_db"
+mkdir -p "$backup_dir/daily"
+exact_backup=$backup_dir/daily/commons-exact.sqlite3
+newer_backup=$backup_dir/daily/commons-zzz-newer.sqlite3
+printf 'exact-backup-payload\n' > "$exact_backup"
+chmod 0600 "$exact_backup"
+rm -f -- "$restore_log" "$backup_marker"
+make_release capture-candidate
+cat > "$release_root/capture-candidate/ops/check-readiness.sh" <<'EOF'
+#!/bin/sh
+set -eu
+exit 1
+EOF
+: > "$systemctl_log"
+if COMMONS_RELEASE_ROOT=$release_root \
+	COMMONS_DB=$present_db \
+	COMMONS_BACKUP_DIR=$backup_dir \
+	COMMONS_SYSTEMCTL=$fake_bin/systemctl \
+	COMMONS_DEPLOY_STATE_DIR=$deploy_state \
+	FAKE_SYSTEMCTL_LOG=$systemctl_log \
+	FAKE_VERIFY_MARKER=$verify_marker \
+	FAKE_BACKUP_MARKER=$backup_marker \
+	FAKE_BACKUP_PATH=$exact_backup \
+	FAKE_BACKUP_NEWER=$newer_backup \
+	FAKE_RESTORE_LOG=$restore_log \
+	FAKE_CURRENT=$current \
+	/bin/sh "$deploy_script" "$release_root/capture-candidate" \
+	>"$root/exact-backup.out" 2>"$root/exact-backup.err"; then
+	printf 'capture-candidate deploy unexpectedly succeeded\n' >&2
+	exit 1
+else
+	capture_status=$?
+fi
+test "$capture_status" -eq 1
+test "$(pointer_target)" = previous
+test -f "$newer_backup"
+test "$(cat "$newer_backup")" = newer-unrelated
+test "$(cat "$present_db")" = exact-backup-payload
+test "$(stat -c %a "$present_db")" = 600
+grep -Fxq "restore_backup=$exact_backup" "$restore_log"
+grep -Fxq "restore_dest=$present_db" "$restore_log"
+if grep -Fq "$newer_backup" "$restore_log"; then
+	printf 'restore used the newer unrelated backup\n' >&2
+	exit 1
+fi
+assert_receipt validated capture-candidate previous
+printf 'DEPLOY_EXACT_BACKUP_CAPTURE=pass\n'
+
+# Stale predictable .rollback is ignored by the fake helper path and by
+# deploy-release.sh, which no longer names that file.
+restore_previous
+printf 'live-db-payload\n' > "$present_db"
+chmod 0600 "$present_db"
+printf 'outside-rollback\n' > "$root/outside-rollback"
+outside_rollback_before=$(/usr/bin/sha256sum "$root/outside-rollback")
+ln -s "$root/outside-rollback" "$present_db.rollback"
+make_release rollback-candidate
+cat > "$release_root/rollback-candidate/ops/check-readiness.sh" <<'EOF'
+#!/bin/sh
+set -eu
+exit 1
+EOF
+mkdir -p "$backup_dir/daily"
+printf 'exact-backup-payload\n' > "$exact_backup"
+chmod 0600 "$exact_backup"
+rm -f -- "$restore_log"
+: > "$systemctl_log"
+if COMMONS_RELEASE_ROOT=$release_root \
+	COMMONS_DB=$present_db \
+	COMMONS_BACKUP_DIR=$backup_dir \
+	COMMONS_SYSTEMCTL=$fake_bin/systemctl \
+	COMMONS_DEPLOY_STATE_DIR=$deploy_state \
+	FAKE_SYSTEMCTL_LOG=$systemctl_log \
+	FAKE_BACKUP_PATH=$exact_backup \
+	FAKE_RESTORE_LOG=$restore_log \
+	FAKE_CURRENT=$current \
+	/bin/sh "$deploy_script" "$release_root/rollback-candidate" \
+	>"$root/stale-rollback.out" 2>"$root/stale-rollback.err"; then
+	printf 'rollback-candidate deploy unexpectedly succeeded\n' >&2
+	exit 1
+else
+	stale_status=$?
+fi
+test "$stale_status" -eq 1
+test "$(pointer_target)" = previous
+test -L "$present_db.rollback"
+test "$(/usr/bin/sha256sum "$root/outside-rollback")" = "$outside_rollback_before"
+test "$(cat "$present_db")" = exact-backup-payload
+rm -f -- "$present_db.rollback"
+printf 'DEPLOY_STALE_ROLLBACK_IGNORED=pass\n'
+
+# First-deploy cleanup with dest absent must not follow a WAL symlink.
+restore_previous
+rm -f -- "$db"
+printf 'outside-wal\n' > "$root/outside-wal"
+outside_wal_before=$(/usr/bin/sha256sum "$root/outside-wal")
+ln -s "$root/outside-wal" "$db-wal"
+make_release first-fail
+cat > "$release_root/first-fail/ops/check-readiness.sh" <<'EOF'
+#!/bin/sh
+set -eu
+exit 1
+EOF
+: > "$systemctl_log"
+if COMMONS_RELEASE_ROOT=$release_root \
+	COMMONS_DB=$db \
+	COMMONS_SYSTEMCTL=$fake_bin/systemctl \
+	COMMONS_DEPLOY_STATE_DIR=$deploy_state \
+	FAKE_SYSTEMCTL_LOG=$systemctl_log \
+	FAKE_CURRENT=$current \
+	/bin/sh "$deploy_script" "$release_root/first-fail" \
+	>"$root/first-wal.out" 2>"$root/first-wal.err"; then
+	printf 'first-fail deploy unexpectedly succeeded\n' >&2
+	exit 1
+else
+	first_wal_status=$?
+fi
+test "$first_wal_status" -eq 64
+test "$(pointer_target)" = first-fail
+test -L "$db-wal"
+test "$(/usr/bin/sha256sum "$root/outside-wal")" = "$outside_wal_before"
+grep -Fq 'refusing WAL symlink' "$root/first-wal.err"
+rm -f -- "$db-wal"
+printf 'DEPLOY_FIRST_DEPLOY_WAL_SYMLINK_REJECT=pass\n'
+
+/bin/sh "$repo_root/ops/test-restore.sh"
+printf 'PHASE4_PR4_ATOMIC_DB_RESTORE=pass\n'
