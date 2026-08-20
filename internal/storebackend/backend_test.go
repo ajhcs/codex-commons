@@ -130,6 +130,35 @@ func TestInstallationStatusRejectsAllZeroIdentity(t *testing.T) {
 	}
 }
 
+func TestInstallationStatusRecordedRestoreReceiptDoesNotSatisfyBeta(t *testing.T) {
+	ctx := context.Background()
+	store, err := commonsstore.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	backend, err := New(store, presence.New(nil), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := store.InstallationIdentityHex(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backup := strings.Repeat("b", 64)
+	input := []byte(`{"schema_version":17,"release_id":"continuous-dogfood-test","drill_id":"drill-1","recorded_at":"2026-08-20T00:00:00Z","installation_id":"` + id + `","restored_backup_digest":"` + backup + `"}`)
+	if _, err = store.RecordRestoreEvidence(ctx, input); err != nil {
+		t.Fatal(err)
+	}
+	status, err := backend.InstallationStatus(ctx, httpapi.RequestMeta{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Evidence.RestoreDrill.Status != "unknown" || status.Evidence.BetaPrerequisitesMet {
+		t.Fatalf("parsed restore receipt was treated as Beta-ready: %+v", status.Evidence)
+	}
+}
+
 func TestInstallationStatusRejectsUnreceiptedEvidenceAndPendingRevocation(t *testing.T) {
 	ctx := context.Background()
 	store, err := commonsstore.Open(ctx, ":memory:")
