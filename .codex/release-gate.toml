@@ -1,0 +1,30 @@
+version = 1
+authority = "local-exact-tree"
+changed_from = "origin/main"
+
+[[stages]]
+name = "go-bootstrap"
+kind = "bootstrap"
+command = ["go", "mod", "download"]
+failure_class = "environment_blocked"
+
+[[stages]]
+name = "go-vet"
+kind = "static_diagnostics"
+command = ["go", "vet", "./..."]
+failure_class = "product_test_failed"
+
+[[stages]]
+name = "go-test"
+kind = "unit_tests"
+command = ["go", "test", "./..."]
+failure_class = "product_test_failed"
+
+[[stages]]
+name = "go-build"
+kind = "build"
+# Detached exact-tree workspaces may live under parent directories containing
+# non-repository .git sentinels, so deterministic source builds disable
+# optional VCS stamping.
+command = ["go", "build", "-buildvcs=false", "./..."]
+failure_class = "product_test_failed"
