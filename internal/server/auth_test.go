@@ -118,7 +118,7 @@ func TestHumanConfigSecretSourcesAndLANAcknowledgement(t *testing.T) {
 		t.Fatal(err)
 	}
 	fileEnv := map[string]string{"COMMONS_DB": filepath.Join(t.TempDir(), "file.sqlite"), "COMMONS_HUMAN_ADMIN_SECRET_FILE": secretFile, "COMMONS_ENABLE_RECOVERY_LOGIN": "true"}
-	if _, err := server.ParseConfig(nil, func(key string) string { return fileEnv[key] }, io.Discard); err == nil || !strings.Contains(err.Error(), "group or other") {
+	if _, err := server.ParseConfig(nil, func(key string) string { return fileEnv[key] }, io.Discard); err == nil || !strings.Contains(err.Error(), "mode 0600") {
 		t.Fatalf("permissive secret file accepted: %v", err)
 	}
 	if err := os.Chmod(secretFile, 0o600); err != nil {

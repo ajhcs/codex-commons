@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -17,6 +18,7 @@ import (
 	"codex-commons/internal/codexauth"
 	"codex-commons/internal/domain"
 	"codex-commons/internal/httpapi"
+	"codex-commons/internal/privatefile"
 )
 
 const (
@@ -364,18 +366,10 @@ func readCredentials(path string) ([]httpapi.Credential, error) {
 	if path == "" {
 		return nil, nil
 	}
-	info, err := os.Stat(path)
+	raw, err := privatefile.Read(path, "credentials file", 64<<10)
 	if err != nil {
-		return nil, fmt.Errorf("credentials file: %w", err)
+		return nil, err
 	}
-	if info.Mode().Perm()&0o077 != 0 {
-		return nil, errors.New("credentials file must not be accessible by group or other users")
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("credentials file: %w", err)
-	}
-	defer file.Close()
 	type fileCredential struct {
 		BearerToken    string `json:"bearer_token"`
 		HostCredential string `json:"host_credential"`
@@ -388,7 +382,7 @@ func readCredentials(path string) ([]httpapi.Credential, error) {
 	var payload struct {
 		Credentials []fileCredential `json:"credentials"`
 	}
-	decoder := json.NewDecoder(io.LimitReader(file, 64<<10))
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&payload); err != nil {
 		return nil, fmt.Errorf("credentials file: %w", err)

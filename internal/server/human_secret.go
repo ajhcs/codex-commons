@@ -2,9 +2,9 @@ package server
 
 import (
 	"errors"
-	"fmt"
-	"os"
 	"strings"
+
+	"codex-commons/internal/privatefile"
 )
 
 func readCodexBindingKey(path string) ([32]byte, error) {
@@ -12,22 +12,12 @@ func readCodexBindingKey(path string) ([32]byte, error) {
 	if strings.TrimSpace(path) == "" {
 		return key, errors.New("Codex binding-key file is required")
 	}
-	info, err := os.Lstat(path)
+	body, err := privatefile.Read(path, "Codex binding-key file", int64(len(key)))
 	if err != nil {
-		return key, fmt.Errorf("Codex binding-key file: %w", err)
+		return key, err
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return key, errors.New("Codex binding-key file must be a regular non-symlink file")
-	}
-	if info.Mode().Perm()&0o077 != 0 {
-		return key, errors.New("Codex binding-key file must not be accessible by group or other users")
-	}
-	if info.Size() != int64(len(key)) {
+	if len(body) != len(key) {
 		return key, errors.New("Codex binding-key file must contain exactly 32 bytes")
-	}
-	body, err := os.ReadFile(path)
-	if err != nil {
-		return key, fmt.Errorf("Codex binding-key file: %w", err)
 	}
 	copy(key[:], body)
 	var zero [32]byte
@@ -43,19 +33,9 @@ func readHumanSecret(environmentValue, path string) (string, error) {
 	}
 	secret := environmentValue
 	if path != "" {
-		info, err := os.Stat(path)
+		body, err := privatefile.Read(path, "human admin secret file", 4096)
 		if err != nil {
-			return "", fmt.Errorf("human admin secret file: %w", err)
-		}
-		if info.Mode().Perm()&0o077 != 0 {
-			return "", errors.New("human admin secret file must not be accessible by group or other users")
-		}
-		if info.Size() > 4096 {
-			return "", errors.New("human admin secret file exceeds 4096 bytes")
-		}
-		body, err := os.ReadFile(path)
-		if err != nil {
-			return "", fmt.Errorf("human admin secret file: %w", err)
+			return "", err
 		}
 		secret = strings.TrimSuffix(strings.TrimSuffix(string(body), "\n"), "\r")
 	}

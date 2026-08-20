@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"codex-commons/internal/domain"
+	"codex-commons/internal/privatefile"
 )
 
 type ArchaeologyRoot struct {
@@ -29,25 +31,14 @@ func readArchaeologyRoots(path string) ([]ArchaeologyRoot, error) {
 	if path == "" {
 		return nil, nil
 	}
-	info, err := os.Stat(path)
+	raw, err := privatefile.Read(path, "archaeology roots file", 64<<10)
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() || info.Size() > 64<<10 {
-		return nil, errors.New("archaeology roots file must be a regular file no larger than 64 KiB")
-	}
-	if info.Mode().Perm()&0o077 != 0 {
-		return nil, errors.New("archaeology roots file must not be accessible by group or other users")
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
 	var payload struct {
 		Roots []ArchaeologyRoot `json:"roots"`
 	}
-	decoder := json.NewDecoder(io.LimitReader(file, 64<<10))
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err = decoder.Decode(&payload); err != nil {
 		return nil, err

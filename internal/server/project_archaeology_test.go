@@ -61,15 +61,17 @@ func TestArchaeologyRootsRejectInstallationWideAndSymlinkEquivalentPaths(t *test
 }
 
 func TestArchaeologyRootsFileRejectsBroadPermissions(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "roots.json")
-	if err := os.WriteFile(path, []byte(`{"roots":[]}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(path, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := readArchaeologyRoots(path); err == nil {
-		t.Fatal("broadly readable allowlist accepted")
+	for _, mode := range []os.FileMode{0o644, 0o400, 0o700} {
+		path := filepath.Join(t.TempDir(), "roots.json")
+		if err := os.WriteFile(path, []byte(`{"roots":[]}`), mode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readArchaeologyRoots(path); err == nil || !strings.Contains(err.Error(), "mode 0600") {
+			t.Fatalf("mode %04o allowlist accepted: %v", mode, err)
+		}
 	}
 }
 
