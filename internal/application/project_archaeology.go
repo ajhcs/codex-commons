@@ -658,7 +658,9 @@ func archaeologyView(value domain.ArchaeologySession) ArchaeologySession {
 		// Native historian outcomes remain review-only until Commons presents an
 		// exact task/evidence diff and confirms a server-derived manifest digest.
 		// A model-supplied source digest is not sufficient human authorization.
-		if len(value.NativeBatches) == 0 {
+		if len(value.NativeBatches) > 0 {
+			review.CanApply = archaeologyNativeBatchEligible(value)
+		} else {
 			for _, item := range value.Outcomes {
 				var request HistoricalImportRequest
 				if json.Unmarshal([]byte(item.ProposalJSON), &request) == nil && request.SchemaVersion == domain.HistoricalImportSchemaVersion && request.CollisionPolicy == domain.HistoricalCollisionCurrentWins && len(request.Tasks) > 0 {
@@ -679,6 +681,18 @@ func archaeologyView(value domain.ArchaeologySession) ArchaeologySession {
 	}
 	cohereArchaeologyViewTimes(&out)
 	return out
+}
+
+func archaeologyNativeBatchEligible(value domain.ArchaeologySession) bool {
+	if value.NativeReviewBatchID == "" {
+		return false
+	}
+	for _, batch := range value.NativeBatches {
+		if batch.ID == value.NativeReviewBatchID {
+			return batch.Eligibility.Eligible
+		}
+	}
+	return false
 }
 
 func archaeologyCandidateView(candidate domain.ArchaeologyCandidate, sources []string) ArchaeologyCandidate {
@@ -778,7 +792,7 @@ func (s *Service) archaeologySessionView(value domain.ArchaeologySession) Archae
 		}
 	}
 	if s != nil && len(value.NativeBatches) > 0 {
-		available := s.nativeApplyEnabled && out.Review != nil && len(out.Review.ProposedOutcomes) > 0
+		available := s.nativeApplyEnabled && out.Review != nil && out.Review.CanApply
 		out.Capabilities.CanonicalApply = ArchaeologyCapability{Configured: s.nativeApplyEnabled, Available: available, Mode: "selected_preview_manifest_confirm", Reason: "Native Apply is enabled only after acceptance; selected outcomes require exact preview, review acknowledgement, and both selection and manifest digests."}
 		if out.Review != nil {
 			out.Review.CanApply = available
@@ -877,7 +891,7 @@ func (s *Service) ProjectArchaeologyBatch(ctx context.Context, principal, batchI
 	out.Review = view.Review
 	out.OutcomesNextCursor = detail.OutcomesNextCursor
 	if out.Review != nil {
-		out.Review.CanApply = s.nativeApplyEnabled && detail.Batch.State == "completed" && len(detail.Outcomes) > 0
+		out.Review.CanApply = s.nativeApplyEnabled && detail.Batch.Eligibility.Eligible
 	}
 	return out, nil
 }

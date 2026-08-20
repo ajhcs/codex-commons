@@ -684,3 +684,56 @@ func TestArchaeologyViewCoheresAsyncNativeTimestampsWithoutMutatingAuditRows(t *
 		t.Fatalf("projection mutated durable input: %+v", value)
 	}
 }
+
+type archaeologyEligibilityHistoryRepository struct {
+	detail domain.ArchaeologyBatchDetail
+}
+
+func (archaeologyEligibilityHistoryRepository) HomeSnapshot(context.Context, domain.HomeReadQuery) (domain.HomeDurableSnapshot, error) {
+	return domain.HomeDurableSnapshot{}, nil
+}
+
+func (r archaeologyEligibilityHistoryRepository) ArchaeologyBatchHistory(context.Context, string, domain.ArchaeologyBatchHistoryQuery) (domain.ArchaeologyBatchHistoryPage, error) {
+	return domain.ArchaeologyBatchHistoryPage{}, nil
+}
+
+func (r archaeologyEligibilityHistoryRepository) ArchaeologyBatch(context.Context, string, string) (domain.ArchaeologyBatchDetail, error) {
+	return r.detail, nil
+}
+
+func (archaeologyEligibilityHistoryRepository) ArchaeologyBatchOutcomes(context.Context, string, string, domain.ArchaeologyOutcomePageQuery) (domain.ArchaeologyOutcomePage, error) {
+	return domain.ArchaeologyOutcomePage{}, nil
+}
+
+func TestNativeApplyCapabilityUsesTheSameEligibilitySnapshotForSessionAndDetail(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		eligibility  domain.ArchaeologyBatchEligibility
+		wantCanApply bool
+	}{
+		{name: "eligible", eligibility: domain.ArchaeologyBatchEligibility{Eligible: true}, wantCanApply: true},
+		{name: "ineligible", eligibility: domain.ArchaeologyBatchEligibility{Eligible: false}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			batch := domain.ArchaeologyNativeBatch{ID: "batch", State: "completed", Eligibility: test.eligibility}
+			detail := domain.ArchaeologyBatchDetail{Batch: batch, Outcomes: []domain.ArchaeologyOutcome{{ID: "outcome", Title: "Outcome", ProjectID: "project"}}}
+			service := &Service{repository: archaeologyEligibilityHistoryRepository{detail: detail}, nativeApplyEnabled: true}
+
+			sessionView := service.archaeologySessionView(domain.ArchaeologySession{
+				NativeReviewBatchID: "batch",
+				NativeBatches:       []domain.ArchaeologyNativeBatch{batch},
+				Outcomes:            detail.Outcomes,
+			})
+			if sessionView.Review == nil || sessionView.Review.CanApply != test.wantCanApply || sessionView.Capabilities.CanonicalApply.Available != test.wantCanApply {
+				t.Fatalf("session view=%+v", sessionView)
+			}
+			batchView, err := service.ProjectArchaeologyBatch(context.Background(), domain.HumanLocalPrincipal, "batch")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if batchView.Review == nil || batchView.Review.CanApply != test.wantCanApply {
+				t.Fatalf("batch view=%+v", batchView)
+			}
+		})
+	}
+}

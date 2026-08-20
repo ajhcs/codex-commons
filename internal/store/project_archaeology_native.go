@@ -170,6 +170,7 @@ func (s *Store) ClaimArchaeologyNativeJob(ctx context.Context) (domain.Archaeolo
 FROM archaeology_native_jobs j JOIN archaeology_native_batches b ON b.id=j.batch_id
 WHERE j.state='queued' AND b.state IN ('queued','running') AND b.policy_attested=1
 AND NOT EXISTS (SELECT 1 FROM archaeology_native_jobs u WHERE u.state='uncertain')
+AND NOT EXISTS (SELECT 1 FROM archaeology_native_persistence_intents p WHERE p.state IN ('pending','leased','blocked'))
 ORDER BY b.created_at,j.created_at,j.id LIMIT 1`).Scan(&out.ID, &out.BatchID, &ignoredSession, &out.CandidateID, &out.ProjectID, &out.Mode, &depth, &git, &docs, &history)
 	if errors.Is(err, sql.ErrNoRows) {
 		return out, domain.ErrConflict
@@ -208,12 +209,27 @@ func (s *Store) BindArchaeologyNativeIdentity(ctx context.Context, jobID, thread
 	if !boundedCoreText(jobID, 120, true) || !boundedCoreText(threadID, 120, true) || !boundedCoreText(sessionID, 120, true) || !boundedCoreText(turnID, 120, true) {
 		return domain.ErrInvalid
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE archaeology_native_jobs SET thread_id=?,codex_session_id=?,turn_id=?,phase_label='Codex identity durably bound',updated_at=? WHERE id=? AND state='starting'`, threadID, sessionID, turnID, stamp(s.now().UTC()), jobID)
+	var state, currentThread, currentSession, currentTurn string
+	err := s.db.QueryRowContext(ctx, `SELECT state,thread_id,codex_session_id,turn_id FROM archaeology_native_jobs WHERE id=?`, jobID).Scan(&state, &currentThread, &currentSession, &currentTurn)
 	if err != nil {
 		return mapErr(err)
 	}
-	changed, _ := result.RowsAffected()
-	if changed != 1 {
+	if (currentThread != "" && currentThread != threadID) || (currentSession != "" && currentSession != sessionID) || (currentTurn != "" && currentTurn != turnID) {
+		return domain.ErrConflict
+	}
+	if currentThread == threadID && currentSession == sessionID && currentTurn == turnID {
+		// A replay after activation, completion, or uncertainty is a read-only
+		// acknowledgement.  Do not create another visible revision.
+		return nil
+	}
+	if state != "starting" && state != "uncertain" {
+		return domain.ErrConflict
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE archaeology_native_jobs SET thread_id=?,codex_session_id=?,turn_id=?,phase_label='Codex identity durably bound',updated_at=? WHERE id=? AND state IN ('starting','uncertain') AND (thread_id='' OR thread_id=?) AND (codex_session_id='' OR codex_session_id=?) AND (turn_id='' OR turn_id=?)`, threadID, sessionID, turnID, stamp(s.now().UTC()), jobID, threadID, sessionID, turnID)
+	if err != nil {
+		return mapErr(err)
+	}
+	if changed, _ := result.RowsAffected(); changed != 1 {
 		return domain.ErrConflict
 	}
 	return nil
@@ -222,6 +238,19 @@ func (s *Store) BindArchaeologyNativeIdentity(ctx context.Context, jobID, thread
 func (s *Store) ActivateArchaeologyNativeJob(ctx context.Context, jobID, threadID, turnID string) error {
 	if !boundedCoreText(jobID, 120, true) || !boundedCoreText(threadID, 120, true) || !boundedCoreText(turnID, 120, true) {
 		return domain.ErrInvalid
+	}
+	var state, currentThread, currentTurn string
+	if err := s.db.QueryRowContext(ctx, `SELECT state,thread_id,turn_id FROM archaeology_native_jobs WHERE id=?`, jobID).Scan(&state, &currentThread, &currentTurn); err != nil {
+		return mapErr(err)
+	}
+	if (currentThread != "" && currentThread != threadID) || (currentTurn != "" && currentTurn != turnID) {
+		return domain.ErrConflict
+	}
+	if state == "active" && currentThread == threadID && currentTurn == turnID {
+		return nil
+	}
+	if state != "starting" {
+		return domain.ErrConflict
 	}
 	result, err := s.db.ExecContext(ctx, `UPDATE archaeology_native_jobs SET state='active',phase_label='Visible in Codex',updated_at=? WHERE id=? AND thread_id=? AND turn_id=? AND state='starting'`, stamp(s.now().UTC()), jobID, threadID, turnID)
 	if err != nil {
@@ -257,18 +286,30 @@ func (s *Store) FailArchaeologyNativeStart(ctx context.Context, jobID string, la
 	if err = tx.QueryRowContext(ctx, `SELECT batch_id,state,thread_id,codex_session_id,turn_id,error_code FROM archaeology_native_jobs WHERE id=?`, jobID).Scan(&batchID, &currentState, &threadID, &sessionID, &turnID, &currentCode); err != nil {
 		return mapErr(err)
 	}
-	if currentState != "starting" && currentState != "uncertain" {
+	if threadID != "" && launch.ThreadID != "" && threadID != launch.ThreadID ||
+		sessionID != "" && launch.CodexSessionID != "" && sessionID != launch.CodexSessionID ||
+		turnID != "" && launch.TurnID != "" && turnID != launch.TurnID {
 		return domain.ErrConflict
 	}
 	if currentState == "uncertain" {
+		if !uncertain {
+			return domain.ErrConflict
+		}
+		needsIdentity := launch.ThreadID != "" && threadID == "" || launch.CodexSessionID != "" && sessionID == "" || launch.TurnID != "" && turnID == ""
+		if !needsIdentity {
+			// The uncertain state is already the durable result of this class of
+			// callback.  A replay must not rewrite batch/session state or timestamps.
+			return tx.Commit()
+		}
 		state = "uncertain"
 		if currentCode != "" {
 			code = currentCode
 		}
 	}
-	if threadID != "" && launch.ThreadID != "" && threadID != launch.ThreadID ||
-		sessionID != "" && launch.CodexSessionID != "" && sessionID != launch.CodexSessionID ||
-		turnID != "" && launch.TurnID != "" && turnID != launch.TurnID {
+	if currentState == "failed" && !uncertain && currentCode == "codex_start_failed" {
+		return tx.Commit()
+	}
+	if currentState != "starting" && currentState != "uncertain" {
 		return domain.ErrConflict
 	}
 	if threadID == "" {
@@ -454,11 +495,20 @@ func (s *Store) CompleteArchaeologyNativeTurn(ctx context.Context, terminal doma
 	now := stamp(s.now().UTC())
 	var state, batchID, batchCurrent string
 	var report []byte
-	if err = tx.QueryRowContext(ctx, `SELECT j.state,j.batch_id,j.report_digest,b.state FROM archaeology_native_jobs j JOIN archaeology_native_batches b ON b.id=j.batch_id WHERE j.id=? AND j.thread_id=? AND j.turn_id=?`, terminal.JobID, terminal.ThreadID, terminal.TurnID).Scan(&state, &batchID, &report, &batchCurrent); err != nil {
+	var storedDuration sql.NullInt64
+	if err = tx.QueryRowContext(ctx, `SELECT j.state,j.batch_id,j.report_digest,b.state,j.duration_ms FROM archaeology_native_jobs j JOIN archaeology_native_batches b ON b.id=j.batch_id WHERE j.id=? AND j.thread_id=? AND j.turn_id=?`, terminal.JobID, terminal.ThreadID, terminal.TurnID).Scan(&state, &batchID, &report, &batchCurrent, &storedDuration); err != nil {
 		return mapErr(err)
 	}
 	if state == "completed" || state == "failed" || state == "interrupted" || state == "attention" {
-		return tx.Commit()
+		expected := terminal.Status
+		if terminal.Status == "completed" && len(report) == 0 {
+			expected = "attention"
+		}
+		durationMatches := terminal.DurationMS == nil && !storedDuration.Valid || terminal.DurationMS != nil && storedDuration.Valid && *terminal.DurationMS == storedDuration.Int64
+		if state == expected && durationMatches {
+			return tx.Commit()
+		}
+		return domain.ErrConflict
 	}
 	next, code := "failed", "codex_turn_failed"
 	if terminal.Status == "interrupted" {
@@ -468,8 +518,12 @@ func (s *Store) CompleteArchaeologyNativeTurn(ctx context.Context, terminal doma
 	} else if terminal.Status == "completed" {
 		next, code = "attention", "completed_without_report"
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE archaeology_native_jobs SET state=?,error_code=?,duration_ms=?,terminal_at=?,updated_at=? WHERE id=?`, next, code, terminal.DurationMS, now, now, terminal.JobID); err != nil {
+	result, err := tx.ExecContext(ctx, `UPDATE archaeology_native_jobs SET state=?,error_code=?,duration_ms=?,terminal_at=?,updated_at=? WHERE id=? AND thread_id=? AND turn_id=? AND state=?`, next, code, terminal.DurationMS, now, now, terminal.JobID, terminal.ThreadID, terminal.TurnID, state)
+	if err != nil {
 		return mapErr(err)
+	}
+	if changed, _ := result.RowsAffected(); changed != 1 {
+		return domain.ErrConflict
 	}
 	var remaining, attention, uncertain int
 	if err = tx.QueryRowContext(ctx, `SELECT
@@ -592,6 +646,10 @@ func (s *Store) ResolveArchaeologyNativeUncertainty(ctx context.Context, command
 }
 
 func (s *Store) loadArchaeologyNative(ctx context.Context, sessionID string) ([]domain.ArchaeologyNativeBatch, error) {
+	var principal string
+	if err := s.db.QueryRowContext(ctx, `SELECT principal FROM archaeology_sessions WHERE id=?`, sessionID).Scan(&principal); err != nil {
+		return nil, mapErr(err)
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT id,state,mode,max_concurrency,depth,source_git,source_docs,source_codex_history,policy_attested,large_batch_acknowledged_at,large_batch_acknowledged_by,created_at,updated_at FROM archaeology_native_batches WHERE session_id=? ORDER BY created_at DESC,id DESC LIMIT 20`, sessionID)
 	if err != nil {
 		return nil, err
@@ -613,8 +671,18 @@ func (s *Store) loadArchaeologyNative(ctx context.Context, sessionID string) ([]
 		item.Policy.Sources = domain.ArchaeologySources{Git: git == 1, Docs: docs == 1, CodexHistory: history == 1}
 		out = append(out, item)
 	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
 	if err = rows.Close(); err != nil {
 		return nil, err
+	}
+	for index := range out {
+		out[index].Eligibility, err = readArchaeologyBatchEligibility(ctx, s.db, principal, out[index].ID)
+		if err != nil {
+			return nil, err
+		}
 	}
 	for index := range out {
 		jobRows, queryErr := s.db.QueryContext(ctx, `SELECT id,batch_id,candidate_id,project_id,mode,state,thread_id,codex_session_id,turn_id,phase_label,sources_examined,duration_ms,error_code,created_at,started_at,reported_at,terminal_at,updated_at FROM archaeology_native_jobs WHERE batch_id=? ORDER BY created_at,id LIMIT 100`, out[index].ID)
@@ -762,7 +830,26 @@ func (s *Store) LoseArchaeologyNativeTurn(ctx context.Context, jobID, threadID, 
 	}
 	defer tx.Rollback()
 	var batchID string
-	result, err := tx.ExecContext(ctx, `UPDATE archaeology_native_jobs SET state='uncertain',error_code='codex_process_unavailable',terminal_at=?,updated_at=? WHERE id=? AND thread_id=? AND turn_id=? AND state IN ('active','report_ready','cancel_requested')`, now, now, jobID, threadID, turnID)
+	var state, storedThread, storedTurn, errorCode string
+	if err = tx.QueryRowContext(ctx, `SELECT state,thread_id,turn_id,error_code FROM archaeology_native_jobs WHERE id=?`, jobID).Scan(&state, &storedThread, &storedTurn, &errorCode); err != nil {
+		return mapErr(err)
+	}
+	if storedThread != "" && storedThread != threadID || storedTurn != "" && storedTurn != turnID {
+		return domain.ErrConflict
+	}
+	if state == "uncertain" && errorCode == "codex_process_unavailable" && storedThread == threadID && storedTurn == turnID {
+		// Exact loss replay is already represented by the uncertainty latch.
+		return tx.Commit()
+	}
+	var result sql.Result
+	if state == "uncertain" && storedThread == threadID && storedTurn == turnID {
+		// Generic startup reconciliation may have already latched this exact job
+		// as uncertain for a server restart. A durable lose intent is stronger
+		// evidence: normalize the reason without reopening or replaying the turn.
+		result, err = tx.ExecContext(ctx, `UPDATE archaeology_native_jobs SET error_code='codex_process_unavailable',updated_at=? WHERE id=? AND thread_id=? AND turn_id=? AND state='uncertain'`, now, jobID, threadID, turnID)
+	} else {
+		result, err = tx.ExecContext(ctx, `UPDATE archaeology_native_jobs SET state='uncertain',error_code='codex_process_unavailable',terminal_at=?,updated_at=? WHERE id=? AND thread_id=? AND turn_id=? AND state IN ('active','report_ready','cancel_requested')`, now, now, jobID, threadID, turnID)
+	}
 	if err != nil {
 		return mapErr(err)
 	}

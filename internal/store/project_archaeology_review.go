@@ -26,7 +26,11 @@ func (s *Store) AdvanceArchaeologySelectedReview(ctx context.Context, command do
 	if !boundedCoreText(command.Principal, 200, true) || !boundedCoreText(command.BatchID, 120, true) || !boundedCoreText(command.RequestID, 200, true) || !historicalDigestPattern.MatchString(command.SelectionDigest) || !historicalDigestPattern.MatchString(command.ManifestDigest) || command.Page < 0 || command.PageCount < 1 || command.PageCount > 12 || command.Page >= command.PageCount {
 		return domain.ArchaeologySelectedReviewReceipt{}, domain.ErrInvalid
 	}
-	idsJSON, _ := json.Marshal(command.OutcomeIDs)
+	ids, err := canonicalSelectedOutcomeIDs(command.OutcomeIDs)
+	if err != nil {
+		return domain.ArchaeologySelectedReviewReceipt{}, err
+	}
+	idsJSON, _ := json.Marshal(ids)
 	now := s.now().UTC()
 	expires := now.Add(30 * time.Minute)
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -34,6 +38,9 @@ func (s *Store) AdvanceArchaeologySelectedReview(ctx context.Context, command do
 		return domain.ArchaeologySelectedReviewReceipt{}, err
 	}
 	defer tx.Rollback()
+	if _, err = readArchaeologyEligibleSelectedOutcomes(ctx, tx, command.Principal, command.BatchID, ids); err != nil {
+		return domain.ArchaeologySelectedReviewReceipt{}, err
+	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM archaeology_selected_reviews WHERE expires_at<=?`, stamp(now)); err != nil {
 		return domain.ArchaeologySelectedReviewReceipt{}, err
 	}

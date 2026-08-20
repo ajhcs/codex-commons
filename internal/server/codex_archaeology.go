@@ -20,18 +20,21 @@ import (
 )
 
 type codexArchaeologyBridge struct {
-	client     codexauth.ArchaeologyClient
-	roots      []ArchaeologyRoot
-	catalogKey [32]byte
+	client            codexauth.ArchaeologyClient
+	roots             []ArchaeologyRoot
+	catalogKey        [32]byte
+	schedulerEligible func() bool
 	// catalogRefreshMu is the installation-local singleflight gate. Explicit
 	// discovery refreshes the snapshot; process-restart launch resolution lazily
 	// performs at most one inventory even when many queued jobs wake together.
-	catalogRefreshMu sync.Mutex
-	catalogMu        sync.Mutex
-	catalog          map[string]string
-	capabilityMu     sync.Mutex
-	capabilityUntil  time.Time
-	capabilityErr    error
+	catalogRefreshMu        sync.Mutex
+	catalogMu               sync.Mutex
+	catalog                 map[string]string
+	capabilityMu            sync.Mutex
+	capabilityUntil         time.Time
+	capabilityErr           error
+	capabilityGeneration    uint64
+	capabilityGenerationSet bool
 }
 
 func (b *codexArchaeologyBridge) candidateID(key string) string {
@@ -356,8 +359,37 @@ func (b *codexArchaeologyBridge) Available(ctx context.Context) error {
 	if !ok || !experimental.ExperimentalDynamicTools() {
 		return codexauth.ErrUnavailable
 	}
+	if b.schedulerEligible != nil {
+		// The runtime monitor owns the expensive supervisor/account/model
+		// observations. A configured gate is an immutable, atomic projection of
+		// SchedulerEligible; request-path availability must never call
+		// SupportsModel or otherwise perform Codex I/O.
+		if !b.schedulerEligible() {
+			return codexauth.ErrUnavailable
+		}
+		return nil
+	}
+	// Read the supervisor generation before taking the capability cache lock.
+	// Snapshot is a detached, read-only view; keeping it outside capabilityMu
+	// preserves the existing singleflight gate without coupling its lock order
+	// to the managed-process reporter.
+	generation, generationKnown := uint64(0), false
+	if reporter, ok := b.client.(codexauth.Reporter); ok {
+		generation = reporter.Snapshot().Generation
+		generationKnown = generation != 0
+	}
 	b.capabilityMu.Lock()
 	defer b.capabilityMu.Unlock()
+	if generationKnown && (!b.capabilityGenerationSet || b.capabilityGeneration != generation) {
+		// A new managed-process generation must revalidate both successful and
+		// failed capability results immediately. Generation zero deliberately
+		// retains the legacy TTL-only behavior for reporters without a usable
+		// generation and for clients that do not implement Reporter.
+		b.capabilityGeneration = generation
+		b.capabilityGenerationSet = true
+		b.capabilityUntil = time.Time{}
+		b.capabilityErr = nil
+	}
 	now := time.Now()
 	if now.Before(b.capabilityUntil) {
 		return b.capabilityErr

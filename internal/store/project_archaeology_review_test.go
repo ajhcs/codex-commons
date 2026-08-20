@@ -11,8 +11,21 @@ import (
 func TestSelectedReviewRequiresEveryBoundPageAndFixedExpiry(t *testing.T) {
 	s, _ := openTest(t)
 	ctx := context.Background()
+	mustCoreProject(t, s, "review-project", "Review project")
 	at := stamp(testNow)
-	_, err := s.DB().ExecContext(ctx, `INSERT INTO archaeology_sessions(id,principal,state,discovery_state,created_at,updated_at) VALUES('review-s','human:local-admin','completed','ready',?,?);INSERT INTO archaeology_native_batches(id,session_id,request_key,request_digest,mode,state,max_concurrency,created_at,updated_at) VALUES('review-b','review-s','r',zeroblob(32),'app_server_dynamic_tools','completed',1,?,?)`, at, at, at, at)
+	_, err := s.DB().ExecContext(ctx, `
+INSERT INTO archaeology_sessions(id,principal,state,discovery_state,created_at,updated_at) VALUES('review-s','human:local-admin','completed','ready',?,?);
+INSERT INTO archaeology_native_batches(id,session_id,request_key,request_digest,mode,state,max_concurrency,created_at,updated_at,policy_attested) VALUES('review-b','review-s','r',zeroblob(32),'app_server_dynamic_tools','completed',1,?,?,1);
+INSERT INTO archaeology_candidates(session_id,id,name,path_label,has_git,has_docs,has_codex_history,duration_min_seconds,duration_max_seconds,relative_cost,privacy_note,canonical_project_id) VALUES('review-s','review-c','Review project','review-project',1,0,0,1,2,'low','','review-project');
+INSERT INTO archaeology_native_jobs(id,batch_id,session_id,candidate_id,project_id,project_name,mode,state,report_digest,created_at,updated_at) VALUES('review-j','review-b','review-s','review-c','review-project','Review project','app_server_dynamic_tools','completed',zeroblob(32),?,?);
+INSERT INTO archaeology_native_outcomes(id,job_id,project_id,title,summary,source_count,proposal_json,created_at) VALUES
+('a','review-j','review-project','A','',1,'{"batch_id":"review-b"}',?),
+('b','review-j','review-project','B','',1,'{"batch_id":"review-b"}',?),
+('c','review-j','review-project','C','',1,'{"batch_id":"review-b"}',?),
+('d','review-j','review-project','D','',1,'{"batch_id":"review-b"}',?),
+('e','review-j','review-project','E','',1,'{"batch_id":"review-b"}',?),
+('f','review-j','review-project','F','',1,'{"batch_id":"review-b"}',?),
+('new','review-j','review-project','New','',1,'{"batch_id":"review-b"}',?)`, at, at, at, at, at, at, at, at, at, at, at, at, at)
 	must(t, err)
 	selection, manifest := historicalDigest("a"), historicalDigest("b")
 	ids := []string{"a", "b", "c", "d", "e", "f"}

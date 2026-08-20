@@ -7,8 +7,47 @@ set -eu
 repo_root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 stage_script=$repo_root/ops/stage-release.sh
 verify_script=$repo_root/ops/verify-release.sh
+readiness_script=$repo_root/ops/check-readiness.sh
 test -f "$stage_script"
 test -f "$verify_script"
+test -f "$readiness_script"
+
+# Keep the Phase 2 deployment contract reviewable without turning this suite
+# into a live systemd or runtime test. These assertions cover only source
+# artifacts; they never start a service, read an environment file, or switch a
+# release pointer.
+service_unit=$repo_root/deploy/systemd/codex-commons.service
+env_example=$repo_root/deploy/systemd/dogfood.env.example
+runbook=$repo_root/deploy/CONTINUOUS_DOGFOOD_RUNBOOK.md
+phase2_ledger=$repo_root/docs/phase-2-completion-ledger.md
+for source_artifact in "$service_unit" "$env_example" "$runbook" "$phase2_ledger"; do
+	test -f "$source_artifact"
+done
+grep -Fq 'Type=notify' "$service_unit"
+grep -Fq 'NotifyAccess=main' "$service_unit"
+grep -Eq '^TimeoutStartSec=180$' "$service_unit"
+grep -Fq 'WatchdogSec=60' "$service_unit"
+grep -Fq 'WorkingDirectory=%h/.local/lib/codex-commons/current' "$service_unit"
+grep -Fq 'ExecStartPre=/bin/sh %h/.local/lib/codex-commons/current/ops/verify-release.sh' "$service_unit"
+grep -Fq 'COMMONS_REQUIRE_CODEX_READY=false' "$env_example"
+grep -Fqi 'optional-safe default' "$env_example"
+grep -Fq 'runtime_policy_ready' "$readiness_script"
+grep -Fq 'optional:false:true|required:true:true' "$readiness_script"
+grep -Fq 'if [ "$runtime_required" = false ]' "$readiness_script"
+grep -Fq '"service":{"version":"' "$readiness_script"
+grep -Fq 'runtime_component_ready' "$readiness_script"
+grep -Fq 'healthy:true:true' "$readiness_script"
+for phase2_phrase in \
+	'COMMONS_REQUIRE_CODEX_READY=true' \
+	'READY=1' \
+	'WatchdogSec=60' \
+	'persistence latch' \
+	'NO-GO'; do
+	grep -Fq "$phase2_phrase" "$runbook"
+done
+grep -Fq 'Increment 01' "$phase2_ledger"
+grep -Fq 'Increment 13' "$phase2_ledger"
+grep -Fq 'Deployment approval' "$phase2_ledger"
 
 root=$(mktemp -d)
 cleanup() {
@@ -192,7 +231,7 @@ mkdir -p "$root/server-src"
 printf '%s\n' \
 	'module codex-commons/cmd/commons-server' \
 	'' \
-	'go 1.22' > "$root/server-src/go.mod"
+	'go 1.25.0' > "$root/server-src/go.mod"
 printf '%s\n' \
 	'package main' \
 	'' \
@@ -264,6 +303,58 @@ cp "$release_dir/web/index.html" "$original_index"
 # A correctly staged complete tree is accepted before any negative fixture.
 verify_test_release >/dev/null
 record_positive known-good-complete-tree
+
+# Exercise the readiness policy against bounded local fixtures. These calls
+# use only a disposable SQLite file and fake status commands; no service or
+# listener is started. Optional Codex degradation must pass, while required
+# mode must prove each Codex runtime component is healthy, ready, and required.
+readiness_db=$root/readiness.sqlite3
+sqlite3 "$readiness_db" 'CREATE TABLE schema_migrations(version INTEGER); INSERT INTO schema_migrations(version) VALUES (15);'
+readiness_systemctl=$root/readiness-systemctl
+printf '%s\n' '#!/bin/sh' 'exit 0' > "$readiness_systemctl"
+chmod 0555 "$readiness_systemctl"
+readiness_curl=$root/readiness-curl
+printf '%s\n' \
+	'#!/bin/sh' \
+	'case "$*" in' \
+	'    *"/v1/health") cat "$READINESS_HEALTH_FILE" ;;' \
+	'    *"/v1/internal/readiness") cat "$READINESS_STATUS_FILE" ;;' \
+	'    *) exit 1 ;;' \
+	'esac' > "$readiness_curl"
+chmod 0555 "$readiness_curl"
+readiness_health=$root/readiness-health.json
+printf '%s\n' '{"status":"ok","version":"release-test"}' > "$readiness_health"
+readiness_optional=$root/readiness-optional.json
+printf '%s\n' \
+	'{"service":{"version":"release-test"},"runtime":{"mode":"optional","required":false,"state":"degraded","ready":true,"components":{"codex":{"state":"degraded","ready":false,"required":false}}}}' > "$readiness_optional"
+readiness_required=$root/readiness-required.json
+printf '%s\n' \
+	'{"service":{"version":"release-test"},"runtime":{"mode":"required","required":true,"state":"ready","ready":true,"components":{"codex":{"state":"healthy","ready":true,"required":true,"status":"healthy"},"supervisor":{"state":"healthy","ready":true,"required":true,"status":"healthy"},"account":{"state":"healthy","ready":true,"required":true,"status":"healthy"},"model":{"state":"healthy","ready":true,"required":true,"status":"healthy"}}}}' > "$readiness_required"
+readiness_required_degraded=$root/readiness-required-degraded.json
+printf '%s\n' \
+	'{"service":{"version":"release-test"},"runtime":{"mode":"required","required":true,"state":"degraded","ready":true,"components":{"codex":{"state":"degraded","ready":false,"required":true,"status":"degraded"},"supervisor":{"state":"healthy","ready":true,"required":true,"status":"healthy"},"account":{"state":"healthy","ready":true,"required":true,"status":"healthy"},"model":{"state":"healthy","ready":true,"required":true,"status":"healthy"}}}}' > "$readiness_required_degraded"
+run_readiness_fixture() {
+	COMMONS_DB="$readiness_db" \
+	COMMONS_RELEASE_DIR="$release_dir" \
+	COMMONS_CODEX_BIN="$release_dir/bin/codex" \
+	COMMONS_CODEX_SHA256="$codex_sha" \
+	COMMONS_CODE_MODE_HOST_SHA256="$host_sha" \
+	COMMONS_CODEX_BWRAP_SHA256="$bwrap_sha" \
+	COMMONS_CODEX_ZSH_SHA256="$zsh_sha" \
+	COMMONS_CODEX_RG_SHA256="$rg_sha" \
+	COMMONS_CODEX_PACKAGE_SHA256="$package_sha" \
+	COMMONS_SYSTEMCTL="$readiness_systemctl" \
+	COMMONS_CURL="$readiness_curl" \
+	COMMONS_READINESS_ATTEMPTS=1 \
+	/bin/sh "$readiness_script"
+}
+READINESS_HEALTH_FILE="$readiness_health" READINESS_STATUS_FILE="$readiness_optional" run_readiness_fixture
+READINESS_HEALTH_FILE="$readiness_health" READINESS_STATUS_FILE="$readiness_required" run_readiness_fixture
+if READINESS_HEALTH_FILE="$readiness_health" READINESS_STATUS_FILE="$readiness_required_degraded" run_readiness_fixture; then
+	printf 'unexpected readiness acceptance: required degraded Codex fixture\n' >&2
+	exit 1
+fi
+printf 'READINESS_FIXTURES=optional-pass|required-pass|required-degraded-rejected\n'
 
 # Complete-tree inventory: every destructive case is followed immediately by
 # a valid verification, so a stale fixture cannot make a later case green.
