@@ -371,8 +371,8 @@ policy and treats an existing monthly name as one coherent set of backup,
 checksum, and receipt; malformed or mismatched sidecars fail closed.
 Newly created monthly sets are revalidated as one coherent set before
 retention and before verified status. If a later monthly publish step fails,
-only leaves proven published by this invocation are rolled back in reverse
-order using trusted `(dev,ino)` identity revalidated before unlink; planted or
+only leaves proven published by this invocation are rolled back in reverse order
+using trusted `(dev,ino)` identity revalidated before unlink; planted or
 preexisting occupants are never removed. Preexisting incoherent monthly sets
 require manual cleanup. Each publish holds the validated source
 descriptor open and rechecks the published destination identity; same-uid
