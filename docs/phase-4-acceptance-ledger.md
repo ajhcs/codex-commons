@@ -3,7 +3,7 @@ meta|authority_sha|d9b2655af78cb242e557b4f42f52ae817bff36a0
 meta|authority_ref|origin/main
 meta|source_sha|d9b2655af78cb242e557b4f42f52ae817bff36a0
 meta|source_ref|phase4-pr5-main
-meta|branch|codex/phase4-pr06-acceptance-ledger-final-20260820
+meta|branch|main
 meta|base_ref|origin/main
 meta|worktree_status|clean
 meta|ancestry_status|pass

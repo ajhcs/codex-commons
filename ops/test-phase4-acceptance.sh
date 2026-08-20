@@ -144,7 +144,7 @@ validate_static() {
 	check_meta authority_ref origin/main || return 1
 	check_meta source_sha d9b2655af78cb242e557b4f42f52ae817bff36a0 || return 1
 	check_meta source_ref phase4-pr5-main || return 1
-	check_meta branch codex/phase4-pr06-acceptance-ledger-final-20260820 || return 1
+	check_meta branch main || return 1
 	check_meta base_ref origin/main || return 1
 	check_meta worktree_status clean || return 1
 	check_meta ancestry_status pass || return 1
@@ -278,8 +278,10 @@ git -C "$repo_root" merge-base --is-ancestor "$authority_sha" "$head" || fail 'a
 phase5_sha=$(awk -F'|' '$1 == "ref" && $2 == "phase4_merge" && $3 == "PR5" { print $4 }' "$ledger")
 git -C "$repo_root" cat-file -e "$phase5_sha^{commit}" || fail 'recorded Phase 4 PR5 merge is unavailable'
 git -C "$repo_root" show -s --format='%s' "$phase5_sha" | grep -Fq 'Phase 4 fail-closed rollback state machine' || fail 'recorded PR5 merge subject mismatch'
-branch=$(git -C "$repo_root" branch --show-current)
-[ "$branch" = "$(meta_value branch "$ledger")" ] || fail 'branch identity mismatch'
+# Durable recorded branch is main. Checkout may be main, the original
+# Phase 4 PR6 feature branch, or detached HEAD; do not require the
+# current name to match. Live identity remains authority ancestry and
+# a clean worktree.
 
 # The acceptance ledger is evidence for one exact clean authority. The
 # checker never grants a pre-commit or scoped-dirty exception.
@@ -372,7 +374,7 @@ append_duplicate() { printf '%s\n' 'marker|PR1|DEPLOY_LOCK_CONTENTION|na|pass' >
 mutate_child_exit() { sed -i 's#marker|PR5|DEPLOY_STOP_FAIL_ZERO_MUTATION|1|pass#marker|PR5|DEPLOY_STOP_FAIL_ZERO_MUTATION|0|pass#' "$1"; }
 remove_marker() { sed -i '/^marker|PR5|DEPLOY_STOP_SHOW_CONTROL_ZERO_MUTATION|1|pass$/d' "$1"; }
 mutate_activation() { sed -i 's#meta|activation_performed|false#meta|activation_performed|true#' "$1"; }
-append_path() { printf '%s\n' 'ref|cursor|PR1|/var/lib/evidence' >> "$1"; }
+mutate_path() { sed -i 's#ref|cursor|PR1|cursor-cloud:reviewed#ref|cursor|PR1|/var/lib/evidence#' "$1"; }
 remove_aggregate() { sed -i '/^marker|PR5|DEPLOY_/d' "$1"; }
 append_outcome() { printf 'outcome|unknown_outcome|rollback_outcome_v1|%s|DEPLOY_STOP_FAIL_ZERO_MUTATION|pass\n' "$ROLLBACK_OUTCOME_SCHEMA_DIGEST" >> "$1"; }
 
@@ -381,7 +383,7 @@ expect_static_reject DUPLICATE_MARKER append_duplicate
 expect_static_reject WRONG_CHILD_EXIT mutate_child_exit
 expect_static_reject MISSING_MARKER remove_marker
 expect_static_reject ACTIVATION_TRUE mutate_activation
-expect_static_reject ABSOLUTE_PATH append_path
+expect_static_reject ABSOLUTE_PATH mutate_path
 expect_static_reject LONE_AGGREGATE remove_aggregate
 expect_static_reject UNKNOWN_OUTCOME append_outcome
 [ "$negative_cases" -eq 8 ] || fail "negative fixture count is $negative_cases"
