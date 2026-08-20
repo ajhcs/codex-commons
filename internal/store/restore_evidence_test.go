@@ -87,6 +87,25 @@ func TestRecordRestoreEvidenceRejectsIdentityMismatchAndInvalidInput(t *testing.
 	}
 }
 
+func TestRecordRestoreEvidenceRejectsTamperedAllZeroIdentity(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "zero-bind.sqlite3"))
+	must(t, err)
+	defer store.Close()
+	_, err = store.DB().ExecContext(ctx, `DROP TRIGGER installation_status_identity_no_update`)
+	must(t, err)
+	_, err = store.DB().ExecContext(ctx, `UPDATE installation_status SET installation_id=x'00000000000000000000000000000000' WHERE id=1`)
+	must(t, err)
+	zeroID := strings.Repeat("0", 32)
+	input := []byte(`{"schema_version":17,"release_id":"continuous-dogfood-test","drill_id":"drill-1","recorded_at":"2026-08-20T00:00:00Z","installation_id":"` + zeroID + `","restored_backup_digest":"` + testBackupHex(0xbb) + `"}`)
+	if _, err = store.RecordRestoreEvidence(ctx, input); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("all-zero bound receipt err=%v", err)
+	}
+	if countRestoreEvidence(t, store) != 0 {
+		t.Fatalf("all-zero identity recorded evidence count=%d", countRestoreEvidence(t, store))
+	}
+}
+
 func TestRecordRestoreEvidenceIdempotentReplayAndCollision(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, filepath.Join(t.TempDir(), "idempotent.sqlite3"))

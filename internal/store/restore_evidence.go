@@ -44,6 +44,9 @@ func (s *Store) RecordRestoreEvidence(ctx context.Context, input []byte) (Restor
 	if err = tx.QueryRowContext(ctx, `SELECT installation_id FROM installation_status WHERE id=1`).Scan(&installationID); err != nil {
 		return RestoreEvidence{}, mapErr(err)
 	}
+	if err = validateInstallationIdentity(installationID); err != nil {
+		return RestoreEvidence{}, err
+	}
 	if err = receipt.Bind(installationID); err != nil {
 		return RestoreEvidence{}, err
 	}
