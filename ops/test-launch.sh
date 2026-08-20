@@ -21,6 +21,15 @@ if grep -Eq '(^|[[:space:]])eval[[:space:]]' "$launcher"; then
 	printf 'commons-launch.sh must not use eval\n' >&2
 	exit 1
 fi
+grep -Fq 'PATH=/usr/bin:/bin' "$launcher"
+grep -Fq 'LC_ALL=C' "$launcher"
+grep -Fq 'LANG=C' "$launcher"
+path_line=$(grep -n '^PATH=/usr/bin:/bin$' "$launcher" | head -n1 | cut -d: -f1)
+locale_line=$(grep -n '^LC_ALL=C$' "$launcher" | head -n1 | cut -d: -f1)
+readlink_line=$(grep -nE 'readlink (-f|--)' "$launcher" | head -n1 | cut -d: -f1)
+test -n "$path_line" && test -n "$locale_line" && test -n "$readlink_line"
+test "$path_line" -lt "$readlink_line"
+test "$locale_line" -lt "$readlink_line"
 test "$(grep -c 'readlink -- "$current"' "$launcher")" -eq 1
 if grep -Fq 'readlink -f "$current"' "$launcher"; then
 	printf 'commons-launch.sh must not re-resolve current\n' >&2
@@ -287,6 +296,30 @@ current=$release_root/current
 rm -f -- "$current"
 ln -s release-a "$current"
 
+# A fake readlink earlier in the caller PATH must not be selected.
+fake_bin=$root/fake-bin
+mkdir -p "$fake_bin"
+fake_readlink_log=$root/fake-readlink.log
+cat > "$fake_bin/readlink" <<'EOF'
+#!/bin/sh
+printf 'invoked\n' >> "${FAKE_READLINK_LOG:?}"
+exit 1
+EOF
+chmod 0755 "$fake_bin/readlink"
+reset_logs
+rm -f -- "$fake_readlink_log"
+PATH="$fake_bin:$PATH" \
+LC_ALL=en_US.UTF-8 \
+LANG=en_US.UTF-8 \
+COMMONS_RELEASE_ROOT=$release_root \
+FAKE_VERIFY_LOG=$verify_log \
+FAKE_SERVER_LOG=$server_log \
+FAKE_READLINK_LOG=$fake_readlink_log \
+/bin/sh "$launcher"
+assert_pinned release-a
+test ! -e "$fake_readlink_log"
+printf 'LAUNCH_TRUSTED_PATH=pass\n'
+
 # Verifier failure is propagated and does not exec the server.
 reset_logs
 if COMMONS_RELEASE_ROOT=$release_root \
@@ -390,6 +423,28 @@ rm -f -- "$release_root/alias"
 rm -f -- "$current"
 ln -s 'release a' "$current"
 expect_launch_failure whitespace-target
+
+# A current target ending in newline must be captured losslessly and rejected
+# before verify/server. POSIX $(readlink) would otherwise strip the newline
+# and accept the remaining legal basename.
+rm -f -- "$current"
+nl_target=$(printf 'release-a\n.')
+nl_target=${nl_target%.}
+ln -s -- "$nl_target" "$current"
+nl_raw=$(readlink -- "$current"; printf .)
+test "$nl_raw" = "$(printf 'release-a\n.')"
+expect_launch_failure newline-target
+test ! -e "$verify_log"
+
+# A control-character target is rejected before verify/server.
+rm -f -- "$current"
+ctrl_target=$(printf 'release-a\001.')
+ctrl_target=${ctrl_target%.}
+ln -s -- "$ctrl_target" "$current"
+ctrl_raw=$(readlink -- "$current"; printf .)
+test "$ctrl_raw" = "$(printf 'release-a\001.')"
+expect_launch_failure control-target
+test ! -e "$verify_log"
 
 # Restore a valid pointer and prove a missing verifier fails closed.
 rm -f -- "$current"
