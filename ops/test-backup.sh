@@ -29,6 +29,15 @@ grep -Fq 'RENAME_NOREPLACE' "$repo_root/internal/opsfs/open_linux.go"
 grep -Fq 'commons-ops backup' "$docs"
 grep -Fq 'directory descriptor' "$runbook"
 grep -Fq 'ops/test-backup.sh' "$runbook"
+grep -Fq 'must already exist' "$docs"
+grep -Fq 'coherent set' "$docs"
+grep -Fq 'unlinks by name' "$docs"
+grep -Fq 'remaining race is not claimed closed' "$docs"
+grep -Fq 'must already exist' "$runbook"
+grep -Fq 'coherent set' "$runbook"
+grep -Fq 'remaining race is not claimed closed' "$runbook"
+grep -Fq 'if ! capture /bin/sh "$staged/ops/backup.sh"; then' "$repo_root/ops/deploy-release.sh"
+grep -Fq 'prebackup=$captured' "$repo_root/ops/deploy-release.sh"
 
 root=$(mktemp -d)
 root=$(readlink -f "$root")
@@ -73,8 +82,7 @@ printf '#!/bin/sh\necho hijacked >&2\nexit 1\n' > "$root/bin/sqlite3"
 printf '#!/bin/sh\necho hijacked >&2\nexit 1\n' > "$root/bin/date"
 printf '#!/bin/sh\necho hijacked >&2\nexit 1\n' > "$root/bin/sha256sum"
 chmod 700 "$root/bin/sqlite3" "$root/bin/date" "$root/bin/sha256sum"
-PATH="$root/bin:$PATH"
-export PATH
+trusted_path=/usr/bin:/bin
 
 run_backup() {
 	COMMONS_DB=$src COMMONS_BACKUP_DIR=$root/backups /bin/sh "$backup_script" 2>"$root/err.run"
@@ -88,7 +96,7 @@ expect_exit() {
 	label=$2
 	shift 2
 	set +e
-	"$@" >/dev/null 2>"$root/err.$label"
+	"$@" >"$root/out.$label" 2>"$root/err.$label"
 	got=$?
 	set -e
 	if test "$got" -ne "$want"; then
@@ -96,8 +104,19 @@ expect_exit() {
 		cat "$root/err.$label" >&2
 		exit 1
 	fi
+	if test -s "$root/out.$label"; then
+		printf 'failure wrote stdout for %s\n' "$label" >&2
+		cat "$root/out.$label" >&2
+		exit 1
+	fi
+	if ! test -s "$root/err.$label"; then
+		printf 'failure wrote no stderr for %s\n' "$label" >&2
+		exit 1
+	fi
 }
 
+PATH="$root/bin:$trusted_path"
+export PATH
 captured=$(
 	run_backup
 	printf x
@@ -137,16 +156,25 @@ if grep -Eq 'result_json|prompt|secret|transcript|review_secret' "$captured.rece
 	printf 'receipt leaked a payload field\n' >&2
 	exit 1
 fi
+test ! -s "$root/err.run"
 test "$(/usr/bin/sqlite3 "$src" 'SELECT backup_status FROM installation_status WHERE id=1')" = verified
 PATH=/usr/bin:/bin /bin/sh "$verify_script" "$captured"
 positive_cases=$((positive_cases + 1))
 printf 'VALID wrapper-stdout-and-verify\n'
 
 # Hostile PATH binaries did not run; the packaged helper is used.
-if grep -Fq hijacked "$root/err."* 2>/dev/null; then
+if grep -Fq hijacked "$root/err.run" 2>/dev/null; then
 	printf 'PATH hijack reached a shell helper\n' >&2
 	exit 1
 fi
+PATH=$trusted_path
+export PATH
+
+missing=$root/missing-backups
+rejections=$((rejections + 1))
+expect_exit 64 missing-root env COMMONS_DB="$src" COMMONS_BACKUP_DIR="$missing" /bin/sh "$backup_script"
+test ! -e "$missing"
+printf 'REJECTED missing-root\n'
 
 ln -s "$root/backups" "$root/backups-link"
 rejections=$((rejections + 1))
@@ -181,10 +209,13 @@ if test "$second_status" -eq 0; then
 	second=$(cat "$root/second.out")
 	test "$second" != "$keep"
 	test "$(cat "$keep")" = "$keep_body"
+	test ! -s "$root/second.err"
 	positive_cases=$((positive_cases + 1))
 	printf 'VALID distinct-second-backup\n'
 else
 	test "$second_status" -eq 64
+	test ! -s "$root/second.out"
+	test -s "$root/second.err"
 	test "$(cat "$keep")" = "$keep_body"
 	rejections=$((rejections + 1))
 	printf 'REJECTED existing-target\n'
@@ -214,6 +245,8 @@ busy_status=$?
 set -e
 test "$busy_status" -eq 75
 test ! -s "$root/busy.out"
+test -s "$root/busy.err"
+grep -Fq 'busy' "$root/busy.err"
 rm -f -- "$hold"
 wait "$held_pid" || true
 unset COMMONS_OPS_HOLD COMMONS_OPS_HOLD_POINT COMMONS_OPS_HOLD_STATUS

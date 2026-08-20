@@ -78,6 +78,17 @@ func TestWritePublishAndRetentionSafety(t *testing.T) {
 	}
 }
 
+func TestOpenBackupDirRequiresExisting(t *testing.T) {
+	root := testDir(t)
+	missing := filepath.Join(root, "missing")
+	if _, err := OpenBackupDir(missing); err == nil {
+		t.Fatal("created or accepted a missing backup root")
+	}
+	if _, err := os.Lstat(missing); !os.IsNotExist(err) {
+		t.Fatalf("OpenBackupDir created %s: %v", missing, err)
+	}
+}
+
 func TestOpenDirRejectsFIFO(t *testing.T) {
 	root := testDir(t)
 	parent := filepath.Join(root, "backups")
