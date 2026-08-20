@@ -1,7 +1,8 @@
 #!/bin/sh
 set -eu
-# Isolated restore verification of one exact backup. The operator backup path
-# is never interpolated into SQL; sqlite3 receives the work copy as argv.
+# Isolated restore verification of one exact backup produced by packaged
+# commons-ops backup. The operator backup path is never interpolated into SQL;
+# sqlite3 receives the work copy as argv.
 : "${1:?backup path required}"
 exec 9<&-
 umask 077

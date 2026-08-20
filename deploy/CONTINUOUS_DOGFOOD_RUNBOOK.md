@@ -356,9 +356,40 @@ canonical parent is a real non-symlink directory owned by the effective
 uid/gid and not group or other writable. The destination is either safely
 absent for first-deploy cleanup or a regular non-symlink file, mode 0600,
 owned by that uid/gid. A dangling symlink is never treated as absent. When a
-database is present, `ops/backup.sh` prints the exact backup file created by
-this invocation as a single stdout line; deploy captures that regular path and
-does not glob-pick a newer timer file by mtime.
+database is present, packaged `commons-ops backup` (via `ops/backup.sh`)
+requires that `COMMONS_BACKUP_DIR` must already exist as a canonical, contained,
+non-symlink directory owned by the effective uid/gid with mode 0700. Backup
+does not create that root. `daily/` and `monthly/` may be created as contained
+mode-0700 children and are then validated the same way. Backup takes a
+nonblocking exclusive `flock` on the backup-root directory descriptor. It does
+not create or follow a pathname lock file. Publication uses a private
+temporary directory, SQLite backup plus integrity/foreign-key checks, and
+exclusive no-replace fd-relative publishes of the database, checksum, and
+sanitized receipt. The private source is revalidated immediately before each
+publish or copy. Monthly publication uses the same no-follow/no-replace
+policy and treats an existing monthly name as one coherent set of backup,
+checksum, and receipt; malformed or mismatched sidecars fail closed.
+Newly created monthly sets are revalidated as one coherent set before
+retention and before verified status. If a later monthly publish step fails,
+only leaves proven published by this invocation are rolled back in reverse order
+using trusted `(dev,ino)` identity revalidated before unlink; planted or
+preexisting occupants are never removed. Preexisting incoherent monthly sets
+require manual cleanup. Each publish holds the validated source
+descriptor open and rechecks the published destination identity; same-uid
+pre-rename name races are detected post-publication, not atomically prevented.
+Retention may inspect or delete only validated direct regular files with
+expected owner, mode 0600, and link count; it never follows or deletes
+symlinks, directories, or foreign entries. Retention revalidates the same
+inode after the fd-relative check and then unlinks by name. A same-uid actor
+can still retarget that name after the last check; that remaining race is not claimed closed.
+The wrapper prints the exact backup file created by this
+invocation as a single stdout line and writes diagnostics only to stderr;
+deploy captures that regular path and does not glob-pick a newer timer file
+by mtime. Prove the backup boundary offline with disposable directories:
+
+```sh
+sh ops/test-backup.sh
+```
 
 Prove this increment offline with disposable directories and fake commands:
 
