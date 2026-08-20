@@ -287,11 +287,13 @@ not create or follow a `.lock` file, and it does not lock through a symlink.
 The descriptor stays open until the process exits, so the same lock covers
 candidate verification, backup, the `current` pointer switch, restart and
 readiness, and the existing database/pointer/previous-readiness rollback
-paths. A second concurrent deploy exits `75` (busy) before changing any
-state. A suspicious pre-existing `.current.next` that is not a leftover
-relative release-basename symlink is rejected without following or overwriting
-it. If this invocation creates `.current.next` and is interrupted before the
-rename, only that temporary symlink is removed; `current` is not rewritten by
+paths. Staged scripts, the configurable systemctl command, and other child
+processes do not receive a usable copy of that lock descriptor. A second
+concurrent deploy exits `75` (busy) before changing any state. A suspicious
+pre-existing `.current.next` that is not a leftover relative release-basename
+symlink is rejected without following or overwriting it. If this invocation
+creates `.current.next` and is interrupted before the rename, only that
+temporary symlink is removed; `current` is not rewritten by
 the trap. The flock is released automatically when the process exits.
 
 Prove this increment offline with disposable directories and fake commands:

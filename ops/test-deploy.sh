@@ -14,8 +14,16 @@ grep -Fq 'exec 9<"$COMMONS_RELEASE_ROOT"' "$deploy_script"
 grep -Fq 'flock -n 9' "$deploy_script"
 grep -Fq 'exit 75' "$deploy_script"
 grep -Fq '.current.next' "$deploy_script"
+grep -Fq 'without_lock_fd() {' "$deploy_script"
+grep -Fq '"$@" 9<&-' "$deploy_script"
+grep -Fq 'without_lock_fd /bin/sh "$staged/ops/verify-release.sh"' "$deploy_script"
+grep -Fq 'without_lock_fd /bin/sh "$staged/ops/backup.sh"' "$deploy_script"
+grep -Fq 'without_lock_fd /bin/sh "$staged/ops/check-readiness.sh"' "$deploy_script"
+grep -Fq 'without_lock_fd /bin/sh "$staged/ops/verify-restore.sh"' "$deploy_script"
+grep -Fq 'without_lock_fd "$systemctl_cmd"' "$deploy_script"
 grep -Fq 'ops/test-deploy.sh' "$runbook"
 grep -Fq 'canonical release-root directory' "$runbook"
+grep -Fq 'do not receive a usable copy of that lock descriptor' "$runbook"
 if grep -Fq 'exec 9>' "$deploy_script"; then
 	printf 'deploy-release.sh must open the release-root directory, not a lock file\n' >&2
 	exit 1
@@ -325,5 +333,61 @@ test ! -L "$release_root/.current.next"
 test -d "$release_root/previous"
 test -d "$release_root/candidate-two"
 printf 'DEPLOY_INTERRUPT_CLEANUP=pass\n'
+
+# A staged child that attempts flock -u 9 must not release the parent lock.
+# The contender still exits 75 with zero mutations until the true holder exits.
+rm -f -- "$current"
+ln -s previous "$current"
+: > "$systemctl_log"
+make_release unlock-holder 1
+cat > "$release_root/unlock-holder/ops/verify-release.sh" <<'EOF'
+#!/bin/sh
+set -eu
+flock -u 9 2>/dev/null || true
+if [ -n "${FAKE_VERIFY_STARTED:-}" ]; then
+	: > "$FAKE_VERIFY_STARTED"
+fi
+if [ -n "${FAKE_VERIFY_RELEASE:-}" ]; then
+	while [ ! -f "$FAKE_VERIFY_RELEASE" ]; do
+		sleep 0.01
+	done
+fi
+EOF
+rm -f -- "$verify_started" "$verify_release" "$verify_marker"
+run_deploy "$release_root" "$release_root/unlock-holder" &
+first_pid=$!
+wait_for_file "$verify_started"
+test "$(pointer_target)" = previous
+test ! -e "$release_root/.current.next"
+test ! -L "$release_root/.current.next"
+before_unlock=$(root_snapshot)
+rm -f -- "$verify_marker"
+if COMMONS_RELEASE_ROOT="$release_root" \
+	COMMONS_DB=$db \
+	COMMONS_SYSTEMCTL=$fake_bin/systemctl \
+	FAKE_SYSTEMCTL_LOG=$systemctl_log \
+	FAKE_VERIFY_MARKER=$verify_marker \
+	/bin/sh "$deploy_script" "$release_root/blocked-candidate" \
+	>"$root/unlock.out" 2>"$root/unlock.err"; then
+	printf 'contender succeeded after child flock -u 9\n' >&2
+	exit 1
+else
+	unlock_status=$?
+fi
+test "$unlock_status" -eq 75
+test ! -e "$verify_marker"
+test "$(pointer_target)" = previous
+test "$(root_snapshot)" = "$before_unlock"
+grep -Fq 'another deploy already holds' "$root/unlock.err"
+: > "$verify_release"
+if ! wait "$first_pid"; then
+	printf 'unlock-holder deploy failed\n' >&2
+	exit 1
+fi
+first_pid=
+test "$(pointer_target)" = unlock-holder
+test ! -e "$release_root/.current.next"
+test ! -L "$release_root/.current.next"
+printf 'DEPLOY_LOCK_FD_NOT_INHERITED=pass\n'
 
 printf 'PHASE4_PR1_DEPLOY_LOCK=pass\n'
