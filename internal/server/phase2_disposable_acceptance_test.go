@@ -266,12 +266,11 @@ func phase2AcceptanceWeb(t *testing.T) string {
 }
 
 func TestPhase2DisposableAcceptanceManagedRecoveryAndExhaustion(t *testing.T) {
-	workingDirectory, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	workspace, err := filepath.Abs(filepath.Join(workingDirectory, "..", ".."))
-	if err != nil {
+	// DiscoverMetadata groups only catalog-eligible project directories. The
+	// live checkout is not one when the gate runs from ~/.codex/worktrees or a
+	// TempDir extract; HTTP Ready still publishes a successful empty catalog.
+	workspace := eligibleTestWorkspace(t, "commons-acceptance-workspace-")
+	if err := os.Mkdir(filepath.Join(workspace, ".git"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -329,12 +328,18 @@ func TestPhase2DisposableAcceptanceManagedRecoveryAndExhaustion(t *testing.T) {
 		t.Fatalf("healthy readiness code=%d body=%s", got.Code, got.Body.String())
 	}
 
-	// Queue one native historian through the real application scheduler. The
-	// bridge's cached runtime gate allows exactly one accepted launch.
-	discovered, err := app.service.DiscoverProjectArchaeology(ctx, domain.HumanLocalPrincipal, "acceptance-discover")
-	if err != nil || len(discovered.Discovery.Candidates) != 1 {
-		t.Fatalf("discovery=%+v err=%v", discovered, err)
-	}
+	// Queue one native historian through the real application scheduler. HTTP
+	// Ready is not the catalog-grouping contract: poll until the one explicit
+	// discover has grouped the eligible workspace, then start exactly once.
+	var discovered application.ArchaeologySession
+	phase2AcceptanceWait(t, time.Second, func() bool {
+		session, discoverErr := app.service.DiscoverProjectArchaeology(ctx, domain.HumanLocalPrincipal, "acceptance-discover")
+		if discoverErr != nil || len(session.Discovery.Candidates) != 1 {
+			return false
+		}
+		discovered = session
+		return true
+	}, "discovery did not group one catalog-eligible candidate")
 	configured, err := app.service.ConfigureArchaeologySession(ctx, domain.HumanLocalPrincipal, "acceptance-config", application.ArchaeologyConfigRequest{
 		SelectedProjectIDs: []string{discovered.Discovery.Candidates[0].ID}, Depth: "quick", Sources: application.ArchaeologySources{Git: true}, MaxConcurrency: 1, BaseRevision: discovered.Revision,
 	})
