@@ -33,6 +33,22 @@ grep -Fq 'ops/restore-database.sh' "$runbook"
 grep -Fq 'ops/test-restore.sh' "$runbook"
 grep -Fq 'without_lock_fd /bin/sh "$staged/ops/restore-database.sh"' "$deploy_script"
 grep -Fq 'capture /bin/sh "$staged/ops/backup.sh"' "$deploy_script"
+grep -Fq 'validate_sidecar "$dest-wal" "WAL"' "$helper"
+grep -Fq 'validate_sidecar "$dest-shm" "SHM"' "$helper"
+grep -Fq 'remove_validated_sidecar "$dest-wal" "WAL"' "$helper"
+grep -Fq 'remove_validated_sidecar "$dest-shm" "SHM"' "$helper"
+grep -Fq 'pre-existing WAL/SHM without deleting them' "$runbook"
+grep -Fq 'must not restart' "$runbook"
+validate_wal_line=$(grep -n 'validate_sidecar "$dest-wal" "WAL"' "$helper" | head -n1 | cut -d: -f1)
+mv_line=$(grep -n 'mv -Tf -- "$restore_tmp" "$dest"' "$helper" | head -n1 | cut -d: -f1)
+remove_wal_line=$(grep -n 'remove_validated_sidecar "$dest-wal" "WAL"' "$helper" | head -n1 | cut -d: -f1)
+test -n "$validate_wal_line" && test -n "$mv_line" && test -n "$remove_wal_line"
+test "$validate_wal_line" -lt "$mv_line"
+test "$mv_line" -lt "$remove_wal_line"
+if grep -Fq 'validate_and_remove_sidecar' "$helper"; then
+	printf 'restore helper must not remove WAL/SHM before mv\n' >&2
+	exit 1
+fi
 if grep -Fq 'COMMONS_DB.rollback' "$helper" "$deploy_script"; then
 	printf 'restore path must not use a predictable .rollback name\n' >&2
 	exit 1
@@ -168,6 +184,21 @@ test ! -L "$dest"
 assert_no_restore_temp
 printf 'RESTORE_ATOMIC_REPLACE=pass\n'
 
+# Successful restore removes validated regular WAL/SHM after the rename.
+reset_dest
+printf 'old-wal-payload\n' > "$dest-wal"
+chmod 0600 "$dest-wal"
+printf 'old-shm-payload\n' > "$dest-shm"
+chmod 0600 "$dest-shm"
+test -f "$dest-wal" && test ! -L "$dest-wal"
+test -f "$dest-shm" && test ! -L "$dest-shm"
+run_helper "$backup" "$dest"
+test "$(cat "$dest")" = backup-payload
+test ! -e "$dest-wal" && test ! -L "$dest-wal"
+test ! -e "$dest-shm" && test ! -L "$dest-shm"
+assert_no_restore_temp
+printf 'RESTORE_SIDECARS_REMOVED=pass\n'
+
 # Missing destination first-deploy semantics: dest may be absent, then created.
 rm -f -- "$dest"
 run_helper "$backup" "$dest"
@@ -177,6 +208,19 @@ test "$(cat "$dest")" = backup-payload
 test "$(stat -c %a "$dest")" = 600
 assert_no_restore_temp
 printf 'RESTORE_MISSING_DEST_FIRST_DEPLOY=pass\n'
+
+# Leftover owned WAL/SHM with dest absent are still removed after restore.
+rm -f -- "$dest"
+printf 'stale-wal-payload\n' > "$dest-wal"
+chmod 0600 "$dest-wal"
+printf 'stale-shm-payload\n' > "$dest-shm"
+chmod 0600 "$dest-shm"
+run_helper "$backup" "$dest"
+test "$(cat "$dest")" = backup-payload
+test ! -e "$dest-wal" && test ! -L "$dest-wal"
+test ! -e "$dest-shm" && test ! -L "$dest-shm"
+assert_no_restore_temp
+printf 'RESTORE_MISSING_DEST_SIDECARS_REMOVED=pass\n'
 
 # Stale predictable .rollback is ignored and never followed.
 reset_dest
@@ -454,9 +498,15 @@ test "$(cat "$dest")" = backup-payload
 assert_no_restore_temp
 printf 'RESTORE_DIR_SYNC_FAIL_CLOSED=pass\n'
 
-# mv failure.
+# mv failure must preserve the old destination AND WAL/SHM byte-for-byte.
 reset_dest
-dest_before=$(/usr/bin/sha256sum "$dest")
+printf 'old-wal-payload\n' > "$dest-wal"
+chmod 0600 "$dest-wal"
+printf 'old-shm-payload\n' > "$dest-shm"
+chmod 0600 "$dest-shm"
+dest_before=$(/usr/bin/sha256sum -- "$dest")
+wal_before=$(/usr/bin/sha256sum -- "$dest-wal")
+shm_before=$(/usr/bin/sha256sum -- "$dest-shm")
 rm -f -- "$fail_bin/mv" "$fail_bin/sync"
 cat > "$fail_bin/mv" <<'EOF'
 #!/bin/sh
@@ -481,9 +531,17 @@ else
 	test "$?" -eq 64
 fi
 grep -Fq 'failed to atomically replace database destination' "$root/fail-mv.err"
-test "$(/usr/bin/sha256sum "$dest")" = "$dest_before"
+test "$(/usr/bin/sha256sum -- "$dest")" = "$dest_before"
+test "$(/usr/bin/sha256sum -- "$dest-wal")" = "$wal_before"
+test "$(/usr/bin/sha256sum -- "$dest-shm")" = "$shm_before"
+test "$(cat "$dest")" = live-db-payload
+test "$(cat "$dest-wal")" = old-wal-payload
+test "$(cat "$dest-shm")" = old-shm-payload
+test ! -L "$dest" && test -f "$dest"
+test ! -L "$dest-wal" && test -f "$dest-wal"
+test ! -L "$dest-shm" && test -f "$dest-shm"
 assert_no_restore_temp
-printf 'RESTORE_MV_FAIL_CLOSED=pass\n'
+printf 'RESTORE_MV_FAIL_PRESERVES_SIDECARS=pass\n'
 rm -f -- "$fail_bin/mv"
 
 # Destination swap after precheck: dest becomes a symlink before rename.
@@ -523,6 +581,98 @@ assert_no_restore_temp
 grep -Fq 'database destination must not be a symlink' "$root/fail-dest-swap.err"
 printf 'RESTORE_DEST_SWAP_AFTER_PRECHECK=pass\n'
 rm -f -- "$fail_bin/sync" "$dest"
+reset_dest
+
+# Post-rename WAL swap to a symlink is fail-closed and must not follow or
+# unlink the outside target. Destination has already been replaced.
+reset_dest
+printf 'old-wal-payload\n' > "$dest-wal"
+chmod 0600 "$dest-wal"
+printf 'old-shm-payload\n' > "$dest-shm"
+chmod 0600 "$dest-shm"
+printf 'outside-post-wal\n' > "$root/outside-post-wal"
+chmod 0600 "$root/outside-post-wal"
+outside_post_wal_before=$(/usr/bin/sha256sum -- "$root/outside-post-wal")
+shm_before=$(/usr/bin/sha256sum -- "$dest-shm")
+rm -f -- "$fail_bin/sync" "$fail_bin/mv" "$fail_bin/rm"
+cat > "$fail_bin/mv" <<EOF
+#!/bin/sh
+set -eu
+did_dest=0
+for arg; do
+	case "\$arg" in
+	*/commons.sqlite3)
+		did_dest=1
+		;;
+	esac
+done
+if [ "\$did_dest" -eq 1 ]; then
+	/bin/mv "\$@"
+	rm -f -- "$dest-wal"
+	ln -s -- "$root/outside-post-wal" "$dest-wal"
+	exit 0
+fi
+exec /bin/mv "\$@"
+EOF
+chmod 0555 "$fail_bin/mv"
+if PATH="$fail_bin:$fake_bin:$PATH" /bin/sh "$helper" "$backup" "$dest" \
+	>"$root/fail-post-wal-swap.out" 2>"$root/fail-post-wal-swap.err"; then
+	printf 'post-rename WAL swap unexpectedly succeeded\n' >&2
+	exit 1
+else
+	test "$?" -eq 64
+fi
+grep -Fq 'refusing WAL symlink after restore' "$root/fail-post-wal-swap.err"
+test "$(cat "$dest")" = backup-payload
+test -L "$dest-wal"
+test "$(readlink "$dest-wal")" = "$root/outside-post-wal"
+test "$(/usr/bin/sha256sum -- "$root/outside-post-wal")" = "$outside_post_wal_before"
+test "$(cat "$root/outside-post-wal")" = outside-post-wal
+test "$(/usr/bin/sha256sum -- "$dest-shm")" = "$shm_before"
+test "$(cat "$dest-shm")" = old-shm-payload
+assert_no_restore_temp
+printf 'RESTORE_POST_RENAME_WAL_SWAP=pass\n'
+rm -f -- "$fail_bin/mv" "$dest-wal"
+
+# Post-rename WAL removal failure is fail-closed after dest is replaced.
+reset_dest
+printf 'old-wal-payload\n' > "$dest-wal"
+chmod 0600 "$dest-wal"
+printf 'old-shm-payload\n' > "$dest-shm"
+chmod 0600 "$dest-shm"
+wal_before=$(/usr/bin/sha256sum -- "$dest-wal")
+shm_before=$(/usr/bin/sha256sum -- "$dest-shm")
+rm -f -- "$fail_bin/mv" "$fail_bin/sync"
+cat > "$fail_bin/rm" <<'EOF'
+#!/bin/sh
+set -eu
+for arg; do
+	case "$arg" in
+	*-wal)
+		echo "forced wal rm failure" >&2
+		exit 1
+		;;
+	esac
+done
+exec /bin/rm "$@"
+EOF
+chmod 0555 "$fail_bin/rm"
+if PATH="$fail_bin:$fake_bin:$PATH" /bin/sh "$helper" "$backup" "$dest" \
+	>"$root/fail-post-wal-rm.out" 2>"$root/fail-post-wal-rm.err"; then
+	printf 'post-rename WAL rm unexpectedly succeeded\n' >&2
+	exit 1
+else
+	test "$?" -eq 64
+fi
+grep -Fq 'failed to remove WAL after restore' "$root/fail-post-wal-rm.err"
+test "$(cat "$dest")" = backup-payload
+test "$(/usr/bin/sha256sum -- "$dest-wal")" = "$wal_before"
+test "$(cat "$dest-wal")" = old-wal-payload
+test "$(/usr/bin/sha256sum -- "$dest-shm")" = "$shm_before"
+test "$(cat "$dest-shm")" = old-shm-payload
+assert_no_restore_temp
+printf 'RESTORE_POST_RENAME_WAL_RM_FAIL=pass\n'
+rm -f -- "$fail_bin/rm" "$dest-wal" "$dest-shm"
 reset_dest
 
 # Interrupt before rename must clean only the owned temp.

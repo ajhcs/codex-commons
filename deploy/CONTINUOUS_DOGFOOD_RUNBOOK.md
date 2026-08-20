@@ -420,13 +420,18 @@ the database or `current`. If a database restore is required, `ops/deploy-releas
 invokes packaged `ops/verify-restore.sh` and `ops/restore-database.sh` through
 `without_lock_fd` while fd 9 stays in the parent. The helper copies the exact
 verified backup with `cp -P` into an exclusive private temp in the validated
-database parent, re-verifies that temp, syncs it, rejects symlink/directory/
-non-regular WAL/SHM, removes only validated regular WAL/SHM, and atomically
-`mv -Tf` onto the exact destination. A stale predictable `.rollback` name is
-not used. Copy, verify, sync, mv, or source/destination/parent validation
-failure is fail-closed with no silent fallback. Switch `current` only to the
-captured exact previous release directory, then restart and rerun readiness.
-Complete fail-closed service-stopped rollback outcomes remain Phase 4 PR 5.
+database parent, re-verifies that temp, and syncs it. It then validates any
+pre-existing WAL/SHM without deleting them, atomically `mv -Tf` onto the exact
+destination, and only afterwards revalidates each sidecar and removes only
+safe regular, effective-uid/gid-owned files. Service is already stopped during
+that sidecar cleanup. A stale predictable `.rollback` name is not used.
+Copy, verify, sync, mv, post-rename sidecar revalidation/removal, or
+source/destination/parent validation failure is fail-closed with no silent
+fallback. A post-rename sidecar or directory-sync failure must not restart
+the service; this increment relies on deploy's current stopped failure path.
+Switch `current` only to the captured exact previous release directory, then
+restart and rerun readiness. Complete fail-closed service-stopped rollback
+outcomes remain Phase 4 PR 5.
 
 Classify the result explicitly:
 

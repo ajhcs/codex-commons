@@ -191,29 +191,74 @@ fail_restore() {
 	exit 64
 }
 
-validate_and_remove_sidecar() {
+fail_closed() {
+	echo "$1" >&2
+	exit 64
+}
+
+# Presence checks must not follow. A dangling sidecar symlink is not absent.
+# $3 is an optional message suffix such as " after restore".
+require_absent_or_safe_sidecar() {
 	path=$1
 	label=$2
+	suffix=${3:-}
 	if [ -L "$path" ]; then
-		fail_restore "refusing $label symlink: $path"
+		echo "refusing $label symlink${suffix}: $path" >&2
+		return 1
 	fi
 	if [ ! -e "$path" ]; then
 		return 0
 	fi
 	if [ -d "$path" ]; then
-		fail_restore "refusing $label directory: $path"
+		echo "refusing $label directory${suffix}: $path" >&2
+		return 1
 	fi
 	if [ ! -f "$path" ]; then
-		fail_restore "refusing non-regular $label: $path"
+		echo "refusing non-regular $label${suffix}: $path" >&2
+		return 1
 	fi
 	effective_uid=$(id -u)
 	effective_gid=$(id -g)
 	side_uid=$(stat -c %u "$path")
 	side_gid=$(stat -c %g "$path")
 	if [ "$side_uid" != "$effective_uid" ] || [ "$side_gid" != "$effective_gid" ]; then
-		fail_restore "$label must be owned by the effective uid/gid: $path"
+		echo "$label must be owned by the effective uid/gid${suffix}: $path" >&2
+		return 1
 	fi
-	rm -f -- "$path" || fail_restore "failed to remove $label: $path"
+	return 0
+}
+
+# Pre-rename: reject unsafe WAL/SHM, but leave a safe sidecar in place so a
+# failed mv cannot orphan the old destination.
+validate_sidecar() {
+	path=$1
+	label=$2
+	require_absent_or_safe_sidecar "$path" "$label" || {
+		cleanup_owned_restore_tmp
+		exit 64
+	}
+}
+
+# Post-rename: revalidate, then unlink only a safe regular euid/egid-owned
+# file. Any unsafe shape or removal failure is fail-closed and must not
+# restart the service. Do not follow a substituted symlink.
+remove_validated_sidecar() {
+	path=$1
+	label=$2
+	require_absent_or_safe_sidecar "$path" "$label" " after restore" || exit 64
+	if [ -L "$path" ]; then
+		fail_closed "refusing $label symlink after restore: $path"
+	fi
+	if [ ! -e "$path" ]; then
+		return 0
+	fi
+	if [ -d "$path" ] || [ ! -f "$path" ]; then
+		fail_closed "refusing non-regular $label after restore: $path"
+	fi
+	rm -f -- "$path" || fail_closed "failed to remove $label after restore: $path"
+	if [ -e "$path" ] || [ -L "$path" ]; then
+		fail_closed "failed to remove $label after restore: $path"
+	fi
 }
 
 verify_sqlite_copy() {
@@ -315,8 +360,8 @@ validate_parent_dir "$dest_parent" >/dev/null || {
 	exit 64
 }
 validate_destination "$dest"
-validate_and_remove_sidecar "$dest-wal" "WAL"
-validate_and_remove_sidecar "$dest-shm" "SHM"
+validate_sidecar "$dest-wal" "WAL"
+validate_sidecar "$dest-shm" "SHM"
 
 if [ -L "$dest" ]; then
 	fail_restore "database destination must not be a symlink: $dest"
@@ -330,17 +375,16 @@ fi
 owned_restore_tmp=
 
 if [ -L "$dest" ] || [ ! -f "$dest" ]; then
-	echo "database destination must be a regular non-symlink file after restore: $dest" >&2
-	exit 64
+	fail_closed "database destination must be a regular non-symlink file after restore: $dest"
 fi
 require_regular_private "$dest" "database destination"
 final_digest=$(file_sha256 "$dest" "database destination") || exit 64
 final_digest=${final_digest%"$nl"}
 if [ "$final_digest" != "$backup_digest" ]; then
-	echo "restored database digest does not match the exact backup" >&2
-	exit 64
+	fail_closed "restored database digest does not match the exact backup"
 fi
+remove_validated_sidecar "$dest-wal" "WAL"
+remove_validated_sidecar "$dest-shm" "SHM"
 if ! sync -- "$dest_parent"; then
-	echo "failed to sync database parent directory" >&2
-	exit 64
+	fail_closed "failed to sync database parent directory"
 fi
