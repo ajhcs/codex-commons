@@ -344,8 +344,12 @@ and previous identity use lowercase SHA-256 digests of each release's
 file contains only the fixed fields `kind=deployment-attempt`, `status=recorded`,
 candidate id/digest, and previous state (`absent` or validated id/digest). It
 must not record secrets, database paths, prompts, environment contents, or
-arbitrary payloads. This increment records that attempt identity only; the
-complete fail-closed rollback outcome state machine remains Phase 4 PR 5.
+arbitrary payloads. A successful candidate-ready deploy may retain that 7-line
+`status=recorded` receipt. A rollback outcome receipt is published through the
+same exclusive-temp, mode/owner, sync, `mv -Tf`, and directory-sync publisher
+and may add only the allowlisted fields `deploy_outcome`, `service_state`, and
+`database_state`. Required rollback receipt publish failure is fail-closed and
+does not authorize later database, pointer, or restart mutation.
 
 After the receipt, `COMMONS_DB` is validated as an absolute path whose
 canonical parent is a real non-symlink directory owned by the effective
@@ -411,41 +415,80 @@ is mutated or swapped.
 
 Rollback is a separate operational decision and, when invoked from
 `ops/deploy-release.sh`, still runs under the same release-root directory
-flock. This increment's rollback paths use only the captured exact previous
-path and release ID from the earlier preflight; they never re-read `current`
-and never resolve a new target. First capture the candidate failure and stop
-the restart-on-failure service. Validate the matching pre-upgrade
-deployment-attempt receipt and that captured previous release before touching
-the database or `current`. If a database restore is required, `ops/deploy-release.sh`
-invokes packaged `ops/verify-restore.sh` and `ops/restore-database.sh` through
-`without_lock_fd` while fd 9 stays in the parent. The helper copies the exact
-verified backup with `cp -P` into an exclusive private temp in the validated
-database parent, re-verifies that temp, and syncs it. It then validates any
-pre-existing WAL/SHM without deleting them, atomically `mv -Tf` onto the exact
-destination, and only afterwards revalidates each sidecar and removes only
-safe regular, effective-uid/gid-owned files. Service is already stopped during
-that sidecar cleanup. A stale predictable `.rollback` name is not used.
-Copy, verify, sync, mv, post-rename sidecar revalidation/removal, or
-source/destination/parent validation failure is fail-closed with no silent
-fallback. A post-rename sidecar or directory-sync failure must not restart
-the service; this increment relies on deploy's current stopped failure path.
-Switch `current` only to the captured exact previous release directory, then
-restart and rerun readiness. Complete fail-closed service-stopped rollback
-outcomes remain Phase 4 PR 5.
+flock. Rollback uses only the captured exact previous path and release ID from
+the earlier preflight; it never re-reads `current` and never resolves a new
+target. Candidate restart or readiness failure always exits `1`, even when the
+previous release becomes ready.
 
-Classify the result explicitly:
+The fail-closed machine is one-shot. After candidate failure it proves
+`systemctl --user stop` succeeded and that the unit is not active before any
+restore, first-deploy cleanup, or pointer mutation. Stop failure records
+`deploy_outcome=stop_failed` and performs zero database or `current` mutation.
+It then revalidates the exact 7-line `status=recorded` deployment-attempt
+receipt and the captured previous path, release ID, and manifest digest.
+Receipt mismatch stays stopped, leaves the mismatched receipt in place, and
+performs zero database or `current` mutation. Previous re-verification failure
+stays stopped with zero database or `current` mutation. A required rollback
+receipt with `deploy_outcome=candidate_failed` and `service_state=stopped` must
+publish before later mutation; publish write/sync/`mv -Tf` failure refuses
+restore, pointer switch, and restart.
 
-- candidate failed; previous release and database restored and ready;
-- candidate failed; database restore failed;
-- candidate failed; previous process failed to restart; or
-- candidate failed; previous readiness failed.
+If a database restore is required, `ops/deploy-release.sh` invokes packaged
+`ops/verify-restore.sh` and `ops/restore-database.sh` through `without_lock_fd`
+while fd 9 stays in the parent. Backup verify failure stays stopped with no
+restore, pointer switch, or restart. Restore helper failure, including after
+the destination has already been replaced, records `database_state=uncertain`,
+does not retry, and does not switch `current` or restart. First-deploy cleanup
+failure stays stopped. The helper copies the exact verified backup with `cp -P`
+into an exclusive private temp in the validated database parent, re-verifies
+that temp, and syncs it. It then validates any pre-existing WAL/SHM without deleting them,
+atomically `mv -Tf` onto the exact destination, and only afterwards revalidates
+each sidecar and removes only safe regular, effective-uid/gid-owned files.
+Service is already stopped during that sidecar cleanup. A stale predictable
+`.rollback` name is not used. Copy, verify, sync, mv, post-rename sidecar
+revalidation/removal, or source/destination/parent validation failure is
+fail-closed with no silent fallback. A post-rename sidecar or directory-sync
+failure must not restart the service.
 
-For any rollback restart/readiness failure, leave Commons stopped, preserve the
-restored database/release metadata and evidence, and escalate. Rollback helpers
-may use best-effort cleanup; an ignored command (including `|| true`) is not a
-successful cleanup. Record and report each cleanup, restore, restart, and
-readiness failure, verify the final stopped state, do not keep retrying a live
-service, and do not delete the last known-good release or backup.
+Switch `current` only to the captured previous release ID through an owned
+`.current.next` temp and `mv -Tf`, then read back that exact ID. Temp, rename,
+or readback failure stays stopped and does not restart previous. Absent
+previous safely removes `current` and finishes stopped with
+`deploy_outcome=no_previous`. Previous restart failure stays and proves
+stopped, with no retry. Previous readiness failure performs one stop, proves
+the final stopped state, and does not retry; a failed final stop records
+`deploy_outcome=previous_stop_failed`. Previous ready publishes durable
+`deploy_outcome=previous_ready` and still exits `1`.
+
+Rollback receipts remain fixed-field only: candidate and previous IDs plus
+manifest digests, and allowlisted `status` (`recorded` or `failed`),
+`deploy_outcome`, `service_state`, and `database_state`. They must not record
+paths, secrets, database names, environment contents, or payloads. An ignored
+command, including `|| true`, is not a successful stop, restore, cleanup,
+pointer switch, restart, or readiness result.
+
+| From | Event | `deploy_outcome` | `service_state` | `database_state` | `current` | Exit |
+| --- | --- | --- | --- | --- | --- | --- |
+| Candidate restart/readiness failed | `systemctl stop` or stopped-proof fails | `stop_failed` | `active` or `unknown` | `unchanged` | candidate | 1 |
+| Proven stopped | 7-line receipt mismatch | receipt left in place | `stopped` | `unchanged` | candidate | 1 |
+| Proven stopped, receipt valid | captured previous re-verify fails | `previous_reverify_failed` | `stopped` | `unchanged` | candidate | 1 |
+| Proven stopped, identities valid | required rollback receipt write/sync/mv fails | original 7-line `recorded` remains | `stopped` | `unchanged` | candidate | 1 |
+| Required `candidate_failed` receipt published | backup verify fails | `backup_verify_failed` | `stopped` | `unchanged` | candidate | 1 |
+| Backup verified | restore helper fails, possibly after dest replace | `restore_failed` | `stopped` | `uncertain` | candidate | 1 |
+| No pre-upgrade DB | first-deploy cleanup fails | `first_deploy_cleanup_failed` | `stopped` | `uncertain` | candidate | 1 |
+| DB restored or absent | pointer temp/mv/readback fails | `pointer_switch_failed` | `stopped` | `restored` or `absent` | candidate or unverified | 1 |
+| No captured previous, pointer removed | finish stopped | `no_previous` | `stopped` | `absent` or `restored` | absent | 1 |
+| Pointer switched to captured previous | previous `restart` fails | `previous_restart_failed` | `stopped` or `active` | `restored` or `absent` | captured previous | 1 |
+| Previous restarted | previous readiness fails; one stop proves stopped | `previous_readiness_failed` | `stopped` | `restored` or `absent` | captured previous | 1 |
+| Previous readiness failed | final stop or stopped-proof fails | `previous_stop_failed` | `active` or `unknown` | `restored` or `absent` | captured previous | 1 |
+| Previous readiness passes | durable `previous_ready` receipt | `previous_ready` | `ready` | `restored` or `absent` | captured previous | 1 |
+
+Classify the result from that table. For any rollback restart/readiness
+failure, leave Commons stopped, preserve the restored database/release
+metadata and evidence, and escalate. Rollback helpers may use best-effort
+temp cleanup; every failure is reported and is not treated as success. Do not
+keep retrying a live service, and do not delete the last known-good release
+or backup.
 
 ## 9. Release gates and approval boundary
 
